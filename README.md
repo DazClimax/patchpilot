@@ -93,6 +93,26 @@ All configuration is via environment variables in `/opt/patchpilot/.env`:
 | `PATCHPILOT_ADMIN_PASSWORD` | No | Initial admin password (auto-generated if not set) |
 | `PATCHPILOT_ALLOWED_ORIGINS` | No | CORS origins (comma-separated) |
 | `PATCHPILOT_TRUSTED_PROXY` | No | Trusted reverse proxy IP for X-Forwarded-For |
+| `SSL_CERTFILE` | No | Path to SSL certificate (enables HTTPS) |
+| `SSL_KEYFILE` | No | Path to SSL private key |
+
+### SSL / HTTPS
+
+To enable SSL for the web UI and agent connections:
+
+```bash
+# In /opt/patchpilot/.env
+SSL_CERTFILE=/etc/patchpilot/cert.pem
+SSL_KEYFILE=/etc/patchpilot/key.pem
+```
+
+Agents will automatically use HTTPS when configured with an `https://` server URL:
+
+```bash
+PATCHPILOT_SERVER=https://your-server:8000
+```
+
+For self-signed certificates, set `PATCHPILOT_CA_BUNDLE` on the agent to the CA cert path.
 
 ## Documentation
 

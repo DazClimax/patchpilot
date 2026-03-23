@@ -57,23 +57,15 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
 
 // ─── Register Key Widget ──────────────────────────────────────────────────────
 
-function RegisterKeyWidget({ registerKey, setRegisterKey }: {
+function RegisterKeyWidget({ registerKey, setRegisterKey, expiresIn, setExpiresIn }: {
   registerKey: string;
   setRegisterKey: (k: string) => void;
+  expiresIn: number;
+  setExpiresIn: React.Dispatch<React.SetStateAction<number>>;
 }) {
-  const [expiresIn, setExpiresIn] = useState(0)
   const [generating, setGenerating] = useState(false)
   const [copied, setCopied] = useState(false)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  useEffect(() => {
-    api.registerKeyStatus().then(r => {
-      if (r.active && r.key) {
-        setRegisterKey(r.key)
-        setExpiresIn(r.expires_in)
-      }
-    }).catch(() => {})
-  }, [])
 
   useEffect(() => {
     if (!registerKey) return
@@ -87,7 +79,7 @@ function RegisterKeyWidget({ registerKey, setRegisterKey }: {
       })
     }, 1000)
     return () => { if (timerRef.current) clearInterval(timerRef.current) }
-  }, [registerKey])
+  }, [registerKey, setRegisterKey, setExpiresIn])
 
   const generate = async () => {
     setGenerating(true)
@@ -346,16 +338,25 @@ function buildScript(serverUrl: string, agentId: string, registerKey: string): s
 
 export function DeployPage() {
   const [internalUrl, setInternalUrl] = useState('')
-  const [urlLoaded, setUrlLoaded] = useState(false)
+  const [pageReady, setPageReady] = useState(false)
   const [serverUrl, setServerUrl] = useState('')
   const [agentId, setAgentId] = useState('')
   const [registerKey, setRegisterKey] = useState('')
+  const [expiresIn, setExpiresIn] = useState(0)
 
-  // Load settings first — the internal URL is needed for scripts to render
+  // Load settings + active key in parallel on mount
   useEffect(() => {
-    api.settings().then((s: any) => {
-      if (s.internal_url) setInternalUrl(s.internal_url)
-    }).catch(() => {}).finally(() => setUrlLoaded(true))
+    Promise.all([
+      api.settings().then((s: any) => {
+        if (s.internal_url) setInternalUrl(s.internal_url)
+      }).catch(() => {}),
+      api.registerKeyStatus().then(r => {
+        if (r.active && r.key) {
+          setRegisterKey(r.key)
+          setExpiresIn(r.expires_in)
+        }
+      }).catch(() => {}),
+    ]).finally(() => setPageReady(true))
   }, [])
 
   // Default: server-detected internal IP:port. User can override.
@@ -391,7 +392,7 @@ export function DeployPage() {
     <div style={{ padding: 'clamp(16px, 4vw, 32px)', maxWidth: '1400px', animation: 'pp-fadein 0.4s ease both' }}>
       <PageHeader>Deploy Agent</PageHeader>
 
-      {!urlLoaded ? (
+      {!pageReady ? (
         <div style={{ color: colors.textMuted, fontSize: '12px', fontFamily: "'Electrolize', monospace", padding: '20px 0' }}>
           Loading configuration...
         </div>
@@ -400,7 +401,7 @@ export function DeployPage() {
       {/* Step 1 — Registration Key */}
       <div style={{ marginBottom: '28px' }}>
         <SectionHeader>1. Generate Registration Key</SectionHeader>
-        <RegisterKeyWidget registerKey={registerKey} setRegisterKey={setRegisterKey} />
+        <RegisterKeyWidget registerKey={registerKey} setRegisterKey={setRegisterKey} expiresIn={expiresIn} setExpiresIn={setExpiresIn} />
       </div>
 
       {/* Step 2 — Configure */}

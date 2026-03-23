@@ -1230,7 +1230,9 @@ def api_get_settings():
         k, v = row["key"], row["value"]
         result[k] = "***" if (k in _SENSITIVE_KEYS and v) else v
     # Provide computed internal URL for the Deploy page
-    result["internal_url"] = f"http://{_get_internal_ip()}:{_SERVER_PORT}"
+    _scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
+    result["internal_url"] = f"{_scheme}://{_get_internal_ip()}:{_SERVER_PORT}"
+    result["ssl_enabled"] = bool(os.environ.get("SSL_CERTFILE"))
     return result
 
 
