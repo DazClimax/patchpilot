@@ -1,0 +1,270 @@
+# PatchPilot — Installation Guide
+
+## Contents
+
+1. [Prerequisites](#prerequisites)
+2. [Server Installation](#server-installation)
+3. [Agent Installation](#agent-installation)
+4. [Configuration](#configuration)
+5. [Managing the Service](#managing-the-service)
+6. [Upgrading](#upgrading)
+7. [Troubleshooting](#troubleshooting)
+
+---
+
+## Prerequisites
+
+### Server (Raspberry Pi or any Linux host)
+
+- Raspberry Pi OS (Bullseye/Bookworm) **or** Debian 11/12 **or** Ubuntu 22.04/24.04
+- Python 3.10 or newer
+- Network access from Debian VMs to the server
+- `sudo` privileges
+
+**Optional** (for frontend build on dev machine):
+- Node.js 18+ and npm
+
+### Agent (Debian/Ubuntu VM)
+
+- Debian 11+ or Ubuntu 22.04+
+- Python 3 (stdlib only, no pip needed)
+- `root` privileges (agent calls `apt-get`)
+- HTTP connection to PatchPilot server
+
+---
+
+## Server Installation
+
+### Step 1: Get the Code
+
+```bash
+git clone https://github.com/youruser/patchpilot.git
+cd patchpilot
+```
+
+### Step 2: Build the Frontend (optional)
+
+On your dev machine (requires Node.js 18+):
+
+```bash
+cd frontend && npm install && npm run build && cd ..
+```
+
+This creates `frontend/dist/`. The install script copies it automatically. Without it, the server runs API-only.
+
+### Step 3: Run the Install Script
+
+```bash
+sudo bash install-server.sh
+```
+
+With custom port:
+
+```bash
+sudo bash install-server.sh --port 9000
+```
+
+Behind a reverse proxy:
+
+```bash
+sudo bash install-server.sh --host 127.0.0.1 --port 8000
+```
+
+The script:
+1. Installs `python3`, `python3-pip`, `python3-venv` via apt
+2. Creates the system user `patchpilot` (no login shell)
+3. Copies all server files to `/opt/patchpilot/`
+4. Creates a Python venv and installs dependencies
+5. Creates and enables the systemd service `patchpilot`
+6. Sets up sudoers entry for service self-restart
+
+### Step 4: Set the Admin Key
+
+On first start, the server generates a random key and logs it:
+
+```bash
+journalctl -u patchpilot | grep "ephemeral key"
+```
+
+For production, set a fixed key:
+
+```bash
+# Generate a key
+openssl rand -hex 32
+
+# Add to .env
+echo "PATCHPILOT_ADMIN_KEY=your-key-here" >> /opt/patchpilot/.env
+sudo systemctl restart patchpilot
+```
+
+### Step 5: Open the Web UI
+
+```
+http://<server-ip>:8000
+```
+
+Log in with the admin key from Step 4.
+
+---
+
+## Agent Installation
+
+### Option A: One-Liner (Recommended)
+
+1. Open the **Deploy** page in the PatchPilot UI
+2. Set the correct server URL (internal IP + port)
+3. Click **Generate Key** — a registration key valid for 5 minutes appears
+4. Copy the one-liner command and run it on the target VM:
+
+```bash
+curl -fsSL http://<server-ip>:8000/agent/install.sh | \
+  sudo PATCHPILOT_SERVER=http://<server-ip>:8000 \
+  PATCHPILOT_REGISTER_KEY=<key> bash
+```
+
+### Option B: Manual Installation
+
+```bash
+# Copy files to the VM
+scp agent/agent.py agent/install.sh user@vm:~/
+
+# Run installer
+sudo PATCHPILOT_SERVER=http://<server-ip>:8000 \
+     PATCHPILOT_REGISTER_KEY=<key> \
+     bash install.sh
+```
+
+### Verify Registration
+
+```bash
+journalctl -u patchpilot-agent -f
+# Expected: [agent] Registered as <hostname>
+```
+
+The VM should appear on the dashboard within 30 seconds.
+
+---
+
+## Configuration
+
+### Agent Config: `/etc/patchpilot/agent.conf`
+
+```ini
+PATCHPILOT_SERVER=http://192.168.1.10:8000
+PATCHPILOT_INTERVAL=60
+# PATCHPILOT_AGENT_ID=my-vm  (set automatically)
+```
+
+### Agent State: `/etc/patchpilot/state.json`
+
+Stores `agent_id`, `token`, and `server` URL. Permissions: `chmod 600`. Do not delete — the agent would need to re-register.
+
+### Server Environment: `/opt/patchpilot/.env`
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8000` | Listen port (changeable from Settings UI) |
+| `PATCHPILOT_ADMIN_KEY` | random | Admin key for web dashboard |
+| `PATCHPILOT_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:8000` | CORS origins |
+
+---
+
+## Managing the Service
+
+### Server
+
+```bash
+sudo systemctl status patchpilot
+sudo journalctl -u patchpilot -f          # Live logs
+sudo systemctl restart patchpilot
+sudo systemctl stop patchpilot
+```
+
+### Agent (on each VM)
+
+```bash
+sudo systemctl status patchpilot-agent
+sudo journalctl -u patchpilot-agent -f
+sudo systemctl restart patchpilot-agent
+```
+
+---
+
+## Upgrading
+
+### Server
+
+```bash
+cd patchpilot && git pull
+cd frontend && npm install && npm run build && cd ..
+bash deploy.sh
+```
+
+`deploy.sh` rsyncs files to the server and restarts the service. The database is never touched.
+
+### Agents
+
+Use the **Update All Agents** button on the dashboard, or trigger `update_agent` jobs via schedules. Agents download the latest code, verify SHA-256, and restart automatically.
+
+---
+
+## Troubleshooting
+
+### Server won't start
+
+```bash
+journalctl -u patchpilot -n 50 --no-pager
+```
+
+Common causes:
+- Port already in use: `sudo ss -tlnp | grep <port>`
+- Missing dependencies: `sudo /opt/patchpilot-venv/bin/pip install -r /opt/patchpilot/server/requirements.txt`
+- Permission issue: `sudo chown patchpilot:patchpilot /opt/patchpilot/server/`
+
+### Agent not appearing on dashboard
+
+```bash
+journalctl -u patchpilot-agent -n 30 --no-pager
+```
+
+Common causes:
+- Wrong server URL in `/etc/patchpilot/agent.conf`
+- Registration key expired — generate a new one from Deploy page
+- Firewall blocking the connection: `curl http://<server-ip>:<port>/metrics`
+
+### Agent re-registering with new ID on every restart
+
+`/etc/patchpilot/state.json` was deleted or has wrong permissions:
+
+```bash
+ls -la /etc/patchpilot/state.json
+# Must exist and be owned by root (600)
+```
+
+### "Invalid or missing admin key" in browser
+
+```bash
+# Get current key from log
+journalctl -u patchpilot | grep "ephemeral key"
+
+# Or set a permanent key
+echo "PATCHPILOT_ADMIN_KEY=$(openssl rand -hex 32)" >> /opt/patchpilot/.env
+sudo systemctl restart patchpilot
+```
+
+### apt-get fails with permission denied
+
+The agent service must run as `root`:
+
+```bash
+systemctl cat patchpilot-agent | grep User
+# Should show User=root or no User line
+```
+
+### Config file conflict during patching
+
+PatchPilot uses `--force-confdef --force-confold`:
+- Unmodified config files → updated to new version
+- Manually modified config files → kept as-is
+
+When a config file is kept, the job output includes a warning and a Telegram notification is sent (if configured). Check the job log for details on which config file was affected.

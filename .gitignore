@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Database & state
+server/patchpilot.db
+server/patchpilot.db-shm
+server/patchpilot.db-wal
+/etc/patchpilot/
+
+# Environment
+.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Build artifacts
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Claude Code
+.claude/
+
+# Deployment (contains host-specific config)
+deploy.sh
+CLAUDE.md

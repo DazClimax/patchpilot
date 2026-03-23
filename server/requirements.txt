@@ -1,0 +1,7 @@
+fastapi>=0.115.0
+# PERFORMANCE: Plain uvicorn instead of uvicorn[standard].
+# The [standard] extra pulls in websockets (~1.5 MB) and httptools — neither
+# is needed for PatchPilot's HTTP-only JSON API.  Dropping them saves ~15 MB
+# of installed packages and reduces startup RSS on the Raspberry Pi.
+uvicorn>=0.30.0
+apscheduler>=3.10.4
