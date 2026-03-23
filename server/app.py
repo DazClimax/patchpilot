@@ -1407,9 +1407,13 @@ def _get_cert_info(certfile: str) -> dict:
 
 
 @app.post("/api/settings/generate-cert", dependencies=[Depends(require_role("admin"))])
-def api_generate_cert():
+async def api_generate_cert(request: Request):
     """Generate a self-signed SSL certificate and enable HTTPS."""
     try:
+        data = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+        years = max(1, min(10, int(data.get("years", 3))))
+        days = years * 365
+
         # Use openssl CLI — available on all Debian/Ubuntu systems
         _SSL_DIR.mkdir(parents=True, exist_ok=True)
         cert_path = _SSL_DIR / "cert.pem"
@@ -1420,7 +1424,7 @@ def api_generate_cert():
         result = subprocess.run([
             "openssl", "req", "-x509", "-newkey", "rsa:2048",
             "-keyout", str(key_path), "-out", str(cert_path),
-            "-days", "365", "-nodes",
+            "-days", str(days), "-nodes",
             "-subj", f"/CN={hostname}",
             "-addext", f"subjectAltName=DNS:{hostname},IP:{ip}",
         ], capture_output=True, text=True, timeout=30)

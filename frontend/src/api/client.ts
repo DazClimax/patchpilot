@@ -206,8 +206,8 @@ export const api = {
   sslInfo: () =>
     req<{ enabled: boolean; certfile: string; keyfile: string; info: { subject: string; expires: string; path: string } | null }>('GET', '/settings/ssl-info'),
 
-  generateCert: () =>
-    req<{ status: string; certfile: string; keyfile: string; info: any; restart_pending: boolean }>('POST', '/settings/generate-cert'),
+  generateCert: (years: number = 3) =>
+    req<{ status: string; certfile: string; keyfile: string; info: any; restart_pending: boolean }>('POST', '/settings/generate-cert', { years }),
 
   sslEnable: (certfile: string, keyfile: string) =>
     req<{ status: string; info: any; restart_pending: boolean }>('POST', '/settings/ssl-enable', { certfile, keyfile }),

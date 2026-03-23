@@ -653,6 +653,7 @@ function SslSection() {
   const [ssl, setSsl] = useState<{ enabled: boolean; certfile: string; keyfile: string; info: any } | null>(null)
   const [customCert, setCustomCert] = useState('')
   const [customKey, setCustomKey] = useState('')
+  const [certYears, setCertYears] = useState('3')
   const [busy, setBusy] = useState(false)
   const { showToast } = useToast()
 
@@ -668,8 +669,8 @@ function SslSection() {
   const handleGenerate = async () => {
     setBusy(true)
     try {
-      const res = await api.generateCert()
-      showToast('Self-signed certificate generated — server restarting', 'success')
+      const res = await api.generateCert(parseInt(certYears))
+      showToast(`Self-signed certificate generated (${certYears}y) — server restarting`, 'success')
       setSsl({ enabled: true, certfile: res.certfile, keyfile: res.keyfile, info: res.info })
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to generate certificate', 'error')
@@ -729,7 +730,16 @@ function SslSection() {
             Cert: {ssl.certfile}<br />
             Key: {ssl.keyfile}
           </div>
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div>
+              <div style={labelStyle}>Validity</div>
+              <select value={certYears} onChange={e => setCertYears(e.target.value)} style={{ ...inputStyle, width: '90px' }}>
+                <option value="1">1 Year</option>
+                <option value="3">3 Years</option>
+                <option value="5">5 Years</option>
+                <option value="10">10 Years</option>
+              </select>
+            </div>
             <Button variant="ghost" onClick={handleGenerate} disabled={busy}>
               {busy ? 'Generating...' : 'Regenerate Self-Signed'}
             </Button>
@@ -741,11 +751,22 @@ function SslSection() {
       ) : (
         <>
           <div style={{ marginBottom: '16px' }}>
-            <Button onClick={handleGenerate} disabled={busy}>
-              {busy ? 'Generating...' : 'Generate Self-Signed Certificate'}
-            </Button>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div>
+                <div style={labelStyle}>Validity</div>
+                <select value={certYears} onChange={e => setCertYears(e.target.value)} style={{ ...inputStyle, width: '90px' }}>
+                  <option value="1">1 Year</option>
+                  <option value="3">3 Years</option>
+                  <option value="5">5 Years</option>
+                  <option value="10">10 Years</option>
+                </select>
+              </div>
+              <Button onClick={handleGenerate} disabled={busy}>
+                {busy ? 'Generating...' : 'Generate Self-Signed Certificate'}
+              </Button>
+            </div>
             <p style={{ margin: '8px 0 0', fontSize: '10px', color: colors.textMuted, fontFamily: "'Electrolize', monospace" }}>
-              Creates a 365-day self-signed cert. Agents need PATCHPILOT_CA_BUNDLE to trust it.
+              Agents need PATCHPILOT_CA_BUNDLE pointed at the cert to trust it.
             </p>
           </div>
 
