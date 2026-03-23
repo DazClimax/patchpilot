@@ -733,7 +733,17 @@ function SslSection() {
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <div>
               <div style={labelStyle}>Validity</div>
-              <select value={certYears} onChange={e => setCertYears(e.target.value)} style={{ ...inputStyle, width: '90px' }}>
+              <select value={certYears} onChange={e => setCertYears(e.target.value)} style={{
+                  ...inputStyle,
+                  width: '110px',
+                  appearance: 'none',
+                  WebkitAppearance: 'none',
+                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2300d4aa'/%3E%3C/svg%3E")`,
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'right 10px center',
+                  paddingRight: '28px',
+                  cursor: 'pointer',
+                }}>
                 <option value="1">1 Year</option>
                 <option value="3">3 Years</option>
                 <option value="5">5 Years</option>
@@ -754,7 +764,17 @@ function SslSection() {
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
               <div>
                 <div style={labelStyle}>Validity</div>
-                <select value={certYears} onChange={e => setCertYears(e.target.value)} style={{ ...inputStyle, width: '90px' }}>
+                <select value={certYears} onChange={e => setCertYears(e.target.value)} style={{
+                  ...inputStyle,
+                  width: '110px',
+                  appearance: 'none',
+                  WebkitAppearance: 'none',
+                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2300d4aa'/%3E%3C/svg%3E")`,
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'right 10px center',
+                  paddingRight: '28px',
+                  cursor: 'pointer',
+                }}>
                   <option value="1">1 Year</option>
                   <option value="3">3 Years</option>
                   <option value="5">5 Years</option>
