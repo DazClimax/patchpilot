@@ -155,6 +155,8 @@ def init_db():
             ("notify_patches",         "1"),
             ("notify_failures",        "1"),
             ("server_port",            "8000"),
+            ("ssl_certfile",           ""),
+            ("ssl_keyfile",            ""),
         ]
         conn.executemany(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",

@@ -255,6 +255,9 @@ const EMPTY: Settings = {
   notify_patches: '1',
   notify_failures: '1',
   server_port: '8000',
+  ssl_certfile: '',
+  ssl_keyfile: '',
+  ssl_enabled: false,
 }
 
 // ---------------------------------------------------------------------------
@@ -581,6 +584,11 @@ export function SettingsPage() {
         </Card>
 
         {/* ------------------------------------------------------------------ */}
+        {/* SSL / HTTPS                                                          */}
+        {/* ------------------------------------------------------------------ */}
+        <SslSection />
+
+        {/* ------------------------------------------------------------------ */}
         {/* Save button                                                          */}
         {/* ------------------------------------------------------------------ */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -634,5 +642,137 @@ export function SettingsPage() {
         </div>
       )}
     </div>
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+// SSL / HTTPS Section
+// ---------------------------------------------------------------------------
+function SslSection() {
+  const [ssl, setSsl] = useState<{ enabled: boolean; certfile: string; keyfile: string; info: any } | null>(null)
+  const [customCert, setCustomCert] = useState('')
+  const [customKey, setCustomKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const { showToast } = useToast()
+
+  const load = useCallback(async () => {
+    try {
+      const res = await api.sslInfo()
+      setSsl(res)
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const handleGenerate = async () => {
+    setBusy(true)
+    try {
+      const res = await api.generateCert()
+      showToast('Self-signed certificate generated — server restarting', 'success')
+      setSsl({ enabled: true, certfile: res.certfile, keyfile: res.keyfile, info: res.info })
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to generate certificate', 'error')
+    } finally { setBusy(false) }
+  }
+
+  const handleEnable = async () => {
+    if (!customCert.trim() || !customKey.trim()) {
+      showToast('Both certificate and key path are required', 'error')
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await api.sslEnable(customCert.trim(), customKey.trim())
+      showToast('SSL enabled — server restarting', 'success')
+      setSsl({ enabled: true, certfile: customCert, keyfile: customKey, info: res.info })
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to enable SSL', 'error')
+    } finally { setBusy(false) }
+  }
+
+  const handleDisable = async () => {
+    setBusy(true)
+    try {
+      await api.sslDisable()
+      showToast('SSL disabled — server restarting on HTTP', 'success')
+      setSsl({ enabled: false, certfile: '', keyfile: '', info: null })
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to disable SSL', 'error')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <Card style={{ marginBottom: '20px' }}>
+      <SectionHeader>SSL / HTTPS</SectionHeader>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+        <span style={{
+          display: 'inline-block', padding: '3px 10px', fontSize: '10px',
+          letterSpacing: '0.15em', fontFamily: "'Orbitron', sans-serif",
+          border: `1px solid ${ssl?.enabled ? colors.success : colors.textMuted}44`,
+          color: ssl?.enabled ? colors.success : colors.textMuted,
+          background: `${ssl?.enabled ? colors.success : colors.textMuted}0a`,
+        }}>
+          {ssl?.enabled ? 'HTTPS ACTIVE' : 'HTTP (no SSL)'}
+        </span>
+        {ssl?.enabled && ssl?.info && (
+          <span style={{ fontSize: '10px', color: colors.textDim, fontFamily: "'Electrolize', monospace" }}>
+            {ssl.info.subject} — expires {ssl.info.expires}
+          </span>
+        )}
+      </div>
+
+      {ssl?.enabled ? (
+        <>
+          <div style={{ fontSize: '11px', color: colors.textMuted, fontFamily: "'Electrolize', monospace", marginBottom: '12px', lineHeight: 1.6 }}>
+            Cert: {ssl.certfile}<br />
+            Key: {ssl.keyfile}
+          </div>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <Button variant="ghost" onClick={handleGenerate} disabled={busy}>
+              {busy ? 'Generating...' : 'Regenerate Self-Signed'}
+            </Button>
+            <Button variant="danger" onClick={handleDisable} disabled={busy}>
+              Disable SSL
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ marginBottom: '16px' }}>
+            <Button onClick={handleGenerate} disabled={busy}>
+              {busy ? 'Generating...' : 'Generate Self-Signed Certificate'}
+            </Button>
+            <p style={{ margin: '8px 0 0', fontSize: '10px', color: colors.textMuted, fontFamily: "'Electrolize', monospace" }}>
+              Creates a 365-day self-signed cert. Agents need PATCHPILOT_CA_BUNDLE to trust it.
+            </p>
+          </div>
+
+          <div style={{ borderTop: `1px solid ${colors.border}`, paddingTop: '14px' }}>
+            <div style={{ fontSize: '10px', letterSpacing: '0.15em', color: colors.textMuted, fontFamily: "'Orbitron', sans-serif", marginBottom: '10px' }}>
+              OR USE OWN CERTIFICATE
+            </div>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div style={{ flex: '1 1 200px' }}>
+                <div style={labelStyle}>Certificate Path</div>
+                <input value={customCert} onChange={e => setCustomCert(e.target.value)} placeholder="/etc/patchpilot/cert.pem" style={inputStyle} />
+              </div>
+              <div style={{ flex: '1 1 200px' }}>
+                <div style={labelStyle}>Private Key Path</div>
+                <input value={customKey} onChange={e => setCustomKey(e.target.value)} placeholder="/etc/patchpilot/key.pem" style={inputStyle} />
+              </div>
+              <Button onClick={handleEnable} disabled={busy || !customCert.trim() || !customKey.trim()}>
+                Enable SSL
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+
+      <p style={{ margin: '14px 0 0', fontSize: '10px', color: colors.textMuted, fontFamily: "'Electrolize', monospace", lineHeight: 1.6 }}>
+        Enabling SSL restarts the server on HTTPS. Update agent URLs to https:// after enabling.
+      </p>
+    </Card>
   )
 }

@@ -1203,8 +1203,11 @@ _SETTINGS_ALLOWED_KEYS = {
     "telegram_token", "telegram_chat_id",
     "smtp_host", "smtp_port", "smtp_security", "smtp_user", "smtp_password", "smtp_to",
     "notify_offline", "notify_offline_minutes", "notify_patches", "notify_failures",
-    "server_port",   # port shown in the Deploy page install scripts
+    "server_port",
+    "ssl_certfile", "ssl_keyfile",
 }
+
+_SSL_DIR = Path(__file__).parent.parent / "ssl"
 
 
 def _get_internal_ip() -> str:
@@ -1344,6 +1347,157 @@ async def api_test_notification(channel: str):
     if not ok:
         raise HTTPException(status_code=502, detail="Notification send failed — check server logs")
     return {"status": "sent"}
+
+
+# ===========================================================================
+# SSL MANAGEMENT
+# ===========================================================================
+
+def _update_env_ssl(certfile: str, keyfile: str) -> None:
+    """Persist SSL_CERTFILE and SSL_KEYFILE in the systemd EnvironmentFile."""
+    try:
+        lines = _ENV_FILE.read_text().splitlines() if _ENV_FILE.exists() else []
+        cert_ok = key_ok = False
+        result = []
+        for line in lines:
+            if line.startswith("SSL_CERTFILE="):
+                if certfile:
+                    result.append(f"SSL_CERTFILE={certfile}")
+                cert_ok = True
+            elif line.startswith("SSL_KEYFILE="):
+                if keyfile:
+                    result.append(f"SSL_KEYFILE={keyfile}")
+                key_ok = True
+            else:
+                result.append(line)
+        if certfile and not cert_ok:
+            result.append(f"SSL_CERTFILE={certfile}")
+        if keyfile and not key_ok:
+            result.append(f"SSL_KEYFILE={keyfile}")
+        content = "\n".join(result) + "\n"
+        tmp = _ENV_FILE.with_suffix(".env.tmp")
+        tmp.write_text(content)
+        os.replace(tmp, _ENV_FILE)
+    except Exception as exc:
+        import sys
+        print(f"[patchpilot] Warning: could not update .env SSL: {exc}", file=sys.stderr)
+
+
+def _get_cert_info(certfile: str) -> dict:
+    """Read basic info from a PEM certificate file."""
+    try:
+        import ssl as _ssl
+        cert = _ssl.PEM_cert_to_DER_cert(Path(certfile).read_text().split("-----END CERTIFICATE-----")[0] + "-----END CERTIFICATE-----\n")
+        # Use subprocess to parse with openssl if available
+        result = subprocess.run(
+            ["openssl", "x509", "-noout", "-subject", "-enddate", "-inform", "DER"],
+            input=cert, capture_output=True, timeout=5,
+        )
+        info = result.stdout.decode(errors="replace")
+        subject = ""
+        expires = ""
+        for line in info.splitlines():
+            if line.startswith("subject="):
+                subject = line.split("=", 1)[1].strip()
+            elif line.startswith("notAfter="):
+                expires = line.split("=", 1)[1].strip()
+        return {"subject": subject, "expires": expires, "path": certfile}
+    except Exception:
+        return {"subject": "unknown", "expires": "unknown", "path": certfile}
+
+
+@app.post("/api/settings/generate-cert", dependencies=[Depends(require_role("admin"))])
+def api_generate_cert():
+    """Generate a self-signed SSL certificate and enable HTTPS."""
+    try:
+        # Use openssl CLI — available on all Debian/Ubuntu systems
+        _SSL_DIR.mkdir(parents=True, exist_ok=True)
+        cert_path = _SSL_DIR / "cert.pem"
+        key_path = _SSL_DIR / "key.pem"
+        hostname = socket.gethostname()
+        ip = _get_internal_ip()
+
+        result = subprocess.run([
+            "openssl", "req", "-x509", "-newkey", "rsa:2048",
+            "-keyout", str(key_path), "-out", str(cert_path),
+            "-days", "365", "-nodes",
+            "-subj", f"/CN={hostname}",
+            "-addext", f"subjectAltName=DNS:{hostname},IP:{ip}",
+        ], capture_output=True, text=True, timeout=30)
+
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"openssl failed: {result.stderr[:200]}")
+
+        # Restrict permissions
+        cert_path.chmod(0o644)
+        key_path.chmod(0o600)
+
+        # Update .env and restart
+        _update_env_ssl(str(cert_path), str(key_path))
+        # Also persist in settings DB
+        with get_db_ctx() as conn:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ssl_certfile', ?)", (str(cert_path),))
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ssl_keyfile', ?)", (str(key_path),))
+
+        _schedule_restart(delay=2.0)
+
+        info = _get_cert_info(str(cert_path))
+        return {
+            "status": "generated",
+            "certfile": str(cert_path),
+            "keyfile": str(key_path),
+            "info": info,
+            "restart_pending": True,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/settings/ssl-enable", dependencies=[Depends(require_role("admin"))])
+async def api_ssl_enable(request: Request):
+    """Enable SSL with custom certificate paths."""
+    data = await request.json()
+    certfile = str(data.get("certfile", "")).strip()
+    keyfile = str(data.get("keyfile", "")).strip()
+    if not certfile or not keyfile:
+        raise HTTPException(status_code=422, detail="Both certfile and keyfile paths are required")
+    # Validate files exist
+    if not Path(certfile).is_file():
+        raise HTTPException(status_code=422, detail=f"Certificate file not found: {certfile}")
+    if not Path(keyfile).is_file():
+        raise HTTPException(status_code=422, detail=f"Key file not found: {keyfile}")
+
+    _update_env_ssl(certfile, keyfile)
+    with get_db_ctx() as conn:
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ssl_certfile', ?)", (str(certfile),))
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ssl_keyfile', ?)", (str(keyfile),))
+
+    _schedule_restart(delay=2.0)
+    info = _get_cert_info(certfile)
+    return {"status": "enabled", "info": info, "restart_pending": True}
+
+
+@app.post("/api/settings/ssl-disable", dependencies=[Depends(require_role("admin"))])
+def api_ssl_disable():
+    """Disable SSL — remove cert/key from .env and restart on plain HTTP."""
+    _update_env_ssl("", "")  # removes the lines from .env
+    with get_db_ctx() as conn:
+        conn.execute("UPDATE settings SET value='' WHERE key='ssl_certfile'")
+        conn.execute("UPDATE settings SET value='' WHERE key='ssl_keyfile'")
+    _schedule_restart(delay=2.0)
+    return {"status": "disabled", "restart_pending": True}
+
+
+@app.get("/api/settings/ssl-info", dependencies=[Depends(require_role("admin"))])
+def api_ssl_info():
+    """Return current SSL status and certificate info."""
+    certfile = os.environ.get("SSL_CERTFILE", "")
+    keyfile = os.environ.get("SSL_KEYFILE", "")
+    enabled = bool(certfile and keyfile)
+    info = _get_cert_info(certfile) if enabled else None
+    return {"enabled": enabled, "certfile": certfile, "keyfile": keyfile, "info": info}
 
 
 # ===========================================================================

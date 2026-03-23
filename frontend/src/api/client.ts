@@ -121,6 +121,9 @@ export interface Settings {
   notify_patches: string
   notify_failures: string
   server_port: string
+  ssl_certfile: string
+  ssl_keyfile: string
+  ssl_enabled: boolean
 }
 
 export interface User {
@@ -198,6 +201,19 @@ export const api = {
 
   testNotification: (channel: 'telegram' | 'email') =>
     req<{ status: string }>('POST', `/settings/test/${channel}`),
+
+  // SSL
+  sslInfo: () =>
+    req<{ enabled: boolean; certfile: string; keyfile: string; info: { subject: string; expires: string; path: string } | null }>('GET', '/settings/ssl-info'),
+
+  generateCert: () =>
+    req<{ status: string; certfile: string; keyfile: string; info: any; restart_pending: boolean }>('POST', '/settings/generate-cert'),
+
+  sslEnable: (certfile: string, keyfile: string) =>
+    req<{ status: string; info: any; restart_pending: boolean }>('POST', '/settings/ssl-enable', { certfile, keyfile }),
+
+  sslDisable: () =>
+    req<{ status: string; restart_pending: boolean }>('POST', '/settings/ssl-disable'),
 
   setTags: (id: string, tags: string) =>
     req<{ status: string; tags: string }>('PATCH', `/agents/${id}/tags`, { tags }),
