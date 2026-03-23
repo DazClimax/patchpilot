@@ -150,6 +150,7 @@ def init_db():
             ("smtp_user",        ""),
             ("smtp_password",    ""),
             ("smtp_to",          ""),
+            ("telegram_enabled",       "1"),
             ("notify_offline",         "1"),
             ("notify_offline_minutes", "10"),
             ("notify_patches",         "1"),

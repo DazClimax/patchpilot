@@ -538,26 +538,34 @@ def main():
                 packages = get_pending_updates()
                 print(f"[agent] {len(packages)} pending update(s)")
                 hb = send_heartbeat(server, agent_id, token, packages)
-                # If the server signals a different canonical port, migrate to it.
-                # This self-updates the agent after a server port change so the
-                # legacy TCP forwarder is no longer needed.
-                canonical_port = hb.get("canonical_port")
-                # HIGH-5: Validate canonical_port before use
-                if canonical_port:
-                    try:
-                        port_int = int(canonical_port)
-                        if not (1 <= port_int <= 65535):
-                            canonical_port = None
-                    except (ValueError, TypeError):
-                        canonical_port = None
-                if canonical_port:
-                    base, _, _ = server.rpartition(":")
-                    canonical = f"{base}:{canonical_port}"
-                    if canonical != server:
-                        print(f"[agent] Server port changed → migrating to {canonical}")
-                        server = canonical
+                # If the server signals a different canonical URL (protocol, host,
+                # or port change), migrate to it automatically.
+                canonical_url = hb.get("canonical_url", "")
+                if canonical_url and canonical_url != server:
+                    # Validate: must be http(s)://host:port format
+                    if canonical_url.startswith(("http://", "https://")) and ":" in canonical_url.split("://", 1)[1]:
+                        print(f"[agent] Server URL changed → migrating to {canonical_url}")
+                        server = canonical_url
                         state["server"] = server
                         save_state(state)
+                elif not canonical_url:
+                    # Fallback: legacy canonical_port for older servers
+                    canonical_port = hb.get("canonical_port")
+                    if canonical_port:
+                        try:
+                            port_int = int(canonical_port)
+                            if not (1 <= port_int <= 65535):
+                                canonical_port = None
+                        except (ValueError, TypeError):
+                            canonical_port = None
+                    if canonical_port:
+                        base, _, _ = server.rpartition(":")
+                        canonical = f"{base}:{canonical_port}"
+                        if canonical != server:
+                            print(f"[agent] Server port changed → migrating to {canonical}")
+                            server = canonical
+                            state["server"] = server
+                            save_state(state)
 
                 # If the server renamed our ID, update config + state
                 canonical_id = hb.get("canonical_id")

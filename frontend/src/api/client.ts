@@ -120,6 +120,7 @@ export interface Settings {
   notify_offline_minutes: string
   notify_patches: string
   notify_failures: string
+  telegram_enabled: string
   server_port: string
   ssl_certfile: string
   ssl_keyfile: string

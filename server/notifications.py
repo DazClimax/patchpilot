@@ -225,8 +225,9 @@ class NotificationManager:
         self._notify_offline  = _get("notify_offline",  "1") == "1"
         self._notify_patches  = _get("notify_patches",  "1") == "1"
         self._notify_failures = _get("notify_failures", "1") == "1"
+        self._telegram_enabled = _get("telegram_enabled", "1") == "1"
 
-        self._telegram = TelegramNotifier(tg_token, tg_chat) if tg_token else None
+        self._telegram = TelegramNotifier(tg_token, tg_chat) if (tg_token and self._telegram_enabled) else None
         self._email    = EmailNotifier(smtp_host, smtp_port, smtp_user, smtp_pass, smtp_to, smtp_security) \
                          if smtp_host else None
         self._loaded = True
@@ -257,11 +258,9 @@ class NotificationManager:
         if not last_seen:
             return "never"
         try:
-            # SQLite stores UTC without timezone info — parse and make aware
-            dt = datetime.fromisoformat(last_seen.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            secs = int((datetime.now(timezone.utc) - dt).total_seconds())
+            # Timestamps are stored as local time (no timezone info)
+            dt = datetime.fromisoformat(last_seen.replace("Z", ""))
+            secs = int((datetime.now() - dt).total_seconds())
             if secs < 60:
                 return f"{secs}s ago"
             elif secs < 3600:

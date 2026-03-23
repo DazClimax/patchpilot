@@ -705,8 +705,9 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
     now_mono = time.monotonic()
     last = _last_heartbeat.get(agent_id, 0.0)
     if now_mono - last < _HEARTBEAT_MIN_INTERVAL:
-        # Still tell agents the canonical port so they migrate even when throttled
-        return {"status": "ok", "canonical_port": str(_SERVER_PORT), "canonical_id": agent_id}
+        # Still tell agents the canonical URL so they migrate even when throttled
+        _scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
+        return {"status": "ok", "canonical_port": str(_SERVER_PORT), "canonical_url": f"{_scheme}://{_get_internal_ip()}:{_SERVER_PORT}", "canonical_id": agent_id}
     _last_heartbeat[agent_id] = now_mono
 
     # Heartbeat accepted — also invalidate dashboard + agent caches so the
@@ -759,9 +760,10 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
               str(p.get("new", ""))[:128] if p.get("new") else None,
               ) for p in packages],
         )
-    # Tell agents the canonical port so they self-update after a port change.
-    # Once the agent saves the new URL, the legacy forwarder is no longer needed.
-    return {"status": "ok", "canonical_port": str(_SERVER_PORT), "canonical_id": agent_id}
+    # Tell agents the canonical URL (protocol + host + port) so they self-update
+    # after a port or protocol change.
+    _scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
+    return {"status": "ok", "canonical_port": str(_SERVER_PORT), "canonical_url": f"{_scheme}://{_get_internal_ip()}:{_SERVER_PORT}", "canonical_id": agent_id}
 
 
 @app.get("/api/agents/{agent_id}/jobs")
@@ -1200,7 +1202,7 @@ _SENSITIVE_KEYS = {"smtp_password", "telegram_token"}
 
 # LOW-4: Explicit allowlist — reject unknown keys to prevent mass assignment
 _SETTINGS_ALLOWED_KEYS = {
-    "telegram_token", "telegram_chat_id",
+    "telegram_token", "telegram_chat_id", "telegram_enabled",
     "smtp_host", "smtp_port", "smtp_security", "smtp_user", "smtp_password", "smtp_to",
     "notify_offline", "notify_offline_minutes", "notify_patches", "notify_failures",
     "server_port",

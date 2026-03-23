@@ -254,6 +254,7 @@ const EMPTY: Settings = {
   notify_offline_minutes: '10',
   notify_patches: '1',
   notify_failures: '1',
+  telegram_enabled: '1',
   server_port: '8000',
   ssl_certfile: '',
   ssl_keyfile: '',
@@ -407,7 +408,21 @@ export function SettingsPage() {
 
           <TelegramGuide />
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+          <Toggle
+            label="Enable Telegram Notifications"
+            name="telegram_enabled"
+            value={form.telegram_enabled}
+            onChange={handleChange}
+          />
+
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            gap: '16px',
+            marginTop: '12px',
+            opacity: form.telegram_enabled === '1' ? 1 : 0.4,
+            pointerEvents: form.telegram_enabled === '1' ? 'auto' : 'none',
+          }}>
             <Field
               label="Bot Token"
               name="telegram_token"
