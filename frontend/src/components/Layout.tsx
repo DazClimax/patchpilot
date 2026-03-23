@@ -389,7 +389,7 @@ export function Layout({ children }: { children: ReactNode }) {
               letterSpacing: '0.1em',
               fontFamily: "'Electrolize', monospace",
             }}>
-              v0.6.0
+              v0.6.1
             </div>
 
             {/* Bottom edge glow line */}
