@@ -286,8 +286,6 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState<'telegram' | 'email' | null>(null)
   const [restarting, setRestarting] = useState(false)
-  const portPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const [restartPort, setRestartPort] = useState<string | null>(null)
   const [tab, setTab] = useState<'notifications' | 'server'>('notifications')
   const { showToast } = useToast()
 
@@ -310,7 +308,7 @@ export function SettingsPage() {
 
   // Cleanup port-migration polling on unmount
   useEffect(() => {
-    return () => { if (portPollRef.current) clearInterval(portPollRef.current) }
+    return () => { /* cleanup */ }
   }, [])
 
   // Warn on navigation with unsaved changes
@@ -333,19 +331,15 @@ export function SettingsPage() {
       // Strip computed/non-DB fields before saving
       const { ssl_enabled, ssl_certfile, ssl_keyfile, internal_url, agent_url, ...saveable } = form as any
       const result = await api.saveSettings(saveable)
-      if (result.restart_pending && result.new_port) {
-        const newPort = result.new_port
-        setRestartPort(newPort)
+      if (result.restart_pending) {
+        setSavedForm({ ...form })
+        showToast('Settings saved — server restarting', 'success')
+        // Brief overlay while server restarts, then reload
         setRestarting(true)
-        const protocol = saveable.ssl_certfile ? 'https' : window.location.protocol.replace(':', '')
-        const origin = `${protocol}://${window.location.hostname}:${newPort}`
-        const redirectUrl = `${origin}/#pp-key=${encodeURIComponent(auth.getKey())}`
-        // Wait for server to restart, then redirect
-        const timer = setTimeout(() => {
-          portPollRef.current = null
-          window.location.href = redirectUrl
-        }, 6000)
-        portPollRef.current = timer as any
+        setTimeout(() => {
+          setRestarting(false)
+          window.location.reload()
+        }, 5000)
       } else {
         setSavedForm({ ...form })
         showToast('Settings saved', 'success')
@@ -703,76 +697,31 @@ export function SettingsPage() {
 
       {/* Toasts rendered by global ToastProvider */}
 
-      {restarting && (() => {
-        const proto = window.location.protocol.replace(':', '')
-        const newUrl = `${window.location.protocol}//${window.location.hostname}:${restartPort}`
-        const stillPolling = portPollRef.current !== null
-        return (
+      {restarting && (
+        <div style={{
+          position: 'fixed', inset: 0,
+          background: `${colors.bg}ee`,
+          backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: '20px',
+          zIndex: 10000, animation: 'pp-fadein 0.3s ease both',
+        }}>
           <div style={{
-            position: 'fixed', inset: 0,
-            background: `${colors.bg}ee`,
-            backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
-            display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center', gap: '20px',
-            zIndex: 10000, animation: 'pp-fadein 0.3s ease both',
+            width: '36px', height: '36px', borderRadius: '50%',
+            border: `2px solid ${colors.primary}22`,
+            borderTopColor: colors.primary,
+            animation: 'pp-spin 0.8s linear infinite',
+            boxShadow: `0 0 16px ${colors.primary}44`,
+          }} />
+          <div style={{
+            fontFamily: "'Orbitron', sans-serif", fontSize: '13px',
+            letterSpacing: '0.22em', textTransform: 'uppercase',
+            color: colors.primary, textShadow: `0 0 8px ${colors.primary}88`,
           }}>
-            {stillPolling ? (
-              <>
-                <div style={{
-                  width: '36px', height: '36px', borderRadius: '50%',
-                  border: `2px solid ${colors.primary}22`,
-                  borderTopColor: colors.primary,
-                  animation: 'pp-spin 0.8s linear infinite',
-                  boxShadow: `0 0 16px ${colors.primary}44`,
-                }} />
-                <div style={{
-                  fontFamily: "'Orbitron', sans-serif", fontSize: '13px',
-                  letterSpacing: '0.22em', textTransform: 'uppercase',
-                  color: colors.primary, textShadow: `0 0 8px ${colors.primary}88`,
-                }}>
-                  Server Restarting
-                </div>
-                <div style={{
-                  fontFamily: "'Electrolize', monospace", fontSize: '11px',
-                  letterSpacing: '0.1em', color: colors.textMuted,
-                }}>
-                  Redirecting to port {restartPort} …
-                </div>
-              </>
-            ) : (
-              <>
-                <div style={{
-                  fontFamily: "'Orbitron', sans-serif", fontSize: '13px',
-                  letterSpacing: '0.22em', textTransform: 'uppercase',
-                  color: colors.primary, textShadow: `0 0 8px ${colors.primary}88`,
-                }}>
-                  Server Restarted
-                </div>
-                <div style={{
-                  fontFamily: "'Electrolize', monospace", fontSize: '12px',
-                  color: colors.text, textAlign: 'center', lineHeight: 1.8,
-                }}>
-                  The server is now running on port {restartPort}.
-                </div>
-                <a
-                  href={`${newUrl}/#pp-key=${encodeURIComponent(auth.getKey())}`}
-                  style={{
-                    fontFamily: "'Orbitron', sans-serif", fontSize: '12px',
-                    letterSpacing: '0.12em', textTransform: 'uppercase',
-                    color: colors.primary, textShadow: `0 0 6px ${colors.primary}66`,
-                    padding: '10px 24px',
-                    border: `1px solid ${colors.primary}44`,
-                    textDecoration: 'none',
-                    transition: 'all 0.15s',
-                  }}
-                >
-                  Open on port {restartPort} →
-                </a>
-              </>
-            )}
+            Server Restarting
           </div>
-        )
-      })()}
+        </div>
+      )}
     </div>
   )
 }
