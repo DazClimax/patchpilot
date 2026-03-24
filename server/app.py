@@ -249,29 +249,37 @@ def _validate_smtp_host(host: str):
 # No key is active until an admin explicitly requests one.
 # ---------------------------------------------------------------------------
 _REGISTER_KEY_TTL = 300  # seconds (5 min)
-_register_key: dict = {"key": "", "expires": 0.0}
-_register_key_lock = threading.Lock()
 
 
 def _generate_register_key() -> tuple[str, float]:
-    """Generate a fresh register key (always new, 5 min TTL). Returns (key, seconds_remaining)."""
-    with _register_key_lock:
-        _register_key["key"] = secrets.token_hex(6)  # 12 chars, easy to copy
-        _register_key["expires"] = time.time() + _REGISTER_KEY_TTL
-        return _register_key["key"], float(_REGISTER_KEY_TTL)
+    """Generate a fresh register key (DB-backed, shared across processes). Returns (key, seconds_remaining)."""
+    key = secrets.token_hex(6)  # 12 chars, easy to copy
+    expires = str(int(time.time() + _REGISTER_KEY_TTL))
+    with get_db_ctx() as conn:
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('register_key', ?)", (key,))
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('register_key_ts', ?)", (expires,))
+    return key, float(_REGISTER_KEY_TTL)
 
 
 def _get_active_register_key() -> tuple[str, float] | tuple[None, float]:
     """Return current key + remaining seconds, or (None, 0) if expired/not generated."""
-    with _register_key_lock:
-        now = time.time()
-        if _register_key["key"] and now < _register_key["expires"]:
-            return _register_key["key"], _register_key["expires"] - now
+    with get_db_ctx() as conn:
+        row_key = conn.execute("SELECT value FROM settings WHERE key='register_key'").fetchone()
+        row_ts = conn.execute("SELECT value FROM settings WHERE key='register_key_ts'").fetchone()
+    if not row_key or not row_ts:
         return None, 0.0
+    try:
+        expires = int(row_ts["value"])
+    except (ValueError, TypeError):
+        return None, 0.0
+    remaining = expires - time.time()
+    if remaining > 0:
+        return row_key["value"], remaining
+    return None, 0.0
 
 
 def _verify_register_key(submitted: str):
-    """Check submitted key against current valid key."""
+    """Check submitted key against current valid key (DB-backed)."""
     if not submitted:
         raise HTTPException(status_code=403, detail="Registration requires a register key (see Deploy page)")
     key, remaining = _get_active_register_key()
