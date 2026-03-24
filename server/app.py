@@ -1387,13 +1387,19 @@ async def api_save_settings(request: Request):
         except (ValueError, TypeError):
             raise HTTPException(status_code=422, detail="server_port must be an integer between 1 and 65535")
 
-    # Read current port BEFORE saving so we can detect a change
+    # Read current ports BEFORE saving so we can detect changes
     old_port: str | None = None
+    old_agent_port: str | None = None
+    old_agent_ssl: str | None = None
     new_port_str = str(server_port_val) if (server_port_val is not None and str(server_port_val) != "***") else None
-    if new_port_str:
-        with get_db_ctx() as conn:
+    with get_db_ctx() as conn:
+        if new_port_str:
             row = conn.execute("SELECT value FROM settings WHERE key='server_port'").fetchone()
-            old_port = row["value"] if row else "8000"
+            old_port = row["value"] if row else "8443"
+        row_ap = conn.execute("SELECT value FROM settings WHERE key='agent_port'").fetchone()
+        old_agent_port = row_ap["value"] if row_ap else "8050"
+        row_as = conn.execute("SELECT value FROM settings WHERE key='agent_ssl'").fetchone()
+        old_agent_ssl = row_as["value"] if row_as else "0"
 
     with get_db_ctx() as conn:
         for key, value in data.items():
@@ -1434,24 +1440,15 @@ async def api_save_settings(request: Request):
 
     # Agent port changed → update .env
     new_agent_port = data.get("agent_port")
-    if new_agent_port and str(new_agent_port) != "***":
-        with get_db_ctx() as conn:
-            old_ap = conn.execute("SELECT value FROM settings WHERE key='agent_port'").fetchone()
-            old_agent_port = old_ap["value"] if old_ap else "8050"
-        if str(new_agent_port) != old_agent_port:
-            _update_env_key("AGENT_PORT", str(new_agent_port))
-            restart_pending = True
+    if new_agent_port and str(new_agent_port) != "***" and str(new_agent_port) != old_agent_port:
+        _update_env_key("AGENT_PORT", str(new_agent_port))
+        restart_pending = True
 
     # Agent SSL toggle
     new_agent_ssl = data.get("agent_ssl")
-    if new_agent_ssl is not None and str(new_agent_ssl) != "***":
-        old_agent_ssl = "0"
-        with get_db_ctx() as conn:
-            row = conn.execute("SELECT value FROM settings WHERE key='agent_ssl'").fetchone()
-            if row: old_agent_ssl = row["value"]
-        if str(new_agent_ssl) != old_agent_ssl:
-            _update_env_key("AGENT_SSL", "1" if str(new_agent_ssl) == "1" else "0")
-            restart_pending = True
+    if new_agent_ssl is not None and str(new_agent_ssl) != "***" and str(new_agent_ssl) != old_agent_ssl:
+        _update_env_key("AGENT_SSL", "1" if str(new_agent_ssl) == "1" else "0")
+        restart_pending = True
 
     if restart_pending:
         _schedule_restart(delay=1.5)
