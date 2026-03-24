@@ -46,6 +46,40 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
+# Dual-port routing — restrict endpoints to the correct port.
+# UI port (PORT) serves dashboard, settings, auth, static files.
+# Agent port (AGENT_PORT) serves agent heartbeat, jobs, downloads.
+# Both ports serve /api/ping.  If both ports are the same, no filtering.
+# ---------------------------------------------------------------------------
+_UI_PORT = int(os.environ.get("PORT", "8443"))
+_AGENT_PORT = int(os.environ.get("AGENT_PORT", "8050"))
+_AGENT_SSL = os.environ.get("AGENT_SSL", "") == "1" and bool(os.environ.get("SSL_CERTFILE"))
+_AGENT_SCHEME = "https" if _AGENT_SSL else "http"
+
+# Prefixes that are agent-only (served on AGENT_PORT)
+_AGENT_PREFIXES = ("/api/agents/", "/agent/")
+
+@app.middleware("http")
+async def _port_routing(request: Request, call_next):
+    """Block requests that arrive on the wrong port."""
+    if _UI_PORT != _AGENT_PORT:
+        port = request.url.port or (443 if request.url.scheme == "https" else 80)
+        path = request.url.path
+        is_agent_path = any(path.startswith(p) for p in _AGENT_PREFIXES)
+        is_shared = path in ("/api/ping", "/api/server-time")
+
+        if not is_shared:
+            if port == _AGENT_PORT and not is_agent_path:
+                return JSONResponse(status_code=404, content={"detail": "Not available on agent port"})
+            if port == _UI_PORT and is_agent_path:
+                # Allow agent-detail view (GET /api/agents/{id}) and job creation from UI
+                if request.method in ("GET", "POST", "PATCH", "DELETE") and not path.startswith("/agent/"):
+                    pass  # UI can access /api/agents/* for dashboard
+                else:
+                    return JSONResponse(status_code=404, content={"detail": "Not available on UI port"})
+    return await call_next(request)
+
+# ---------------------------------------------------------------------------
 # Admin-Key — protects all Web-UI endpoints (Dashboard, Jobs, Schedules …).
 # Set PATCHPILOT_ADMIN_KEY as an environment variable on the server.
 # If not set, a random key is generated at startup and logged
@@ -506,6 +540,27 @@ def _update_env_port(new_port: str, old_port: str) -> None:
         print(f"[patchpilot] Warning: could not update .env: {exc}", file=sys.stderr)
 
 
+def _update_env_key(key: str, value: str) -> None:
+    """Update or add a KEY=value entry in the systemd EnvironmentFile."""
+    try:
+        lines = _ENV_FILE.read_text().splitlines() if _ENV_FILE.exists() else []
+        found = False
+        result = []
+        for line in lines:
+            if line.startswith(f"{key}="):
+                result.append(f"{key}={value}"); found = True
+            else:
+                result.append(line)
+        if not found:
+            result.append(f"{key}={value}")
+        tmp = _ENV_FILE.with_suffix(".env.tmp")
+        tmp.write_text("\n".join(result) + "\n")
+        os.replace(tmp, _ENV_FILE)
+    except Exception as exc:
+        import sys
+        print(f"[patchpilot] Warning: could not update .env {key}: {exc}", file=sys.stderr)
+
+
 def _schedule_restart(delay: float = 1.5) -> None:
     """Restart the patchpilot systemd service after *delay* s (in background)."""
     def _do() -> None:
@@ -710,9 +765,8 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
     now_mono = time.monotonic()
     last = _last_heartbeat.get(agent_id, 0.0)
     if now_mono - last < _HEARTBEAT_MIN_INTERVAL:
-        # Still tell agents the canonical URL so they migrate even when throttled
-        _scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
-        return {"status": "ok", "canonical_port": str(_SERVER_PORT), "canonical_url": f"{_scheme}://{_get_internal_ip()}:{_SERVER_PORT}", "canonical_id": agent_id}
+        # Agent canonical URL always points to the agent port (HTTP)
+        return {"status": "ok", "canonical_port": str(_AGENT_PORT), "canonical_url": f"{_AGENT_SCHEME}://{_get_internal_ip()}:{_AGENT_PORT}", "canonical_id": agent_id}
     _last_heartbeat[agent_id] = now_mono
 
     # Heartbeat accepted — also invalidate dashboard + agent caches so the
@@ -769,10 +823,8 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
               str(p.get("new", ""))[:128] if p.get("new") else None,
               ) for p in packages],
         )
-    # Tell agents the canonical URL (protocol + host + port) so they self-update
-    # after a port or protocol change.
-    _scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
-    return {"status": "ok", "canonical_port": str(_SERVER_PORT), "canonical_url": f"{_scheme}://{_get_internal_ip()}:{_SERVER_PORT}", "canonical_id": agent_id}
+    # Agent canonical URL always points to the agent port (HTTP, no SSL)
+    return {"status": "ok", "canonical_port": str(_AGENT_PORT), "canonical_url": f"{_AGENT_SCHEME}://{_get_internal_ip()}:{_AGENT_PORT}", "canonical_id": agent_id}
 
 
 @app.get("/api/agents/{agent_id}/jobs")
@@ -798,10 +850,21 @@ def get_jobs(agent_id: str, x_token: str = Header(...)):
                 f"UPDATE jobs SET status='running', started=datetime('now','localtime') WHERE id IN ({placeholders})",  # noqa: S608
                 safe_ids,
             )
-    return [
-        {"id": r["id"], "type": r["type"], "params": json.loads(r["params"] or "{}")}
-        for r in rows
-    ]
+    # If SSL is active and there's an update_agent job, inline the agent code
+    # so the agent doesn't need to make a separate HTTPS download (bootstrap problem)
+    ssl_active = bool(os.environ.get("SSL_CERTFILE"))
+    agent_py = Path(__file__).parent.parent / "agent" / "agent.py"
+
+    result = []
+    for r in rows:
+        job = {"id": r["id"], "type": r["type"], "params": json.loads(r["params"] or "{}")}
+        if r["type"] == "update_agent" and ssl_active and agent_py.exists():
+            import base64 as _b64
+            code = agent_py.read_bytes()
+            job["params"]["inline_code"] = _b64.b64encode(code).decode()
+            job["params"]["inline_sha256"] = hashlib.sha256(code).hexdigest()
+        result.append(job)
+    return result
 
 
 @app.post("/api/agents/{agent_id}/jobs/{job_id}/result")
@@ -1243,7 +1306,7 @@ _SETTINGS_ALLOWED_KEYS = {
     "email_enabled",
     "smtp_host", "smtp_port", "smtp_security", "smtp_user", "smtp_password", "smtp_to",
     "notify_offline", "notify_offline_minutes", "notify_patches", "notify_failures",
-    "server_port",
+    "server_port", "agent_port", "agent_ssl",
 }
 
 _SSL_DIR = Path(__file__).parent.parent / "ssl"
@@ -1264,16 +1327,20 @@ def _get_internal_ip() -> str:
 
 @app.get("/api/settings", dependencies=[Depends(require_role("admin","user","readonly"))])
 def api_get_settings():
-    """Return all settings.  Sensitive values are replaced with '***'."""
+    """Return settings.  Sensitive values are replaced with '***'. Only saveable keys are returned."""
     with get_db_ctx() as conn:
         rows = conn.execute("SELECT key, value FROM settings ORDER BY key").fetchall()
     result = {}
     for row in rows:
         k, v = row["key"], row["value"]
+        if k not in _SETTINGS_ALLOWED_KEYS:
+            continue  # Don't expose internal keys (register_key, etc.)
         result[k] = "***" if (k in _SENSITIVE_KEYS and v) else v
-    # Provide computed internal URL for the Deploy page
+    # Provide computed URLs for the Deploy page
     _scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
-    result["internal_url"] = f"{_scheme}://{_get_internal_ip()}:{_SERVER_PORT}"
+    _ip = _get_internal_ip()
+    result["internal_url"] = f"{_scheme}://{_ip}:{_SERVER_PORT}"
+    result["agent_url"] = f"{_AGENT_SCHEME}://{_ip}:{_AGENT_PORT}"
     result["ssl_enabled"] = bool(os.environ.get("SSL_CERTFILE"))
     return result
 
@@ -1352,13 +1419,34 @@ async def api_save_settings(request: Request):
             tg_valid = False
 
     # Port changed → update .env and restart service.
-    # On next start the server binds the new port and opens a forwarder on the
-    # old port so agents don't lose connectivity during the transition.
     restart_pending = False
     if new_port_str and old_port and new_port_str != old_port:
         _update_env_port(new_port_str, old_port)
-        _schedule_restart(delay=1.5)
         restart_pending = True
+
+    # Agent port changed → update .env
+    new_agent_port = data.get("agent_port")
+    if new_agent_port and str(new_agent_port) != "***":
+        with get_db_ctx() as conn:
+            old_ap = conn.execute("SELECT value FROM settings WHERE key='agent_port'").fetchone()
+            old_agent_port = old_ap["value"] if old_ap else "8050"
+        if str(new_agent_port) != old_agent_port:
+            _update_env_key("AGENT_PORT", str(new_agent_port))
+            restart_pending = True
+
+    # Agent SSL toggle
+    new_agent_ssl = data.get("agent_ssl")
+    if new_agent_ssl is not None and str(new_agent_ssl) != "***":
+        old_agent_ssl = "0"
+        with get_db_ctx() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key='agent_ssl'").fetchone()
+            if row: old_agent_ssl = row["value"]
+        if str(new_agent_ssl) != old_agent_ssl:
+            _update_env_key("AGENT_SSL", "1" if str(new_agent_ssl) == "1" else "0")
+            restart_pending = True
+
+    if restart_pending:
+        _schedule_restart(delay=1.5)
 
     return {"status": "saved", "restart_pending": restart_pending, "new_port": new_port_str, "telegram_valid": tg_valid}
 

@@ -160,7 +160,9 @@ def init_db():
             ("notify_offline_minutes", "10"),
             ("notify_patches",         "1"),
             ("notify_failures",        "1"),
-            ("server_port",            "8000"),
+            ("server_port",            "8443"),
+            ("agent_port",             "8050"),
+            ("agent_ssl",              "1"),
             ("ssl_certfile",           ""),
             ("ssl_keyfile",            ""),
         ]

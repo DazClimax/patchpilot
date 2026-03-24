@@ -373,7 +373,9 @@ export function DeployPage() {
   useEffect(() => {
     Promise.all([
       api.settings().then((s: any) => {
-        if (s.internal_url) setInternalUrl(s.internal_url)
+        // Prefer agent_url (HTTP, agent port) over internal_url (UI port, may be HTTPS)
+        if (s.agent_url) setInternalUrl(s.agent_url)
+        else if (s.internal_url) setInternalUrl(s.internal_url)
       }).catch(() => {}),
       api.registerKeyStatus().then(r => {
         if (r.active && r.key) {

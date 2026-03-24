@@ -266,7 +266,10 @@ const EMPTY: Settings = {
   telegram_notify_patches: '1',
   telegram_notify_failures: '1',
   telegram_notify_success: '1',
-  server_port: '8000',
+  server_port: '8443',
+  agent_port: '8050',
+  agent_ssl: '0',
+  agent_url: '',
   ssl_certfile: '',
   ssl_keyfile: '',
   ssl_enabled: false as any,
@@ -285,6 +288,7 @@ export function SettingsPage() {
   const [restarting, setRestarting] = useState(false)
   const portPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [restartPort, setRestartPort] = useState<string | null>(null)
+  const [tab, setTab] = useState<'notifications' | 'server'>('notifications')
   const { showToast } = useToast()
 
   const isDirty = JSON.stringify(form) !== JSON.stringify(savedForm)
@@ -327,28 +331,21 @@ export function SettingsPage() {
     setSaving(true)
     try {
       // Strip computed/non-DB fields before saving
-      const { ssl_enabled, ssl_certfile, ssl_keyfile, internal_url, ...saveable } = form as any
+      const { ssl_enabled, ssl_certfile, ssl_keyfile, internal_url, agent_url, ...saveable } = form as any
       const result = await api.saveSettings(saveable)
       if (result.restart_pending && result.new_port) {
         const newPort = result.new_port
         setRestartPort(newPort)
         setRestarting(true)
-        // Pass admin key in hash so sessionStorage (per-origin) survives the
-        // port change. Use no-cors so the cross-origin poll isn't CORS-blocked.
-        const origin = `${window.location.protocol}//${window.location.hostname}:${newPort}`
+        const protocol = saveable.ssl_certfile ? 'https' : window.location.protocol.replace(':', '')
+        const origin = `${protocol}://${window.location.hostname}:${newPort}`
         const redirectUrl = `${origin}/#pp-key=${encodeURIComponent(auth.getKey())}`
-        const poll = setInterval(async () => {
-          try {
-            const ctrl = new AbortController()
-            const t = setTimeout(() => ctrl.abort(), 2000)
-            await fetch(`${origin}/api/ping`, { mode: 'no-cors', signal: ctrl.signal })
-            clearTimeout(t)
-            clearInterval(poll)
-            portPollRef.current = null
-            window.location.href = redirectUrl
-          } catch { /* still restarting */ }
-        }, 1500)
-        portPollRef.current = poll
+        // Wait for server to restart, then redirect
+        const timer = setTimeout(() => {
+          portPollRef.current = null
+          window.location.href = redirectUrl
+        }, 6000)
+        portPollRef.current = timer as any
       } else {
         setSavedForm({ ...form })
         showToast('Settings saved', 'success')
@@ -394,8 +391,6 @@ export function SettingsPage() {
     borderBottom: `1px solid ${colors.border}`,
     margin: '24px 0',
   }
-
-  const [tab, setTab] = useState<'notifications' | 'server'>('notifications')
 
   return (
     <div style={{ padding: 'clamp(16px, 4vw, 32px)', maxWidth: '1400px' }}>
@@ -633,17 +628,34 @@ export function SettingsPage() {
         <Card style={{ marginBottom: '20px' }}>
           <SectionHeader>Server</SectionHeader>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: '24px', flexWrap: 'wrap' }}>
-            <div style={{ width: '160px', flexShrink: 0 }}>
+            <div style={{ width: '140px', flexShrink: 0 }}>
               <Field
-                label="HTTP Port"
+                label="UI Port"
                 name="server_port"
                 value={form.server_port}
                 onChange={handleChange}
-                placeholder="8000"
+                placeholder="8443"
+              />
+            </div>
+            <div style={{ width: '140px', flexShrink: 0 }}>
+              <Field
+                label="Agent Port"
+                name="agent_port"
+                value={form.agent_port}
+                onChange={handleChange}
+                placeholder="8050"
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', paddingTop: '22px' }}>
+              <Toggle
+                label="Agent SSL"
+                name="agent_ssl"
+                value={form.agent_ssl}
+                onChange={handleChange}
               />
             </div>
             <p style={{
-              margin: '22px 0 0',
+              margin: '14px 0 0',
               fontSize: '11px',
               fontFamily: "'Electrolize', monospace",
               color: colors.textMuted,
@@ -651,7 +663,8 @@ export function SettingsPage() {
               lineHeight: 1.6,
               whiteSpace: 'normal',
             }}>
-              Restarts the server on the new port. Agents migrate automatically on their next heartbeat — no manual config update needed.
+              UI port supports HTTPS via SSL section below. Agent SSL uses the same certificate.<br />
+              Agents migrate automatically on their next heartbeat.
             </p>
           </div>
         </Card>
@@ -690,37 +703,76 @@ export function SettingsPage() {
 
       {/* Toasts rendered by global ToastProvider */}
 
-      {restarting && (
-        <div style={{
-          position: 'fixed', inset: 0,
-          background: `${colors.bg}ee`,
-          backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
-          display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center', gap: '20px',
-          zIndex: 10000, animation: 'pp-fadein 0.3s ease both',
-        }}>
+      {restarting && (() => {
+        const proto = window.location.protocol.replace(':', '')
+        const newUrl = `${window.location.protocol}//${window.location.hostname}:${restartPort}`
+        const stillPolling = portPollRef.current !== null
+        return (
           <div style={{
-            width: '36px', height: '36px', borderRadius: '50%',
-            border: `2px solid ${colors.primary}22`,
-            borderTopColor: colors.primary,
-            animation: 'pp-spin 0.8s linear infinite',
-            boxShadow: `0 0 16px ${colors.primary}44`,
-          }} />
-          <div style={{
-            fontFamily: "'Orbitron', sans-serif", fontSize: '13px',
-            letterSpacing: '0.22em', textTransform: 'uppercase',
-            color: colors.primary, textShadow: `0 0 8px ${colors.primary}88`,
+            position: 'fixed', inset: 0,
+            background: `${colors.bg}ee`,
+            backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+            display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', gap: '20px',
+            zIndex: 10000, animation: 'pp-fadein 0.3s ease both',
           }}>
-            Server Restarting
+            {stillPolling ? (
+              <>
+                <div style={{
+                  width: '36px', height: '36px', borderRadius: '50%',
+                  border: `2px solid ${colors.primary}22`,
+                  borderTopColor: colors.primary,
+                  animation: 'pp-spin 0.8s linear infinite',
+                  boxShadow: `0 0 16px ${colors.primary}44`,
+                }} />
+                <div style={{
+                  fontFamily: "'Orbitron', sans-serif", fontSize: '13px',
+                  letterSpacing: '0.22em', textTransform: 'uppercase',
+                  color: colors.primary, textShadow: `0 0 8px ${colors.primary}88`,
+                }}>
+                  Server Restarting
+                </div>
+                <div style={{
+                  fontFamily: "'Electrolize', monospace", fontSize: '11px',
+                  letterSpacing: '0.1em', color: colors.textMuted,
+                }}>
+                  Redirecting to port {restartPort} …
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{
+                  fontFamily: "'Orbitron', sans-serif", fontSize: '13px',
+                  letterSpacing: '0.22em', textTransform: 'uppercase',
+                  color: colors.primary, textShadow: `0 0 8px ${colors.primary}88`,
+                }}>
+                  Server Restarted
+                </div>
+                <div style={{
+                  fontFamily: "'Electrolize', monospace", fontSize: '12px',
+                  color: colors.text, textAlign: 'center', lineHeight: 1.8,
+                }}>
+                  The server is now running on port {restartPort}.
+                </div>
+                <a
+                  href={`${newUrl}/#pp-key=${encodeURIComponent(auth.getKey())}`}
+                  style={{
+                    fontFamily: "'Orbitron', sans-serif", fontSize: '12px',
+                    letterSpacing: '0.12em', textTransform: 'uppercase',
+                    color: colors.primary, textShadow: `0 0 6px ${colors.primary}66`,
+                    padding: '10px 24px',
+                    border: `1px solid ${colors.primary}44`,
+                    textDecoration: 'none',
+                    transition: 'all 0.15s',
+                  }}
+                >
+                  Open on port {restartPort} →
+                </a>
+              </>
+            )}
           </div>
-          <div style={{
-            fontFamily: "'Electrolize', monospace", fontSize: '11px',
-            letterSpacing: '0.1em', color: colors.textMuted,
-          }}>
-            Redirecting to port {restartPort} …
-          </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }
@@ -934,7 +986,7 @@ function DeployModal({
           {/* Footer */}
           <div style={{
             padding: '14px 22px 18px',
-            display: 'flex', justifyContent: isDone ? 'flex-end' : 'center', alignItems: 'center',
+            display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
             gap: '10px', flexWrap: 'wrap',
             position: 'relative', zIndex: 2,
             borderTop: `1px solid ${colors.border}`,
@@ -961,12 +1013,17 @@ function DeployModal({
                 <Button variant="ghost" onClick={onClose}>Close</Button>
               </>
             ) : (
-              <span style={{
-                fontSize: '10px', fontFamily: "'Orbitron', sans-serif",
-                letterSpacing: '0.08em', color: colors.textMuted,
-              }}>
-                Waiting for agents...
-              </span>
+              <>
+                <span style={{
+                  fontSize: '10px', fontFamily: "'Orbitron', sans-serif",
+                  letterSpacing: '0.08em', color: colors.textMuted, marginRight: 'auto',
+                }}>
+                  Waiting for agents...
+                </span>
+                <Button variant="ghost" onClick={onClose} style={{ color: colors.danger }}>
+                  Cancel
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -1083,16 +1140,18 @@ function SslSection() {
     setBusy(false)
   }
 
-  const handleEnable = async () => {
-    if (!customCert.trim() || !customKey.trim()) {
+  const handleEnable = async (cert?: string, key?: string) => {
+    const c = (cert || customCert).trim()
+    const k = (key || customKey).trim()
+    if (!c || !k) {
       showToast('Both certificate and key path are required', 'error')
       return
     }
     setBusy(true)
     try {
-      const res = await api.sslEnable(customCert.trim(), customKey.trim())
+      const res = await api.sslEnable(c, k)
       showToast('SSL enabled — server restarting', 'success')
-      setSsl({ enabled: true, certfile: customCert, keyfile: customKey, info: res.info })
+      setSsl({ enabled: true, certfile: c, keyfile: k, info: res.info })
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to enable SSL', 'error')
     } finally { setBusy(false) }
@@ -1170,40 +1229,58 @@ function SslSection() {
         </>
       ) : (
         <>
+          {/* Existing cert — enable directly or deploy first */}
+          {ssl?.certfile && ssl?.keyfile && (
+            <div style={{ marginBottom: '16px', padding: '12px', border: `1px solid ${colors.border}`, background: `${colors.success}06` }}>
+              <div style={{ fontSize: '10px', letterSpacing: '0.15em', color: colors.textMuted, fontFamily: "'Orbitron', sans-serif", marginBottom: '8px' }}>
+                CERTIFICATE AVAILABLE
+              </div>
+              <div style={{ fontSize: '11px', color: colors.textDim, fontFamily: "'Electrolize', monospace", marginBottom: '10px', lineHeight: 1.6 }}>
+                {ssl.certfile}
+                {ssl.info && <span style={{ color: colors.textMuted }}> — expires {ssl.info.expires}</span>}
+              </div>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <Button onClick={handleDeploySsl} disabled={busy}>
+                  {busy ? 'Deploying...' : 'Deploy to Agents'}
+                </Button>
+                <Button onClick={() => handleEnable(ssl.certfile, ssl.keyfile)} disabled={busy}>
+                  Enable HTTPS
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Generate new self-signed cert */}
           <div style={{ marginBottom: '16px' }}>
+            <div style={{ fontSize: '10px', letterSpacing: '0.15em', color: colors.textMuted, fontFamily: "'Orbitron', sans-serif", marginBottom: '10px' }}>
+              {ssl?.certfile ? 'REGENERATE CERTIFICATE' : 'GENERATE SELF-SIGNED CERTIFICATE'}
+            </div>
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
               <div style={{ width: '120px' }}>
                 <div style={labelStyle}>Validity</div>
                 <Dropdown value={certYears} onChange={setCertYears} options={CERT_VALIDITY_OPTIONS} />
               </div>
-              <Button onClick={handleGenerate} disabled={busy}>
-                {busy ? 'Generating...' : 'Generate Self-Signed Certificate'}
+              <Button variant={ssl?.certfile ? 'ghost' : undefined} onClick={handleGenerate} disabled={busy}>
+                {busy ? 'Generating...' : ssl?.certfile ? 'Regenerate' : 'Generate Certificate'}
               </Button>
-              {ssl?.info && (
-                <Button onClick={handleDeploySsl} disabled={busy}>
-                  {busy ? 'Deploying...' : 'Deploy to Agents'}
-                </Button>
-              )}
             </div>
-            <p style={{ margin: '8px 0 0', fontSize: '10px', color: colors.textMuted, fontFamily: "'Electrolize', monospace" }}>
-              Generate a cert, deploy it to agents, then enable HTTPS.
-            </p>
           </div>
 
+          {/* Or use own certificate */}
           <div style={{ borderTop: `1px solid ${colors.border}`, paddingTop: '14px' }}>
             <div style={{ fontSize: '10px', letterSpacing: '0.15em', color: colors.textMuted, fontFamily: "'Orbitron', sans-serif", marginBottom: '10px' }}>
-              OR USE OWN CERTIFICATE
+              USE OWN CERTIFICATE
             </div>
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
               <div style={{ flex: '1 1 200px' }}>
                 <div style={labelStyle}>Certificate Path</div>
-                <input value={customCert} onChange={e => setCustomCert(e.target.value)} placeholder="/etc/patchpilot/cert.pem" style={inputStyle} />
+                <input value={customCert} onChange={e => setCustomCert(e.target.value)} placeholder="/opt/patchpilot/ssl/cert.pem" style={inputStyle} />
               </div>
               <div style={{ flex: '1 1 200px' }}>
                 <div style={labelStyle}>Private Key Path</div>
-                <input value={customKey} onChange={e => setCustomKey(e.target.value)} placeholder="/etc/patchpilot/key.pem" style={inputStyle} />
+                <input value={customKey} onChange={e => setCustomKey(e.target.value)} placeholder="/opt/patchpilot/ssl/key.pem" style={inputStyle} />
               </div>
-              <Button onClick={handleEnable} disabled={busy || !customCert.trim() || !customKey.trim()}>
+              <Button onClick={() => handleEnable()} disabled={busy || !customCert.trim() || !customKey.trim()}>
                 Enable SSL
               </Button>
             </div>

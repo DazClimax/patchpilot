@@ -128,6 +128,9 @@ export interface Settings {
   telegram_notify_failures: string
   telegram_notify_success: string
   server_port: string
+  agent_port: string
+  agent_ssl: string
+  agent_url: string
   ssl_certfile: string
   ssl_keyfile: string
   ssl_enabled: boolean

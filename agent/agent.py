@@ -572,45 +572,61 @@ def _update_self(params: dict) -> tuple:
     import hashlib as _hashlib
     import tempfile as _tempfile
 
-    # Always download from configured server — never accept external URLs (SEC M-6)
-    cfg = load_config()
-    server_url = cfg.get("PATCHPILOT_SERVER", "").rstrip("/")
-    if not server_url:
-        return "failed", "PATCHPILOT_SERVER not set — cannot download update"
-
-    agent_url = f"{server_url}/agent/agent.py"
-    hash_url  = f"{server_url}/agent/agent.py.sha256"
     self_path = Path(__file__).resolve()
 
-    try:
-        # Download SHA-256 checksum first (SEC M-2: use SSL context)
-        # On SSL error: the server cert may have been regenerated.
-        # Bootstrap trust by re-downloading the CA cert (like install.sh).
+    # If the server inlined the code in the job params (SSL bootstrap), use it directly
+    inline_code = params.get("inline_code")
+    inline_sha = params.get("inline_sha256")
+    if inline_code and inline_sha:
+        import base64 as _b64
         try:
-            req_hash = urlreq.Request(hash_url, method="GET")
-            with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
-                expected_hash = r.read().decode().split()[0].strip()
-        except urllib.error.URLError as ssl_err:
-            if "SSL" in str(ssl_err) or "CERTIFICATE" in str(ssl_err).upper():
-                print("[agent] SSL error — server cert may have changed, re-fetching CA cert...")
-                _bootstrap_ca_cert(server_url)
+            new_code = _b64.b64decode(inline_code)
+            actual_hash = _hashlib.sha256(new_code).hexdigest()
+            if actual_hash != inline_sha:
+                return "failed", f"Inline code SHA-256 mismatch: {actual_hash[:16]}… vs {inline_sha[:16]}…"
+            print("[agent] Using inline agent code from job payload (SSL bootstrap)")
+        except Exception as e:
+            return "failed", f"Failed to decode inline agent code: {e}"
+    else:
+        # Download from server
+        cfg = load_config()
+        server_url = cfg.get("PATCHPILOT_SERVER", "").rstrip("/")
+        if not server_url:
+            return "failed", "PATCHPILOT_SERVER not set — cannot download update"
+
+        agent_url = f"{server_url}/agent/agent.py"
+        hash_url  = f"{server_url}/agent/agent.py.sha256"
+
+        try:
+            # Download SHA-256 checksum (with SSL bootstrap fallback)
+            try:
                 req_hash = urlreq.Request(hash_url, method="GET")
                 with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
                     expected_hash = r.read().decode().split()[0].strip()
-            else:
-                raise
+            except urllib.error.URLError as ssl_err:
+                if "SSL" in str(ssl_err) or "CERTIFICATE" in str(ssl_err).upper():
+                    print("[agent] SSL error — server cert may have changed, re-fetching CA cert...")
+                    _bootstrap_ca_cert(server_url)
+                    req_hash = urlreq.Request(hash_url, method="GET")
+                    with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
+                        expected_hash = r.read().decode().split()[0].strip()
+                else:
+                    raise
 
-        # Download new agent binary
-        req_agent = urlreq.Request(agent_url, method="GET")
-        with urlreq.urlopen(req_agent, timeout=60, context=_SSL_CTX) as r:
-            new_code = r.read()
+            # Download new agent binary
+            req_agent = urlreq.Request(agent_url, method="GET")
+            with urlreq.urlopen(req_agent, timeout=60, context=_SSL_CTX) as r:
+                new_code = r.read()
 
-        # Verify integrity
-        actual_hash = _hashlib.sha256(new_code).hexdigest()
-        if actual_hash != expected_hash:
-            return "failed", f"SHA-256 mismatch: expected {expected_hash[:16]}… got {actual_hash[:16]}…"
+            # Verify integrity
+            actual_hash = _hashlib.sha256(new_code).hexdigest()
+            if actual_hash != expected_hash:
+                return "failed", f"SHA-256 mismatch: expected {expected_hash[:16]}… got {actual_hash[:16]}…"
+        except Exception as e:
+            return "failed", f"Update failed: {e}"
 
-        # Write to temp file in same directory, then atomically replace
+    # Common path: write new code to disk and restart
+    try:
         tmp = _tempfile.NamedTemporaryFile(
             dir=self_path.parent, suffix=".tmp", delete=False
         )
@@ -630,13 +646,10 @@ def _update_self(params: dict) -> tuple:
         tmp_path.replace(self_path)
 
         # Fork a child that sleeps 4s then kills the parent, so systemd
-        # (Restart=always) relaunches with new code.  The delay gives
-        # report_result time to POST the job result.  os.fork + os._exit
-        # need no extra imports — important for bootstrapping old agents.
+        # (Restart=always) relaunches with new code.
         pid = os.getpid()
         child = os.fork()
         if child == 0:
-            # Child process: wait then kill parent
             time.sleep(4)
             try:
                 os.kill(pid, signal.SIGTERM)
@@ -644,8 +657,7 @@ def _update_self(params: dict) -> tuple:
                 pass
             os._exit(0)
 
-        return "done", f"Agent updated to {actual_hash[:16]}… — restarting in 4s"
-
+        return "done", f"Agent updated to {_hashlib.sha256(new_code).hexdigest()[:16]}… — restarting in 4s"
     except Exception as e:
         return "failed", f"Update failed: {e}"
 
