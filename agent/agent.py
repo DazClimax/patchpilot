@@ -44,6 +44,7 @@ def _make_ssl_context() -> "ssl.SSLContext":
     a self-signed certificate on the server.
     """
     ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2  # SEC: enforce minimum TLS 1.2
     ca_bundle = os.environ.get("PATCHPILOT_CA_BUNDLE", "")
     # Also check agent.conf directly — env var may not be set at import time
     if not ca_bundle:

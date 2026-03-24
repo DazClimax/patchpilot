@@ -253,18 +253,25 @@ def _validate_smtp_host(host: str):
 _REGISTER_KEY_TTL = 300  # seconds (5 min)
 
 
+def _hash_register_key(key: str) -> str:
+    """SHA-256 hash for register key storage."""
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
 def _generate_register_key() -> tuple[str, float]:
-    """Generate a fresh register key (DB-backed, shared across processes). Returns (key, seconds_remaining)."""
+    """Generate a fresh register key (DB-backed, shared across processes).
+    Stores SHA-256 hash in DB, returns plaintext only in API response."""
     key = secrets.token_hex(6)  # 12 chars, easy to copy
+    key_hash = _hash_register_key(key)
     expires = str(int(time.time() + _REGISTER_KEY_TTL))
     with get_db_ctx() as conn:
-        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('register_key', ?)", (key,))
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('register_key', ?)", (key_hash,))
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('register_key_ts', ?)", (expires,))
     return key, float(_REGISTER_KEY_TTL)
 
 
 def _get_active_register_key() -> tuple[str, float] | tuple[None, float]:
-    """Return current key + remaining seconds, or (None, 0) if expired/not generated."""
+    """Return current key hash + remaining seconds, or (None, 0) if expired."""
     with get_db_ctx() as conn:
         row_key = conn.execute("SELECT value FROM settings WHERE key='register_key'").fetchone()
         row_ts = conn.execute("SELECT value FROM settings WHERE key='register_key_ts'").fetchone()
@@ -281,13 +288,14 @@ def _get_active_register_key() -> tuple[str, float] | tuple[None, float]:
 
 
 def _verify_register_key(submitted: str):
-    """Check submitted key against current valid key (DB-backed)."""
+    """Check submitted key against stored hash (DB-backed, timing-safe)."""
     if not submitted:
         raise HTTPException(status_code=403, detail="Registration requires a register key (see Deploy page)")
     key, remaining = _get_active_register_key()
     if key is None or remaining <= 0:
         raise HTTPException(status_code=403, detail="No active register key — generate one from the Deploy page")
-    if not hmac.compare_digest(submitted.lower(), key.lower()):
+    submitted_hash = _hash_register_key(submitted)
+    if not hmac.compare_digest(submitted_hash, key):  # key is already a hash from DB
         raise HTTPException(status_code=403, detail="Invalid or expired register key")
 
 
@@ -322,16 +330,11 @@ def _check_rate_limit(request: Request):
         # MED-3: evict stale entry so the dict doesn't grow unboundedly
         _RATE_LIMIT.pop(ip, None)
     # MED-3 / MEDIUM-9: periodically prune IPs that haven't been seen in 2× the window
-    if len(_RATE_LIMIT) > 1000:
+    if len(_RATE_LIMIT) > 5000:
         cutoff = now - _RATE_WINDOW * 2
         stale = [k for k, ts in _RATE_LIMIT.items() if not ts or ts[-1] < cutoff]
         for k in stale:
             _RATE_LIMIT.pop(k, None)
-        # Hard cap: if still over limit, evict oldest entries
-        if len(_RATE_LIMIT) > 1000:
-            oldest = sorted(_RATE_LIMIT.items(), key=lambda x: x[1][-1] if x[1] else 0)
-            for k, _ in oldest[:len(_RATE_LIMIT) - 800]:
-                _RATE_LIMIT.pop(k, None)
     if len(hits) > _RATE_MAX:
         raise HTTPException(status_code=429, detail="Too many requests")
 
@@ -1306,8 +1309,15 @@ def delete_schedule(sid: int):
 # SETTINGS API
 # ===========================================================================
 
-# Keys that contain sensitive data — masked in GET responses
+# Keys that contain sensitive data — masked in GET, encrypted in DB
 _SENSITIVE_KEYS = {"smtp_password", "telegram_token"}
+
+try:
+    from crypto import encrypt as _encrypt_secret, decrypt as _decrypt_secret
+except ImportError:
+    # Fallback if cryptography not installed — plaintext
+    _encrypt_secret = lambda v: v  # noqa: E731
+    _decrypt_secret = lambda v: v  # noqa: E731
 
 # LOW-4: Explicit allowlist — reject unknown keys to prevent mass assignment
 _SETTINGS_ALLOWED_KEYS = {
@@ -1419,15 +1429,16 @@ async def api_save_settings(request: Request):
         except Exception:
             tg_valid = False
 
-    # Save all settings to DB
+    # Save all settings to DB (encrypt sensitive values)
     with get_db_ctx() as conn:
         for key, value in data.items():
             if value == "***":
                 continue
+            store_val = _encrypt_secret(str(value)) if key in _SENSITIVE_KEYS else str(value)
             conn.execute(
                 "INSERT INTO settings (key, value) VALUES (?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (key, str(value)),
+                (key, store_val),
             )
     notification_manager.reload()
     from telegram_bot import telegram_bot

@@ -209,18 +209,25 @@ class NotificationManager:
             log.warning("NotificationManager: could not read settings from DB: %s", exc)
             cfg = {}
 
-        # Merge env-variable overrides (env takes precedence)
-        def _get(key: str, default: str = "") -> str:
-            env_key = f"PATCHPILOT_{key.upper()}"
-            return os.environ.get(env_key, cfg.get(key, default))
+        # Decrypt sensitive values from DB
+        try:
+            from crypto import decrypt as _dec
+        except ImportError:
+            _dec = lambda v: v  # noqa: E731
 
-        tg_token   = _get("telegram_token")
+        # Merge env-variable overrides (env takes precedence)
+        def _get(key: str, default: str = "", sensitive: bool = False) -> str:
+            env_key = f"PATCHPILOT_{key.upper()}"
+            val = os.environ.get(env_key, cfg.get(key, default))
+            return _dec(val) if sensitive else val
+
+        tg_token   = _get("telegram_token", sensitive=True)
         tg_chat    = _get("telegram_chat_id")
         smtp_host     = _get("smtp_host")
         smtp_port     = _get("smtp_port", "587")
         smtp_security = _get("smtp_security", "starttls")
         smtp_user     = _get("smtp_user")
-        smtp_pass     = _get("smtp_password")
+        smtp_pass     = _get("smtp_password", sensitive=True)
         smtp_to       = _get("smtp_to")
 
         self._email_enabled    = _get("email_enabled",    "1") == "1"

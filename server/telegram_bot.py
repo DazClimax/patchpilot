@@ -64,7 +64,11 @@ class TelegramCommandBot:
             with get_db_ctx() as conn:
                 rows = conn.execute("SELECT key, value FROM settings").fetchall()
             cfg = {r["key"]: r["value"] for r in rows}
-            self._token = cfg.get("telegram_token", "").strip()
+            try:
+                from crypto import decrypt as _dec
+            except ImportError:
+                _dec = lambda v: v  # noqa: E731
+            self._token = _dec(cfg.get("telegram_token", "")).strip()
             self._chat_id = cfg.get("telegram_chat_id", "").strip()
             self._enabled = cfg.get("telegram_enabled", "1") == "1"
             self._settings_loaded_at = now
