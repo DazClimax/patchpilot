@@ -1776,11 +1776,11 @@ def download_ca_hash():
 
 
 @app.post("/api/settings/deploy-ssl", dependencies=[Depends(require_role("admin"))])
-def api_deploy_ssl_to_agents():
-    """Create update_agent + deploy_ssl jobs for all registered agents.
+async def api_deploy_ssl_to_agents(request: Request):
+    """Create update_agent + deploy_ssl jobs for agents.
 
-    The update_agent job runs first (lower ID = picked up first) so the agent
-    gets the new code that understands deploy_ssl before it receives that job.
+    If retry_batch is provided, only re-deploys to agents that failed in that batch.
+    Otherwise deploys to all registered agents.
     Returns a batch_id so the frontend can track exactly this run.
     """
     cert = _SSL_DIR / "cert.pem"
@@ -1788,17 +1788,36 @@ def api_deploy_ssl_to_agents():
         raise HTTPException(status_code=400, detail="No certificate generated yet — generate one first")
     import uuid as _uuid
     batch_id = _uuid.uuid4().hex[:12]
+
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        pass
+    retry_batch = data.get("retry_batch", "")
+
     with get_db_ctx() as conn:
-        # Target ALL agents — offline ones will pick up jobs when they reconnect
-        agents = conn.execute("SELECT id, hostname FROM agents").fetchall()
+        if retry_batch:
+            # Only retry agents that failed in the previous batch
+            batch_filter = f'%"batch": "{retry_batch}"%'
+            failed_agents = conn.execute("""
+                SELECT DISTINCT j.agent_id, a.hostname FROM jobs j
+                JOIN agents a ON a.id = j.agent_id
+                WHERE j.status = 'failed' AND j.params LIKE ?
+            """, (batch_filter,)).fetchall()
+            agents = failed_agents
+        else:
+            agents = conn.execute("SELECT id AS agent_id, hostname FROM agents").fetchall()
+
         if not agents:
-            raise HTTPException(status_code=422, detail="No agents registered")
+            raise HTTPException(status_code=422, detail="No agents to deploy to")
         count = 0
         for a in agents:
+            aid = a["agent_id"] if "agent_id" in a.keys() else a["id"]
             params = json.dumps({"chain": "deploy_ssl", "batch": batch_id})
             conn.execute(
                 'INSERT INTO jobs (agent_id, type, params) VALUES (?, \'update_agent\', ?)',
-                (a["id"], params),
+                (aid, params),
             )
             count += 1
     _cache_invalidate("dashboard")

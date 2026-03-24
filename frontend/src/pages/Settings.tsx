@@ -1116,14 +1116,14 @@ function SslSection() {
     } catch { /* ignore */ }
   }, [])
 
-  const handleDeploySsl = async () => {
+  const handleDeploySsl = async (retryBatch?: string) => {
     setBusy(true)
     setDeployStatus(null)
     batchRef.current = ''
     deployStartRef.current = Date.now()
     setDeployModal(true)
     try {
-      const res = await api.deploySslToAgents()
+      const res = await api.deploySslToAgents(retryBatch)
       batchRef.current = res.batch_id
       pollDeployStatus()
       pollRef.current = setInterval(pollDeployStatus, 3000)
@@ -1219,7 +1219,7 @@ function SslSection() {
             <Button variant="ghost" onClick={handleGenerate} disabled={busy}>
               {busy ? 'Generating...' : 'Regenerate Self-Signed'}
             </Button>
-            <Button onClick={handleDeploySsl} disabled={busy}>
+            <Button onClick={() => handleDeploySsl()} disabled={busy}>
               {busy ? 'Deploying...' : 'Deploy Cert to Agents'}
             </Button>
             <Button variant="danger" onClick={() => setConfirmDisable(true)} disabled={busy}>
@@ -1240,7 +1240,7 @@ function SslSection() {
                 {ssl.info && <span style={{ color: colors.textMuted }}> — expires {ssl.info.expires}</span>}
               </div>
               <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                <Button onClick={handleDeploySsl} disabled={busy}>
+                <Button onClick={() => handleDeploySsl()} disabled={busy}>
                   {busy ? 'Deploying...' : 'Deploy to Agents'}
                 </Button>
                 <Button onClick={() => handleEnable(ssl.certfile, ssl.keyfile)} disabled={busy}>
@@ -1310,7 +1310,7 @@ function SslSection() {
           busy={busy}
           setBusy={setBusy}
           onClose={closeDeployModal}
-          onRetry={() => { closeDeployModal(); handleDeploySsl() }}
+          onRetry={() => { const batch = batchRef.current; closeDeployModal(); handleDeploySsl(batch) }}
           onEnableHttps={handleEnableFromModal}
         />
       )}

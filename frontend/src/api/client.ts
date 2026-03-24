@@ -228,8 +228,8 @@ export const api = {
   sslDisable: () =>
     req<{ status: string; restart_pending: boolean }>('POST', '/settings/ssl-disable'),
 
-  deploySslToAgents: () =>
-    req<{ status: string; agent_count: number; batch_id: string }>('POST', '/settings/deploy-ssl'),
+  deploySslToAgents: (retryBatch?: string) =>
+    req<{ status: string; agent_count: number; batch_id: string }>('POST', '/settings/deploy-ssl', retryBatch ? { retry_batch: retryBatch } : undefined),
 
   deploySslStatus: (batchId: string) =>
     req<{ agents: Array<{ agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null; online: boolean }>; total: number; total_online: number; completed: number }>('GET', `/settings/deploy-ssl/status?batch=${batchId}`),
