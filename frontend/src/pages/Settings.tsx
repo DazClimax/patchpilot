@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { api, Settings, auth } from '../api/client'
+import { Animator, FrameCorners } from '@arwes/react'
 import { colors, glow, glowText, glassBg } from '../theme'
 import { Card } from '../components/Card'
+import { ConfirmModal } from '../components/ConfirmModal'
 import { Button } from '../components/Button'
 import { PageHeader, SectionHeader } from '../components/SectionHeader'
 import { Dropdown } from '../components/Dropdown'
@@ -84,6 +86,9 @@ function Toggle({
     <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
       <button
         type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={label}
         onClick={() => onChange(name, on ? '0' : '1')}
         style={{
           width: '44px',
@@ -255,10 +260,14 @@ const EMPTY: Settings = {
   notify_patches: '1',
   notify_failures: '1',
   telegram_enabled: '1',
+  telegram_notify_offline: '1',
+  telegram_notify_patches: '1',
+  telegram_notify_failures: '1',
+  telegram_notify_success: '1',
   server_port: '8000',
   ssl_certfile: '',
   ssl_keyfile: '',
-  ssl_enabled: false,
+  ssl_enabled: false as any,
 }
 
 // ---------------------------------------------------------------------------
@@ -315,7 +324,9 @@ export function SettingsPage() {
     e.preventDefault()
     setSaving(true)
     try {
-      const result = await api.saveSettings(form)
+      // Strip computed/non-DB fields before saving
+      const { ssl_enabled, ssl_certfile, ssl_keyfile, internal_url, ...saveable } = form as any
+      const result = await api.saveSettings(saveable)
       if (result.restart_pending && result.new_port) {
         const newPort = result.new_port
         setRestartPort(newPort)
@@ -397,7 +408,7 @@ export function SettingsPage() {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={testing === 'telegram'}
+              disabled={testing === 'telegram' || form.telegram_enabled !== '1'}
               onClick={() => handleTest('telegram')}
             >
               {testing === 'telegram' ? 'SENDING...' : 'SEND TEST'}
@@ -422,6 +433,7 @@ export function SettingsPage() {
             marginTop: '12px',
             opacity: form.telegram_enabled === '1' ? 1 : 0.4,
             pointerEvents: form.telegram_enabled === '1' ? 'auto' : 'none',
+            transition: 'opacity 0.2s ease',
           }}>
             <Field
               label="Bot Token"
@@ -438,6 +450,22 @@ export function SettingsPage() {
               onChange={handleChange}
               placeholder="-100123456789"
             />
+          </div>
+
+          <div style={{
+            marginTop: '14px', paddingTop: '14px', borderTop: `1px solid ${colors.border}`,
+            opacity: form.telegram_enabled === '1' ? 1 : 0.4,
+            pointerEvents: form.telegram_enabled === '1' ? 'auto' : 'none',
+          }}>
+            <div style={{ fontSize: '10px', letterSpacing: '0.15em', color: colors.textMuted, fontFamily: "'Orbitron', sans-serif", marginBottom: '10px' }}>
+              TELEGRAM EVENTS
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <Toggle label="VM offline" name="telegram_notify_offline" value={form.telegram_notify_offline} onChange={handleChange} />
+              <Toggle label="Updates available / Reboot required" name="telegram_notify_patches" value={form.telegram_notify_patches} onChange={handleChange} />
+              <Toggle label="Job failed" name="telegram_notify_failures" value={form.telegram_notify_failures} onChange={handleChange} />
+              <Toggle label="Job completed" name="telegram_notify_success" value={form.telegram_notify_success} onChange={handleChange} />
+            </div>
           </div>
         </Card>
 
@@ -516,7 +544,7 @@ export function SettingsPage() {
         {/* ------------------------------------------------------------------ */}
         {/* Event-Toggles                                                        */}
         {/* ------------------------------------------------------------------ */}
-        <Card style={{ marginBottom: '24px' }}>
+        <Card style={{ marginBottom: '20px' }}>
           <SectionHeader>Notification Events</SectionHeader>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -664,12 +692,247 @@ export function SettingsPage() {
 // ---------------------------------------------------------------------------
 // SSL / HTTPS Section
 // ---------------------------------------------------------------------------
+type DeployAgent = { agent_id: string; hostname: string; status: string; output: string; finished: string | null }
+type DeployStatus = { agents: DeployAgent[]; total: number; completed: number }
+
+const CERT_VALIDITY_OPTIONS = [
+  { value: '1', label: '1 Year' },
+  { value: '3', label: '3 Years' },
+  { value: '5', label: '5 Years' },
+  { value: '10', label: '10 Years' },
+]
+
+function DeployModal({
+  deployStatus,
+  ssl,
+  busy,
+  setBusy,
+  onClose,
+  onRetry,
+  onEnableHttps,
+}: {
+  deployStatus: DeployStatus | null
+  ssl: { enabled: boolean; certfile: string; keyfile: string; info: any } | null
+  busy: boolean
+  setBusy: (b: boolean) => void
+  onClose: () => void
+  onRetry: () => void
+  onEnableHttps: () => void
+}) {
+  const panelRef = useRef<HTMLDivElement>(null)
+  const isDone = deployStatus != null && deployStatus.total > 0 && deployStatus.completed >= deployStatus.total
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isDone) onClose()
+      if (e.key === 'Tab' && panelRef.current) {
+        const focusable = panelRef.current.querySelectorAll<HTMLElement>('button, [tabindex]:not([tabindex="-1"])')
+        if (focusable.length === 0) return
+        const first = focusable[0]
+        const last = focusable[focusable.length - 1]
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [isDone, onClose])
+
+  const hasFailed = deployStatus?.agents.some(a => a.status === 'failed') ?? false
+  const barColor = hasFailed ? colors.danger : isDone ? colors.success : colors.primary
+
+  return (
+    <div
+      onClick={e => { if (e.target === e.currentTarget && isDone) onClose() }}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 200,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(2,12,14,0.85)',
+        backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
+        animation: 'pp-fadein 0.2s ease both',
+      }}
+    >
+      <Animator active>
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="ssl-deploy-title"
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: 'relative',
+            width: 'min(520px, 92vw)',
+            background: glassBg(0.97),
+            backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
+            boxShadow: `0 0 60px ${colors.primary}18, 0 0 120px rgba(0,0,0,0.95), inset 0 0 40px ${colors.primary}05`,
+            animation: 'pp-fadein 0.22s ease both',
+          }}
+        >
+          <FrameCorners
+            strokeWidth={1.5}
+            cornerLength={16}
+            styled={false}
+            positioned
+            style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1, color: colors.primary }}
+          />
+          <div style={{
+            position: 'absolute', top: 0, left: 0, right: 0, height: '1px',
+            background: `linear-gradient(90deg, transparent, ${colors.primary}99, transparent)`,
+            zIndex: 2,
+          }} />
+
+          {/* Header */}
+          <div style={{
+            padding: '16px 22px', borderBottom: `1px solid ${colors.border}`,
+            display: 'flex', alignItems: 'center', gap: '10px',
+            position: 'relative', zIndex: 2,
+          }}>
+            <div style={{ width: '2px', height: '14px', flexShrink: 0, background: colors.primary, boxShadow: `0 0 8px ${colors.primary}` }} />
+            <span id="ssl-deploy-title" style={{
+              fontFamily: "'Orbitron', sans-serif", fontSize: '11px',
+              letterSpacing: '0.22em', color: colors.primary,
+              textShadow: glowText(colors.primary, 4), textTransform: 'uppercase',
+            }}>
+              SSL Certificate Deployment
+            </span>
+          </div>
+
+          {/* Body */}
+          <div style={{ padding: '22px 22px 18px', position: 'relative', zIndex: 2 }}>
+            {/* Progress bar */}
+            {deployStatus && deployStatus.total > 0 && (
+              <div style={{ marginBottom: '16px' }}>
+                <div style={{ height: '4px', background: `${colors.border}44`, borderRadius: '2px', overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%', borderRadius: '2px', transition: 'width 0.5s ease',
+                    width: `${(deployStatus.completed / deployStatus.total) * 100}%`,
+                    background: barColor,
+                    boxShadow: glow(barColor, 4),
+                  }} />
+                </div>
+                <div style={{
+                  fontSize: '10px', color: colors.textMuted, marginTop: '6px',
+                  fontFamily: "'Electrolize', monospace", textAlign: 'right',
+                }}>
+                  {deployStatus.completed} / {deployStatus.total} agents
+                </div>
+              </div>
+            )}
+
+            {/* Agent list */}
+            <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '16px' }}>
+              {!deployStatus ? (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                  fontSize: '11px', color: colors.textMuted, fontFamily: "'Electrolize', monospace",
+                }}>
+                  <span style={{
+                    width: '14px', height: '14px', borderRadius: '50%',
+                    border: `2px solid ${colors.primary}22`, borderTopColor: colors.primary,
+                    animation: 'pp-spin 0.8s linear infinite',
+                  }} />
+                  Updating agents and deploying certificate...
+                </div>
+              ) : deployStatus.agents.map(a => {
+                const phase = (a as any).phase || a.status
+                const label = a.status === 'done' ? 'CERT INSTALLED'
+                  : a.status === 'failed' ? 'FAILED'
+                  : phase === 'updating' ? 'UPDATING AGENT...'
+                  : phase === 'waiting' ? 'AGENT UPDATED'
+                  : phase === 'deploying' ? 'INSTALLING CERT...'
+                  : 'PENDING'
+                const dotColor = a.status === 'done' ? colors.success
+                  : a.status === 'failed' ? colors.danger
+                  : (phase === 'updating' || phase === 'deploying') ? colors.warn
+                  : colors.textMuted
+                const isActive = phase === 'updating' || phase === 'deploying'
+                return (
+                  <div key={a.agent_id} style={{
+                    display: 'flex', alignItems: 'center', gap: '10px',
+                    padding: '6px 0', borderBottom: `1px solid ${colors.border}22`,
+                    fontSize: '11px', fontFamily: "'Electrolize', monospace",
+                  }}>
+                    <span style={{
+                      width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
+                      background: dotColor,
+                      boxShadow: isActive ? `0 0 6px ${colors.warn}` : a.status === 'done' ? `0 0 4px ${colors.success}` : 'none',
+                      animation: isActive ? 'pp-pulse 1.5s ease-in-out infinite' : 'none',
+                    }} />
+                    <span style={{ flex: 1, color: colors.text }}>{a.hostname}</span>
+                    <span style={{ fontSize: '9px', letterSpacing: '0.1em', color: dotColor }}>
+                      {label}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Failed output details */}
+            {hasFailed && (
+              <div style={{
+                fontSize: '10px', color: colors.danger, fontFamily: "'Electrolize', monospace",
+                padding: '8px', background: `${colors.danger}0a`, border: `1px solid ${colors.danger}22`,
+                marginBottom: '12px', maxHeight: '80px', overflowY: 'auto',
+              }}>
+                {deployStatus!.agents.filter(a => a.status === 'failed').map(a => (
+                  <div key={a.agent_id}>{a.hostname}: {a.output}</div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div style={{
+            padding: '14px 22px 18px',
+            display: 'flex', justifyContent: isDone ? 'flex-end' : 'center', alignItems: 'center',
+            gap: '10px', flexWrap: 'wrap',
+            position: 'relative', zIndex: 2,
+            borderTop: `1px solid ${colors.border}`,
+          }}>
+            {isDone ? (
+              <>
+                {hasFailed && (
+                  <Button variant="ghost" onClick={onRetry}>Retry Failed</Button>
+                )}
+                {!hasFailed && !ssl?.enabled && ssl?.certfile && ssl?.keyfile && (
+                  <Button disabled={busy} onClick={onEnableHttps}>Enable HTTPS Now</Button>
+                )}
+                <Button variant="ghost" onClick={onClose}>Close</Button>
+              </>
+            ) : (
+              <div style={{
+                textAlign: 'center',
+                padding: '8px 16px',
+                background: `${colors.warn}0a`,
+                border: `1px solid ${colors.warn}33`,
+              }}>
+                <span style={{
+                  fontSize: '10px', fontFamily: "'Orbitron', sans-serif",
+                  letterSpacing: '0.15em', textTransform: 'uppercase',
+                  color: colors.warn,
+                  textShadow: glowText(colors.warn, 3),
+                }}>
+                  Do not close this page while deployment is in progress
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      </Animator>
+    </div>
+  )
+}
+
 function SslSection() {
   const [ssl, setSsl] = useState<{ enabled: boolean; certfile: string; keyfile: string; info: any } | null>(null)
   const [customCert, setCustomCert] = useState('')
   const [customKey, setCustomKey] = useState('')
   const [certYears, setCertYears] = useState('3')
   const [busy, setBusy] = useState(false)
+  const [deployModal, setDeployModal] = useState(false)
+  const [deployStatus, setDeployStatus] = useState<DeployStatus | null>(null)
+  const [confirmDisable, setConfirmDisable] = useState(false)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const { showToast } = useToast()
 
   const load = useCallback(async () => {
@@ -685,11 +948,54 @@ function SslSection() {
     setBusy(true)
     try {
       const res = await api.generateCert(parseInt(certYears))
-      showToast(`Self-signed certificate generated (${certYears}y) — server restarting`, 'success')
-      setSsl({ enabled: true, certfile: res.certfile, keyfile: res.keyfile, info: res.info })
+      showToast(`Self-signed certificate generated (${certYears}y) — deploy to agents then enable HTTPS`, 'success')
+      setSsl({ enabled: false, certfile: res.certfile, keyfile: res.keyfile, info: res.info })
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to generate certificate', 'error')
     } finally { setBusy(false) }
+  }
+
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [])
+
+  useEffect(() => {
+    if (!deployModal) return
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [deployModal])
+
+  const pollDeployStatus = useCallback(async () => {
+    try {
+      const res = await api.deploySslStatus()
+      setDeployStatus(res)
+      if (res.total > 0 && res.completed >= res.total) {
+        if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+        setBusy(false)
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  const handleDeploySsl = async () => {
+    setBusy(true)
+    setDeployModal(true)
+    setDeployStatus(null)
+    try {
+      await api.deploySslToAgents()
+      pollDeployStatus()
+      pollRef.current = setInterval(pollDeployStatus, 3000)
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to deploy SSL to agents', 'error')
+      setBusy(false)
+      setDeployModal(false)
+    }
+  }
+
+  const closeDeployModal = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+    setDeployModal(false)
+    setBusy(false)
   }
 
   const handleEnable = async () => {
@@ -707,6 +1013,19 @@ function SslSection() {
     } finally { setBusy(false) }
   }
 
+  const handleEnableFromModal = async () => {
+    if (!ssl?.certfile || !ssl?.keyfile) return
+    setBusy(true)
+    try {
+      const res = await api.sslEnable(ssl.certfile, ssl.keyfile)
+      showToast('SSL enabled — server restarting on HTTPS', 'success')
+      setSsl({ enabled: true, certfile: ssl.certfile, keyfile: ssl.keyfile, info: res.info })
+      closeDeployModal()
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to enable SSL', 'error')
+    } finally { setBusy(false) }
+  }
+
   const handleDisable = async () => {
     setBusy(true)
     try {
@@ -718,6 +1037,8 @@ function SslSection() {
     } finally { setBusy(false) }
   }
 
+  const statusColor = ssl?.enabled ? colors.success : colors.textMuted
+
   return (
     <Card style={{ marginBottom: '20px' }}>
       <SectionHeader>SSL / HTTPS</SectionHeader>
@@ -726,9 +1047,10 @@ function SslSection() {
         <span style={{
           display: 'inline-block', padding: '3px 10px', fontSize: '10px',
           letterSpacing: '0.15em', fontFamily: "'Orbitron', sans-serif",
-          border: `1px solid ${ssl?.enabled ? colors.success : colors.textMuted}44`,
-          color: ssl?.enabled ? colors.success : colors.textMuted,
-          background: `${ssl?.enabled ? colors.success : colors.textMuted}0a`,
+          border: `1px solid ${statusColor}44`,
+          color: statusColor,
+          background: `${statusColor}0a`,
+          boxShadow: ssl?.enabled ? glow(colors.success, 4) : 'none',
         }}>
           {ssl?.enabled ? 'HTTPS ACTIVE' : 'HTTP (no SSL)'}
         </span>
@@ -746,29 +1068,17 @@ function SslSection() {
             Key: {ssl.keyfile}
           </div>
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <div>
+            <div style={{ width: '120px' }}>
               <div style={labelStyle}>Validity</div>
-              <select value={certYears} onChange={e => setCertYears(e.target.value)} style={{
-                  ...inputStyle,
-                  width: '110px',
-                  appearance: 'none',
-                  WebkitAppearance: 'none',
-                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2300d4aa'/%3E%3C/svg%3E")`,
-                  backgroundRepeat: 'no-repeat',
-                  backgroundPosition: 'right 10px center',
-                  paddingRight: '28px',
-                  cursor: 'pointer',
-                }}>
-                <option value="1">1 Year</option>
-                <option value="3">3 Years</option>
-                <option value="5">5 Years</option>
-                <option value="10">10 Years</option>
-              </select>
+              <Dropdown value={certYears} onChange={setCertYears} options={CERT_VALIDITY_OPTIONS} />
             </div>
             <Button variant="ghost" onClick={handleGenerate} disabled={busy}>
               {busy ? 'Generating...' : 'Regenerate Self-Signed'}
             </Button>
-            <Button variant="danger" onClick={handleDisable} disabled={busy}>
+            <Button onClick={handleDeploySsl} disabled={busy}>
+              {busy ? 'Deploying...' : 'Deploy Cert to Agents'}
+            </Button>
+            <Button variant="danger" onClick={() => setConfirmDisable(true)} disabled={busy}>
               Disable SSL
             </Button>
           </div>
@@ -777,31 +1087,21 @@ function SslSection() {
         <>
           <div style={{ marginBottom: '16px' }}>
             <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
-              <div>
+              <div style={{ width: '120px' }}>
                 <div style={labelStyle}>Validity</div>
-                <select value={certYears} onChange={e => setCertYears(e.target.value)} style={{
-                  ...inputStyle,
-                  width: '110px',
-                  appearance: 'none',
-                  WebkitAppearance: 'none',
-                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2300d4aa'/%3E%3C/svg%3E")`,
-                  backgroundRepeat: 'no-repeat',
-                  backgroundPosition: 'right 10px center',
-                  paddingRight: '28px',
-                  cursor: 'pointer',
-                }}>
-                  <option value="1">1 Year</option>
-                  <option value="3">3 Years</option>
-                  <option value="5">5 Years</option>
-                  <option value="10">10 Years</option>
-                </select>
+                <Dropdown value={certYears} onChange={setCertYears} options={CERT_VALIDITY_OPTIONS} />
               </div>
               <Button onClick={handleGenerate} disabled={busy}>
                 {busy ? 'Generating...' : 'Generate Self-Signed Certificate'}
               </Button>
+              {ssl?.info && (
+                <Button onClick={handleDeploySsl} disabled={busy}>
+                  {busy ? 'Deploying...' : 'Deploy to Agents'}
+                </Button>
+              )}
             </div>
             <p style={{ margin: '8px 0 0', fontSize: '10px', color: colors.textMuted, fontFamily: "'Electrolize', monospace" }}>
-              Agents need PATCHPILOT_CA_BUNDLE pointed at the cert to trust it.
+              Generate a cert, deploy it to agents, then enable HTTPS.
             </p>
           </div>
 
@@ -827,8 +1127,31 @@ function SslSection() {
       )}
 
       <p style={{ margin: '14px 0 0', fontSize: '10px', color: colors.textMuted, fontFamily: "'Electrolize', monospace", lineHeight: 1.6 }}>
-        Enabling SSL restarts the server on HTTPS. Update agent URLs to https:// after enabling.
+        Enabling SSL restarts the server on HTTPS. Agents migrate automatically via canonical_url.
       </p>
+
+      {confirmDisable && (
+        <ConfirmModal
+          title="Disable SSL"
+          message="This will restart the server on HTTP. All agents will need to reconnect. Are you sure?"
+          confirmLabel="Disable SSL"
+          variant="danger"
+          onConfirm={() => { setConfirmDisable(false); handleDisable() }}
+          onCancel={() => setConfirmDisable(false)}
+        />
+      )}
+
+      {deployModal && (
+        <DeployModal
+          deployStatus={deployStatus}
+          ssl={ssl}
+          busy={busy}
+          setBusy={setBusy}
+          onClose={closeDeployModal}
+          onRetry={() => { closeDeployModal(); handleDeploySsl() }}
+          onEnableHttps={handleEnableFromModal}
+        />
+      )}
     </Card>
   )
 }

@@ -227,6 +227,12 @@ class NotificationManager:
         self._notify_failures = _get("notify_failures", "1") == "1"
         self._telegram_enabled = _get("telegram_enabled", "1") == "1"
 
+        # Per-channel event toggles for Telegram
+        self._tg_notify_offline  = _get("telegram_notify_offline",  "1") == "1"
+        self._tg_notify_patches  = _get("telegram_notify_patches",  "1") == "1"
+        self._tg_notify_failures = _get("telegram_notify_failures", "1") == "1"
+        self._tg_notify_success  = _get("telegram_notify_success",  "1") == "1"
+
         self._telegram = TelegramNotifier(tg_token, tg_chat) if (tg_token and self._telegram_enabled) else None
         self._email    = EmailNotifier(smtp_host, smtp_port, smtp_user, smtp_pass, smtp_to, smtp_security) \
                          if smtp_host else None
@@ -235,15 +241,16 @@ class NotificationManager:
     def reload(self):
         """Force-reload settings on next dispatch (call after settings save)."""
         self._loaded = False
+        self._telegram = None  # clear stale reference immediately
 
     # ------------------------------------------------------------------
     # Internal dispatch
     # ------------------------------------------------------------------
 
-    def _send(self, subject: str, body: str):
+    def _send(self, subject: str, body: str, *, telegram: bool = True):
         """Dispatch to all configured channels."""
         self._load()
-        if self._telegram:
+        if self._telegram and telegram and self._telegram_enabled:
             self._telegram.send(f"*{_tg_escape(subject)}*\n{_tg_escape(body)}")
         if self._email:
             self._email.send(f"[PatchPilot] {subject}", body)
@@ -287,6 +294,7 @@ class NotificationManager:
             f"VM Offline: {hostname}",
             f"Host {hostname} ({agent.get('ip', 'n/a')}) has not reported in "
             f"for {minutes} minutes.\nLast seen: {last_seen_str}",
+            telegram=self._tg_notify_offline,
         )
 
     def notify_patch_available(self, agent: dict, count: int):
@@ -298,6 +306,7 @@ class NotificationManager:
         self._send(
             f"Updates Available: {hostname}",
             f"{count} package update(s) available on {hostname} ({agent.get('ip', 'n/a')}).",
+            telegram=self._tg_notify_patches,
         )
 
     def notify_job_failed(self, agent: dict, job: dict):
@@ -312,7 +321,22 @@ class NotificationManager:
         self._send(
             f"Job Failed: {hostname}",
             f"Job #{job_id} ({job_type}) failed on {hostname}.\n\nOutput:\n{output}",
+            telegram=self._tg_notify_failures,
         )
+
+    def notify_job_success(self, agent: dict, job: dict):
+        """A job finished successfully."""
+        self._load()
+        hostname = agent.get("hostname", agent.get("id", "unknown"))
+        job_type = job.get("type", "unknown")
+        job_id   = job.get("id", "?")
+        output   = (job.get("output") or "")[:500]
+        body = f"Job #{job_id} ({job_type}) completed on {hostname}."
+        if "CONFIG NOTICE" in output:
+            body += "\n⚠ Config files were kept — review manually"
+        # Success notifications go to Telegram only (if enabled), not email
+        if self._telegram and self._telegram_enabled and self._tg_notify_success:
+            self._telegram.send(f"*Job Completed: {_tg_escape(hostname)}*\n{_tg_escape(body)}")
 
     def notify_reboot_required(self, agent: dict):
         """A reboot is required after patching."""
@@ -324,6 +348,7 @@ class NotificationManager:
             f"Reboot Required: {hostname}",
             f"Host {hostname} ({agent.get('ip', 'n/a')}) requires a reboot "
             f"after applying patches.",
+            telegram=self._tg_notify_patches,
         )
 
 

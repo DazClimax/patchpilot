@@ -48,6 +48,7 @@ class TelegramCommandBot:
         self._offset: int = 0
         self._token: str = ""
         self._chat_id: str = ""
+        self._enabled: bool = True
         self._settings_loaded_at: float = 0.0
 
     # ------------------------------------------------------------------
@@ -65,6 +66,7 @@ class TelegramCommandBot:
             cfg = {r["key"]: r["value"] for r in rows}
             self._token = cfg.get("telegram_token", "").strip()
             self._chat_id = cfg.get("telegram_chat_id", "").strip()
+            self._enabled = cfg.get("telegram_enabled", "1") == "1"
             self._settings_loaded_at = now
         except Exception as exc:
             log.warning("TelegramBot: failed to load settings: %s", exc)
@@ -107,7 +109,7 @@ class TelegramCommandBot:
     def notify(self, text: str):
         """Send a message to the configured chat (public interface for app.py)."""
         self._load_settings()
-        if self._token and self._chat_id:
+        if self._enabled and self._token and self._chat_id:
             self._send(self._chat_id, text)
 
     # ------------------------------------------------------------------
@@ -117,7 +119,7 @@ class TelegramCommandBot:
     def poll_once(self):
         """Called by the scheduler every 5 s. Fetches and processes updates."""
         self._load_settings()
-        if not self._token or not self._chat_id:
+        if not self._enabled or not self._token or not self._chat_id:
             return
 
         result = self._api("getUpdates", {

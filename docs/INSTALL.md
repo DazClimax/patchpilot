@@ -38,7 +38,7 @@
 ### Step 1: Get the Code
 
 ```bash
-git clone https://github.com/youruser/patchpilot.git
+git clone https://github.com/DazClimax/patchpilot.git
 cd patchpilot
 ```
 
@@ -61,22 +61,17 @@ sudo bash install-server.sh
 With custom port:
 
 ```bash
-sudo bash install-server.sh --port 9000
-```
-
-Behind a reverse proxy:
-
-```bash
-sudo bash install-server.sh --host 127.0.0.1 --port 8000
+sudo PORT=9000 bash install-server.sh
 ```
 
 The script:
-1. Installs `python3`, `python3-pip`, `python3-venv` via apt
+1. Installs `python3`, `python3-pip`, `python3-venv`, `openssl` via apt
 2. Creates the system user `patchpilot` (no login shell)
-3. Copies all server files to `/opt/patchpilot/`
-4. Creates a Python venv and installs dependencies
-5. Creates and enables the systemd service `patchpilot`
-6. Sets up sudoers entry for service self-restart
+3. Copies server, agent, and frontend files to `/opt/patchpilot/`
+4. Creates a Python venv at `/opt/patchpilot-venv/` and installs dependencies
+5. Creates `/opt/patchpilot/.env` with the configured port (preserves existing config)
+6. Installs, **enables** (survives reboot), and starts the systemd service `patchpilot`
+7. Sets up sudoers entry for service self-restart (needed for port/SSL changes from UI)
 
 ### Step 4: Set the Admin Key
 
@@ -166,6 +161,18 @@ Stores `agent_id`, `token`, and `server` URL. Permissions: `chmod 600`. Do not d
 | `PORT` | `8000` | Listen port (changeable from Settings UI) |
 | `PATCHPILOT_ADMIN_KEY` | random | Admin key for web dashboard |
 | `PATCHPILOT_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:8000` | CORS origins |
+| `SSL_CERTFILE` | *(empty)* | Path to SSL certificate (enables HTTPS) |
+| `SSL_KEYFILE` | *(empty)* | Path to SSL private key |
+
+### SSL / HTTPS
+
+SSL can be set up entirely from the **Settings** page in the web UI:
+
+1. **Generate Certificate** — creates a self-signed cert under `/opt/patchpilot/ssl/`
+2. **Deploy to Agents** — pushes the CA cert to all agents via the job system (agents are auto-updated first)
+3. **Enable HTTPS** — activates SSL and restarts the server; agents migrate automatically
+
+No SSH access to VMs required. The agent stores the CA bundle at `/etc/patchpilot/ca.pem` and trusts HTTPS connections automatically.
 
 ---
 

@@ -140,7 +140,7 @@ STATIC_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 # ---------------------------------------------------------------------------
 _AGENT_ID_RE = re.compile(r'^[a-zA-Z0-9._-]{1,64}$')
 _TG_TOKEN_RE  = re.compile(r'^\d+:[A-Za-z0-9_-]{35,}$')
-ALLOWED_JOB_TYPES = {"patch", "reboot", "update_agent", "autoremove"}
+ALLOWED_JOB_TYPES = {"patch", "reboot", "update_agent", "autoremove", "deploy_ssl"}
 
 def _validate_agent_id(agent_id: str):
     if not _AGENT_ID_RE.match(agent_id):
@@ -816,8 +816,20 @@ async def job_result(
             "SELECT hostname FROM agents WHERE id=?", (agent_id,)
         ).fetchone()
         job_row = conn.execute(
-            "SELECT type FROM jobs WHERE id=?", (job_id,)
+            "SELECT type, params FROM jobs WHERE id=?", (job_id,)
         ).fetchone()
+        # Chain: if update_agent succeeded and has a chain param, create the follow-up job
+        if job_row and job_row["type"] == "update_agent" and status == "done":
+            try:
+                params = json.loads(job_row["params"] or "{}")
+                chain_type = params.get("chain")
+                if chain_type and chain_type in ALLOWED_JOB_TYPES:
+                    conn.execute(
+                        "INSERT INTO jobs (agent_id, type, params) VALUES (?, ?, '{}')",
+                        (agent_id, chain_type),
+                    )
+            except (json.JSONDecodeError, AttributeError):
+                pass
     # Notify via Telegram on job completion
     if agent_row and job_row:
         hostname = agent_row["hostname"] or agent_id
@@ -828,13 +840,10 @@ async def job_result(
                 {"id": job_id, "type": job_row["type"], "output": output},
             )
         else:
-            from telegram_bot import telegram_bot
-            from notifications import _tg_escape
-            icon = "✅" if status == "done" else "⚠"
-            msg = f"{icon} *{jtype}* finished on `{_tg_escape(hostname)}` — {status}"
-            if "CONFIG NOTICE" in output:
-                msg += "\n⚠️ _Config files were kept — review manually_"
-            telegram_bot.notify(msg)
+            notification_manager.notify_job_success(
+                {"hostname": hostname, "id": agent_id},
+                {"id": job_id, "type": job_row["type"], "output": output},
+            )
     return {"status": "ok"}
 
 
@@ -1203,10 +1212,10 @@ _SENSITIVE_KEYS = {"smtp_password", "telegram_token"}
 # LOW-4: Explicit allowlist — reject unknown keys to prevent mass assignment
 _SETTINGS_ALLOWED_KEYS = {
     "telegram_token", "telegram_chat_id", "telegram_enabled",
+    "telegram_notify_offline", "telegram_notify_patches", "telegram_notify_failures", "telegram_notify_success",
     "smtp_host", "smtp_port", "smtp_security", "smtp_user", "smtp_password", "smtp_to",
     "notify_offline", "notify_offline_minutes", "notify_patches", "notify_failures",
     "server_port",
-    "ssl_certfile", "ssl_keyfile",
 }
 
 _SSL_DIR = Path(__file__).parent.parent / "ssl"
@@ -1386,8 +1395,10 @@ def _update_env_ssl(certfile: str, keyfile: str) -> None:
 
 
 def _get_cert_info(certfile: str) -> dict:
-    """Read basic info from a PEM certificate file."""
+    """Read basic info from a PEM certificate file.  Path must be under _SSL_DIR."""
     try:
+        if not Path(certfile).resolve().is_relative_to(_SSL_DIR.resolve()):
+            return {"subject": "restricted", "expires": "n/a", "path": certfile}
         import ssl as _ssl
         cert = _ssl.PEM_cert_to_DER_cert(Path(certfile).read_text().split("-----END CERTIFICATE-----")[0] + "-----END CERTIFICATE-----\n")
         # Use subprocess to parse with openssl if available
@@ -1438,14 +1449,10 @@ async def api_generate_cert(request: Request):
         cert_path.chmod(0o644)
         key_path.chmod(0o600)
 
-        # Update .env and restart
-        _update_env_ssl(str(cert_path), str(key_path))
-        # Also persist in settings DB
+        # Persist cert paths in DB (but do NOT activate SSL or restart)
         with get_db_ctx() as conn:
             conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ssl_certfile', ?)", (str(cert_path),))
             conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ssl_keyfile', ?)", (str(key_path),))
-
-        _schedule_restart(delay=2.0)
 
         info = _get_cert_info(str(cert_path))
         return {
@@ -1453,7 +1460,7 @@ async def api_generate_cert(request: Request):
             "certfile": str(cert_path),
             "keyfile": str(key_path),
             "info": info,
-            "restart_pending": True,
+            "restart_pending": False,
         }
     except HTTPException:
         raise
@@ -1469,6 +1476,11 @@ async def api_ssl_enable(request: Request):
     keyfile = str(data.get("keyfile", "")).strip()
     if not certfile or not keyfile:
         raise HTTPException(status_code=422, detail="Both certfile and keyfile paths are required")
+    # SEC: Restrict cert/key paths to _SSL_DIR to prevent path traversal
+    if not Path(certfile).resolve().is_relative_to(_SSL_DIR.resolve()):
+        raise HTTPException(status_code=422, detail="Certificate path must be within the SSL directory")
+    if not Path(keyfile).resolve().is_relative_to(_SSL_DIR.resolve()):
+        raise HTTPException(status_code=422, detail="Key path must be within the SSL directory")
     # Validate files exist
     if not Path(certfile).is_file():
         raise HTTPException(status_code=422, detail=f"Certificate file not found: {certfile}")
@@ -1503,6 +1515,18 @@ def api_ssl_info():
     keyfile = os.environ.get("SSL_KEYFILE", "")
     enabled = bool(certfile and keyfile)
     info = _get_cert_info(certfile) if enabled else None
+    # Also check DB for generated-but-not-yet-enabled certs
+    if not info:
+        with get_db_ctx() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key='ssl_certfile'").fetchone()
+            if row and row["value"]:
+                db_certfile = row["value"]
+                info = _get_cert_info(db_certfile)
+                if not certfile:
+                    certfile = db_certfile
+                if not keyfile:
+                    kr = conn.execute("SELECT value FROM settings WHERE key='ssl_keyfile'").fetchone()
+                    keyfile = kr["value"] if kr else ""
     return {"enabled": enabled, "certfile": certfile, "keyfile": keyfile, "info": info}
 
 
@@ -1612,6 +1636,106 @@ def download_install_script():
     if not f.exists():
         raise HTTPException(status_code=404, detail="Install script not found")
     return FileResponse(f, media_type="text/x-shellscript", filename="install.sh")
+
+
+@app.get("/agent/ca.pem", include_in_schema=False)
+def download_ca_cert():
+    """Serve the SSL CA certificate for agent trust."""
+    f = _SSL_DIR / "cert.pem"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="CA certificate not generated yet")
+    return FileResponse(f, media_type="application/x-pem-file", filename="ca.pem")
+
+
+@app.get("/agent/ca.pem.sha256", include_in_schema=False)
+def download_ca_hash():
+    f = _SSL_DIR / "cert.pem"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="CA certificate not generated yet")
+    sha = hashlib.sha256(f.read_bytes()).hexdigest()
+    return Response(content=f"{sha}  ca.pem\n", media_type="text/plain")
+
+
+@app.post("/api/settings/deploy-ssl", dependencies=[Depends(require_role("admin"))])
+def api_deploy_ssl_to_agents():
+    """Create update_agent + deploy_ssl jobs for all registered agents.
+
+    The update_agent job runs first (lower ID = picked up first) so the agent
+    gets the new code that understands deploy_ssl before it receives that job.
+    """
+    cert = _SSL_DIR / "cert.pem"
+    if not cert.exists():
+        raise HTTPException(status_code=400, detail="No certificate generated yet — generate one first")
+    with get_db_ctx() as conn:
+        agents = conn.execute("SELECT id, hostname FROM agents").fetchall()
+        count = 0
+        for a in agents:
+            # Create update_agent with chain param — when it finishes successfully,
+            # the job_result handler will automatically create the deploy_ssl job.
+            conn.execute(
+                'INSERT INTO jobs (agent_id, type, params) VALUES (?, \'update_agent\', \'{"chain": "deploy_ssl"}\')',
+                (a["id"],),
+            )
+            count += 1
+    _cache_invalidate("dashboard")
+    return {"status": "deployed", "agent_count": count}
+
+
+@app.get("/api/settings/deploy-ssl/status", dependencies=[Depends(require_role("admin"))])
+def api_deploy_ssl_status():
+    """Return progress of SSL deployment (update_agent chain → deploy_ssl).
+
+    Shows the most advanced job per agent: deploy_ssl if it exists, otherwise
+    the chained update_agent.  Phase: 'updating' while update_agent runs,
+    'deploying' while deploy_ssl runs, status when done/failed.
+    """
+    with get_db_ctx() as conn:
+        # Get the latest deploy_ssl job per agent (if any)
+        ssl_rows = conn.execute("""
+            SELECT j.agent_id, a.hostname, j.status, j.output, j.finished
+            FROM jobs j JOIN agents a ON a.id = j.agent_id
+            WHERE j.type = 'deploy_ssl'
+              AND j.id IN (SELECT MAX(id) FROM jobs WHERE type = 'deploy_ssl' GROUP BY agent_id)
+        """).fetchall()
+        ssl_map = {r["agent_id"]: r for r in ssl_rows}
+
+        # Get the latest chained update_agent per agent
+        upd_rows = conn.execute("""
+            SELECT j.agent_id, a.hostname, j.status, j.output, j.finished
+            FROM jobs j JOIN agents a ON a.id = j.agent_id
+            WHERE j.type = 'update_agent' AND j.params LIKE '%deploy_ssl%'
+              AND j.id IN (
+                SELECT MAX(id) FROM jobs WHERE type = 'update_agent' AND params LIKE '%deploy_ssl%' GROUP BY agent_id
+              )
+        """).fetchall()
+
+    agents = []
+    for r in upd_rows:
+        aid = r["agent_id"]
+        if aid in ssl_map:
+            # deploy_ssl job exists — show that status
+            sr = ssl_map[aid]
+            phase = "done" if sr["status"] == "done" else "failed" if sr["status"] == "failed" else "deploying"
+            agents.append({
+                "agent_id": aid, "hostname": sr["hostname"],
+                "status": sr["status"], "phase": phase,
+                "output": sr["output"] or "", "finished": sr["finished"],
+            })
+        else:
+            # Still in update_agent phase
+            phase = "updating" if r["status"] in ("pending", "running") else (
+                "failed" if r["status"] == "failed" else "waiting"
+            )
+            agents.append({
+                "agent_id": aid, "hostname": r["hostname"],
+                "status": r["status"] if r["status"] == "failed" else phase,
+                "phase": phase,
+                "output": r["output"] or "" if r["status"] == "failed" else "",
+                "finished": r["finished"],
+            })
+    total = len(agents)
+    done = sum(1 for a in agents if a["status"] in ("done", "failed"))
+    return {"agents": agents, "total": total, "completed": done}
 
 
 # ===========================================================================

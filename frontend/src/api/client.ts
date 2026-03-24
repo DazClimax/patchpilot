@@ -121,6 +121,10 @@ export interface Settings {
   notify_patches: string
   notify_failures: string
   telegram_enabled: string
+  telegram_notify_offline: string
+  telegram_notify_patches: string
+  telegram_notify_failures: string
+  telegram_notify_success: string
   server_port: string
   ssl_certfile: string
   ssl_keyfile: string
@@ -215,6 +219,12 @@ export const api = {
 
   sslDisable: () =>
     req<{ status: string; restart_pending: boolean }>('POST', '/settings/ssl-disable'),
+
+  deploySslToAgents: () =>
+    req<{ status: string; agent_count: number }>('POST', '/settings/deploy-ssl'),
+
+  deploySslStatus: () =>
+    req<{ agents: Array<{ agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null }>; total: number; completed: number }>('GET', '/settings/deploy-ssl/status'),
 
   setTags: (id: string, tags: string) =>
     req<{ status: string; tags: string }>('PATCH', `/agents/${id}/tags`, { tags }),

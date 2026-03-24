@@ -51,6 +51,13 @@ def _make_ssl_context() -> "ssl.SSLContext":
 
 _SSL_CTX = _make_ssl_context()
 
+
+def _reload_ssl_context():
+    """Rebuild the global SSL context (e.g. after installing a new CA cert)."""
+    global _SSL_CTX
+    _SSL_CTX = _make_ssl_context()
+
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -393,11 +400,110 @@ def execute_job(job: dict) -> tuple:
 
     elif jtype == "update_agent":
         # Self-update: download new agent.py from server, verify SHA-256, replace self.
-        # The server_url param overrides PATCHPILOT_SERVER (used after a port change).
         return _update_self(params)
+
+    elif jtype == "deploy_ssl":
+        # Download CA certificate from server and install it locally.
+        return _deploy_ssl_cert()
 
     else:
         return "failed", f"Unknown job type: {jtype}"
+
+
+def _deploy_ssl_cert() -> tuple:
+    """Download the server's CA certificate and install it so the agent trusts
+    HTTPS connections.  Updates agent.conf with PATCHPILOT_CA_BUNDLE path."""
+    import hashlib as _hashlib
+    import tempfile as _tempfile
+
+    cfg = load_config()
+    server_url = cfg.get("PATCHPILOT_SERVER", "").rstrip("/")
+    if not server_url:
+        return "failed", "PATCHPILOT_SERVER not set — cannot download certificate"
+
+    cert_url = f"{server_url}/agent/ca.pem"
+    hash_url = f"{server_url}/agent/ca.pem.sha256"
+    ca_path = CONFIG_DIR / "ca.pem"
+
+    try:
+        # Download SHA-256 checksum
+        req_hash = urlreq.Request(hash_url, method="GET")
+        with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
+            expected_hash = r.read().decode().split()[0].strip()
+
+        # Download certificate
+        req_cert = urlreq.Request(cert_url, method="GET")
+        with urlreq.urlopen(req_cert, timeout=30, context=_SSL_CTX) as r:
+            cert_data = r.read()
+
+        # Verify integrity
+        actual_hash = _hashlib.sha256(cert_data).hexdigest()
+        if actual_hash != expected_hash:
+            return "failed", f"SHA-256 mismatch: expected {expected_hash[:16]}… got {actual_hash[:16]}…"
+
+        # SEC: Validate PEM format before writing
+        if not cert_data.strip().startswith(b"-----BEGIN CERTIFICATE-----"):
+            return "failed", "Downloaded data is not a valid PEM certificate"
+
+        # Write cert atomically
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        tmp_name = None
+        tmp = _tempfile.NamedTemporaryFile(
+            dir=str(CONFIG_DIR), suffix=".tmp", delete=False
+        )
+        try:
+            tmp_name = tmp.name
+            tmp.write(cert_data)
+            tmp.flush()
+            tmp_path = Path(tmp.name)
+        finally:
+            tmp.close()
+        try:
+            tmp_path.chmod(0o644)
+            tmp_path.replace(ca_path)
+        except Exception:
+            if tmp_name:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+            raise
+
+        # Update agent.conf: set PATCHPILOT_CA_BUNDLE
+        _update_config_key("PATCHPILOT_CA_BUNDLE", str(ca_path))
+
+        # Update env and reload the global SSL context in-process
+        os.environ["PATCHPILOT_CA_BUNDLE"] = str(ca_path)
+        _reload_ssl_context()
+
+        return "done", f"CA cert installed at {ca_path}"
+
+    except Exception as e:
+        return "failed", f"SSL cert deploy failed: {e}"
+
+
+def _update_config_key(key: str, value: str):
+    """Set a key=value in agent.conf, adding it if not present."""
+    # SEC: Sanitize newlines to prevent config injection
+    key = key.replace('\n', '').replace('\r', '')
+    value = value.replace('\n', '').replace('\r', '')
+    cfg_path = CONFIG_FILE
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    if cfg_path.exists():
+        lines = cfg_path.read_text().splitlines()
+        found = False
+        new_lines = []
+        for ln in lines:
+            if ln.strip().startswith(f"{key}="):
+                new_lines.append(f"{key}={value}")
+                found = True
+            else:
+                new_lines.append(ln)
+        if not found:
+            new_lines.append(f"{key}={value}")
+        cfg_path.write_text("\n".join(new_lines) + "\n")
+    else:
+        cfg_path.write_text(f"{key}={value}\n")
 
 
 def _update_self(params: dict) -> tuple:

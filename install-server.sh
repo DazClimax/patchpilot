@@ -1,85 +1,80 @@
 #!/bin/bash
 # PatchPilot — Server Install Script
-# Runs on the Raspberry Pi (or any Debian/Ubuntu host)
-# Usage: sudo bash install-server.sh [--host 0.0.0.0] [--port 8000]
+# Runs on any Debian/Ubuntu host (including Raspberry Pi, LXC containers)
+# Usage: sudo bash install-server.sh [PORT=8050]
 
 set -e
 
-HOST="${HOST:-0.0.0.0}"
+HOST="0.0.0.0"
 PORT="${PORT:-8000}"
 INSTALL_DIR="/opt/patchpilot"
+VENV_DIR="/opt/patchpilot-venv"
 SERVICE_USER="patchpilot"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=== PatchPilot Server Installation ==="
 echo "Install dir : $INSTALL_DIR"
+echo "Venv        : $VENV_DIR"
 echo "Listen      : $HOST:$PORT"
 
 # Dependencies
 apt-get update -qq
-apt-get install -y python3 python3-pip python3-venv
+apt-get install -y python3 python3-pip python3-venv openssl
 
-# Create user
+# Create service user
 if ! id "$SERVICE_USER" &>/dev/null; then
-  useradd --system --no-create-home --shell /bin/false "$SERVICE_USER"
+  useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+  echo "Created system user: $SERVICE_USER"
 fi
 
-# Install files
-mkdir -p "$INSTALL_DIR/server"
+# Install server files
+mkdir -p "$INSTALL_DIR/server" "$INSTALL_DIR/agent" "$INSTALL_DIR/ssl"
 cp -r "$SCRIPT_DIR/server/"* "$INSTALL_DIR/server/"
+cp -r "$SCRIPT_DIR/agent/"* "$INSTALL_DIR/agent/"
+chmod +x "$INSTALL_DIR/server/start.sh"
 
 # Copy pre-built frontend (if available)
 if [ -d "$SCRIPT_DIR/frontend/dist" ]; then
+  mkdir -p "$INSTALL_DIR/frontend"
   cp -r "$SCRIPT_DIR/frontend/dist" "$INSTALL_DIR/frontend/"
-  echo "Frontend (pre-built) kopiert."
+  echo "Frontend (pre-built) copied."
 else
-  echo "WARNUNG: Kein pre-built Frontend gefunden. Baue es erst mit:"
+  echo "WARNING: No pre-built frontend found. Build it first with:"
   echo "  cd frontend && npm install && npm run build"
 fi
 
 # Python venv
-python3 -m venv "$INSTALL_DIR/venv"
-"$INSTALL_DIR/venv/bin/pip" install --quiet -r "$INSTALL_DIR/server/requirements.txt"
+python3 -m venv "$VENV_DIR"
+"$VENV_DIR/bin/pip" install --quiet -r "$INSTALL_DIR/server/requirements.txt"
 
-chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
-
-# Systemd service
-cat > /etc/systemd/system/patchpilot-server.service <<EOF
-[Unit]
-Description=PatchPilot Server
-After=network.target
-
-[Service]
-Type=simple
-User=$SERVICE_USER
-WorkingDirectory=$INSTALL_DIR/server
-# PERFORMANCE: Tuned uvicorn flags for Raspberry Pi single-process deployment.
-# --workers 1          : one process — no inter-process overhead, fits in RAM
-# --limit-concurrency 20: cap concurrent requests; excess gets 503, not OOM
-# --backlog 32         : small TCP accept queue — we're not a high-traffic host
-# --log-level warning  : suppress access logs — fewer writes to SD card / journal
-ExecStart=$INSTALL_DIR/venv/bin/uvicorn app:app \
-    --host $HOST \
-    --port $PORT \
-    --workers 1 \
-    --limit-concurrency 20 \
-    --backlog 32 \
-    --log-level warning
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
+# Environment file (only create if missing — never overwrite existing config)
+if [ ! -f "$INSTALL_DIR/.env" ]; then
+  cat > "$INSTALL_DIR/.env" <<EOF
+PORT=$PORT
 EOF
+  chmod 600 "$INSTALL_DIR/.env"
+  echo "Created $INSTALL_DIR/.env with PORT=$PORT"
+else
+  echo "Keeping existing $INSTALL_DIR/.env"
+fi
+
+# Fix ownership
+chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$VENV_DIR"
+
+# Install systemd service file
+cp "$SCRIPT_DIR/patchpilot.service" /etc/systemd/system/patchpilot.service
+
+# Sudoers entry for service self-restart (needed for port/SSL changes from UI)
+echo "$SERVICE_USER ALL=(root) NOPASSWD: /bin/systemctl restart patchpilot" > /etc/sudoers.d/patchpilot
+chmod 440 /etc/sudoers.d/patchpilot
 
 systemctl daemon-reload
-systemctl enable patchpilot-server
-systemctl restart patchpilot-server
+systemctl enable patchpilot
+systemctl restart patchpilot
 
 echo ""
-echo "=== Installation abgeschlossen! ==="
-echo "Status  : systemctl status patchpilot-server"
-echo "Logs    : journalctl -u patchpilot-server -f"
+echo "=== Installation complete! ==="
+echo "Service : systemctl status patchpilot"
+echo "Logs    : journalctl -u patchpilot -f"
 echo "Web UI  : http://$(hostname -I | awk '{print $1}'):$PORT"

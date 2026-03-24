@@ -21,14 +21,23 @@ PatchPilot uses a pull-based agent model — lightweight agents on each VM poll 
 
 ## Quick Start
 
-### Server
+### Server (automated)
 
 ```bash
-# Install dependencies
+# Clone and install (on Debian/Ubuntu host)
+git clone https://github.com/DazClimax/patchpilot.git
+cd patchpilot
+cd frontend && npm install && npm run build && cd ..
+sudo bash install-server.sh
+```
+
+This installs dependencies, creates a system user, sets up the systemd service (enabled for boot), and starts PatchPilot.
+
+### Server (manual)
+
+```bash
 cd server
 pip install -r requirements.txt
-
-# Start the server
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
@@ -98,21 +107,20 @@ All configuration is via environment variables in `/opt/patchpilot/.env`:
 
 ### SSL / HTTPS
 
-To enable SSL for the web UI and agent connections:
+SSL can be configured entirely from the Settings page in the web UI:
+
+1. **Generate Certificate** — creates a self-signed cert (1/3/5/10 year validity)
+2. **Deploy to Agents** — pushes the CA cert to all agents via the job system (agents are updated first automatically)
+3. **Enable HTTPS** — activates SSL and restarts the server; agents migrate automatically via `canonical_url`
+
+Alternatively, configure manually in `/opt/patchpilot/.env`:
 
 ```bash
-# In /opt/patchpilot/.env
-SSL_CERTFILE=/etc/patchpilot/cert.pem
-SSL_KEYFILE=/etc/patchpilot/key.pem
+SSL_CERTFILE=/opt/patchpilot/ssl/cert.pem
+SSL_KEYFILE=/opt/patchpilot/ssl/key.pem
 ```
 
-Agents will automatically use HTTPS when configured with an `https://` server URL:
-
-```bash
-PATCHPILOT_SERVER=https://your-server:8000
-```
-
-For self-signed certificates, set `PATCHPILOT_CA_BUNDLE` on the agent to the CA cert path.
+For self-signed certificates, agents need the CA bundle. The "Deploy to Agents" button handles this automatically, or set `PATCHPILOT_CA_BUNDLE` on the agent manually.
 
 ## Documentation
 
@@ -126,4 +134,4 @@ This project is licensed under the [GNU General Public License v3.0](https://www
 
 ## Author
 
-**DazClimax** — [github.com/DazClimax](https://github.com/DazClimax)
+**DazClimax**
