@@ -78,14 +78,36 @@ fi
 # ── Create directories ────────────────────────────────────────────────────────
 mkdir -p "$AGENT_DIR" "$CONFIG_DIR"
 
+# ── SSL: fetch CA certificate if server uses HTTPS ───────────────────────────
+CURL_OPTS=""
+WGET_OPTS=""
+if echo "$SERVER_URL" | grep -qi '^https://'; then
+  echo "[patchpilot] HTTPS server detected — fetching CA certificate..."
+  # Bootstrap trust: first download with -k (insecure) to get the CA cert
+  if command -v curl &>/dev/null; then
+    curl -fsSLk "$SERVER_URL/agent/ca.pem" -o "$CONFIG_DIR/ca.pem" 2>/dev/null || true
+  else
+    wget --no-check-certificate -qO "$CONFIG_DIR/ca.pem" "$SERVER_URL/agent/ca.pem" 2>/dev/null || true
+  fi
+  if [ -s "$CONFIG_DIR/ca.pem" ]; then
+    echo "[patchpilot] CA certificate installed at $CONFIG_DIR/ca.pem"
+    CURL_OPTS="--cacert $CONFIG_DIR/ca.pem"
+    WGET_OPTS="--ca-certificate=$CONFIG_DIR/ca.pem"
+  else
+    echo "[patchpilot] WARNING: Could not fetch CA cert — falling back to insecure mode"
+    CURL_OPTS="-k"
+    WGET_OPTS="--no-check-certificate"
+  fi
+fi
+
 # ── Download agent ────────────────────────────────────────────────────────────
 echo "[patchpilot] Downloading agent from $SERVER_URL ..."
 if command -v curl &>/dev/null; then
-  curl -fsSL "$SERVER_URL/agent/agent.py"        -o "$AGENT_DIR/agent.py"
-  curl -fsSL "$SERVER_URL/agent/agent.py.sha256" -o "$AGENT_DIR/agent.py.sha256"
+  curl -fsSL $CURL_OPTS "$SERVER_URL/agent/agent.py"        -o "$AGENT_DIR/agent.py"
+  curl -fsSL $CURL_OPTS "$SERVER_URL/agent/agent.py.sha256" -o "$AGENT_DIR/agent.py.sha256"
 else
-  wget -qO "$AGENT_DIR/agent.py"        "$SERVER_URL/agent/agent.py"
-  wget -qO "$AGENT_DIR/agent.py.sha256" "$SERVER_URL/agent/agent.py.sha256"
+  wget $WGET_OPTS -qO "$AGENT_DIR/agent.py"        "$SERVER_URL/agent/agent.py"
+  wget $WGET_OPTS -qO "$AGENT_DIR/agent.py.sha256" "$SERVER_URL/agent/agent.py.sha256"
 fi
 
 if [ ! -s "$AGENT_DIR/agent.py" ]; then
@@ -112,11 +134,17 @@ chmod 755 "$AGENT_DIR/agent.py"
 echo "[patchpilot] Agent downloaded."
 
 # ── Write config ──────────────────────────────────────────────────────────────
-cat > "$CONFIG_DIR/agent.conf" <<EOF
-PATCHPILOT_SERVER=${SERVER_URL}
+CONFIG_CONTENT="PATCHPILOT_SERVER=${SERVER_URL}
 PATCHPILOT_AGENT_ID=${AGENT_ID}
-PATCHPILOT_REGISTER_KEY=${REGISTER_KEY}
-EOF
+PATCHPILOT_REGISTER_KEY=${REGISTER_KEY}"
+
+# Add CA bundle path if we downloaded it
+if [ -s "$CONFIG_DIR/ca.pem" ]; then
+  CONFIG_CONTENT="${CONFIG_CONTENT}
+PATCHPILOT_CA_BUNDLE=${CONFIG_DIR}/ca.pem"
+fi
+
+echo "$CONFIG_CONTENT" > "$CONFIG_DIR/agent.conf"
 chmod 600 "$CONFIG_DIR/agent.conf"
 
 # ── Create systemd service ────────────────────────────────────────────────────

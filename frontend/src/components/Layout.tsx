@@ -115,6 +115,10 @@ export function Layout({ children }: { children: ReactNode }) {
           body { margin: 0; background: ${colors.bg}; }
           ::selection { background: ${colors.primary}33; color: ${colors.primary}; }
           input::placeholder { color: ${colors.textMuted}; }
+          input:focus, select:focus, textarea:focus {
+            border-color: ${colors.primary}88 !important;
+            box-shadow: 0 0 6px ${colors.primary}33;
+          }
           select option { background: ${colors.bgCard}; color: ${colors.text}; }
           @media (prefers-reduced-motion: reduce) {
             *, *::before, *::after {
@@ -272,14 +276,8 @@ export function Layout({ children }: { children: ReactNode }) {
                 Debian Patch Management
               </div>
 
-              {/* Logged-in user + blinking cursor */}
+              {/* Blinking cursor + logged-in user */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
-                {username && <span style={{
-                  fontSize: '10px',
-                  color: colors.primary,
-                  fontFamily: "'Electrolize', monospace",
-                  letterSpacing: '0.08em',
-                }}>{username}</span>}
                 <span style={{
                   display: 'inline-block',
                   width: '6px',
@@ -287,7 +285,14 @@ export function Layout({ children }: { children: ReactNode }) {
                   background: colors.primary,
                   animation: 'pp-blink 1.2s step-end infinite',
                   boxShadow: glow(colors.primary, 4),
+                  flexShrink: 0,
                 }} />
+                {username && <span style={{
+                  fontSize: '10px',
+                  color: colors.primary,
+                  fontFamily: "'Electrolize', monospace",
+                  letterSpacing: '0.08em',
+                }}>{username}</span>}
               </div>
             </div>
 
@@ -389,7 +394,7 @@ export function Layout({ children }: { children: ReactNode }) {
               letterSpacing: '0.1em',
               fontFamily: "'Electrolize', monospace",
             }}>
-              v0.6.1
+              v0.7.0
             </div>
 
             {/* Bottom edge glow line */}

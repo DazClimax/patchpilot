@@ -187,7 +187,7 @@ class TelegramCommandBot:
         with get_db_ctx() as conn:
             agents = conn.execute(
                 """SELECT hostname,
-                   CAST((julianday('now') - julianday(last_seen)) * 86400 AS INTEGER) as secs_ago,
+                   CAST((julianday('now','localtime') - julianday(last_seen)) * 86400 AS INTEGER) as secs_ago,
                    pending_count, reboot_required
                    FROM agents ORDER BY hostname"""
             ).fetchall()
@@ -218,7 +218,7 @@ class TelegramCommandBot:
         with get_db_ctx() as conn:
             agents = conn.execute(
                 """SELECT id, hostname, ip, os_pretty, pending_count, reboot_required,
-                   CAST((julianday('now') - julianday(last_seen)) * 86400 AS INTEGER) as secs_ago
+                   CAST((julianday('now','localtime') - julianday(last_seen)) * 86400 AS INTEGER) as secs_ago
                    FROM agents ORDER BY hostname"""
             ).fetchall()
 

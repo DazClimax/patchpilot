@@ -74,6 +74,7 @@ export interface Agent {
   last_job_type: string | null
   last_job_status: string | null
   last_job_finished: string | null
+  protocol: string | null
 }
 
 export interface Package {
@@ -110,6 +111,7 @@ export interface Schedule {
 export interface Settings {
   telegram_token: string
   telegram_chat_id: string
+  email_enabled: string
   smtp_host: string
   smtp_port: string
   smtp_security: string
@@ -175,6 +177,9 @@ export const api = {
   cancelJob: (agentId: string, jobId: number) =>
     req('POST', `/agents/${agentId}/jobs/${jobId}/cancel`),
 
+  cancelPendingJobs: (agentId: string) =>
+    req<{ cancelled: number }>('POST', `/agents/${agentId}/jobs/cancel-pending`),
+
   deleteAgent: (id: string) =>
     req('DELETE', `/agents/${id}`),
 
@@ -221,10 +226,10 @@ export const api = {
     req<{ status: string; restart_pending: boolean }>('POST', '/settings/ssl-disable'),
 
   deploySslToAgents: () =>
-    req<{ status: string; agent_count: number }>('POST', '/settings/deploy-ssl'),
+    req<{ status: string; agent_count: number; batch_id: string }>('POST', '/settings/deploy-ssl'),
 
-  deploySslStatus: () =>
-    req<{ agents: Array<{ agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null }>; total: number; completed: number }>('GET', '/settings/deploy-ssl/status'),
+  deploySslStatus: (batchId: string) =>
+    req<{ agents: Array<{ agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null; online: boolean }>; total: number; total_online: number; completed: number }>('GET', `/settings/deploy-ssl/status?batch=${batchId}`),
 
   setTags: (id: string, tags: string) =>
     req<{ status: string; tags: string }>('PATCH', `/agents/${id}/tags`, { tags }),

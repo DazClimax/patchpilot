@@ -140,6 +140,11 @@ def init_db():
         except sqlite3.OperationalError:
             pass  # column already present — nothing to do
 
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN protocol TEXT DEFAULT 'http'")
+        except sqlite3.OperationalError:
+            pass  # column already present — nothing to do
+
         # Insert default settings rows (skip if key already exists)
         _defaults = [
             ("telegram_token",   ""),

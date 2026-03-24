@@ -263,14 +263,35 @@ function buildScript(serverUrl: string, agentId: string, registerKey: string): s
     '# ── Create directories ────────────────────────────────────────────────────────',
     `mkdir -p "${D}AGENT_DIR" "${D}CONFIG_DIR"`,
     '',
+    '# ── SSL: fetch CA certificate if server uses HTTPS ──────────────────────────',
+    'CURL_OPTS=""',
+    'WGET_OPTS=""',
+    `if echo "${D}SERVER_URL" | grep -qi '^https://'; then`,
+    '  echo "[patchpilot] HTTPS server detected — fetching CA certificate..."',
+    '  if command -v curl &>/dev/null; then',
+    `    curl -fsSLk "${D}SERVER_URL/agent/ca.pem" -o "${D}CONFIG_DIR/ca.pem" 2>/dev/null || true`,
+    '  else',
+    `    wget --no-check-certificate -qO "${D}CONFIG_DIR/ca.pem" "${D}SERVER_URL/agent/ca.pem" 2>/dev/null || true`,
+    '  fi',
+    `  if [ -s "${D}CONFIG_DIR/ca.pem" ]; then`,
+    `    echo "[patchpilot] CA certificate installed at ${D}CONFIG_DIR/ca.pem"`,
+    `    CURL_OPTS="--cacert ${D}CONFIG_DIR/ca.pem"`,
+    `    WGET_OPTS="--ca-certificate=${D}CONFIG_DIR/ca.pem"`,
+    '  else',
+    '    echo "[patchpilot] WARNING: Could not fetch CA cert — falling back to insecure mode"',
+    '    CURL_OPTS="-k"',
+    '    WGET_OPTS="--no-check-certificate"',
+    '  fi',
+    'fi',
+    '',
     '# ── Download agent ────────────────────────────────────────────────────────────',
     `echo "[patchpilot] Downloading agent from ${D}SERVER_URL ..."`,
     'if command -v curl &>/dev/null; then',
-    `  curl -fsSL "${D}SERVER_URL/agent/agent.py"        -o "${D}AGENT_DIR/agent.py"`,
-    `  curl -fsSL "${D}SERVER_URL/agent/agent.py.sha256" -o "${D}AGENT_DIR/agent.py.sha256"`,
+    `  curl -fsSL ${D}CURL_OPTS "${D}SERVER_URL/agent/agent.py"        -o "${D}AGENT_DIR/agent.py"`,
+    `  curl -fsSL ${D}CURL_OPTS "${D}SERVER_URL/agent/agent.py.sha256" -o "${D}AGENT_DIR/agent.py.sha256"`,
     'else',
-    `  wget -qO "${D}AGENT_DIR/agent.py"        "${D}SERVER_URL/agent/agent.py"`,
-    `  wget -qO "${D}AGENT_DIR/agent.py.sha256" "${D}SERVER_URL/agent/agent.py.sha256"`,
+    `  wget ${D}WGET_OPTS -qO "${D}AGENT_DIR/agent.py"        "${D}SERVER_URL/agent/agent.py"`,
+    `  wget ${D}WGET_OPTS -qO "${D}AGENT_DIR/agent.py.sha256" "${D}SERVER_URL/agent/agent.py.sha256"`,
     'fi',
     '',
     `if [ ! -s "${D}AGENT_DIR/agent.py" ]; then`,
@@ -298,6 +319,10 @@ function buildScript(serverUrl: string, agentId: string, registerKey: string): s
     `PATCHPILOT_AGENT_ID=${D}{AGENT_ID}`,
     `PATCHPILOT_REGISTER_KEY=${D}{REGISTER_KEY}`,
     'CONF',
+    '# Add CA bundle path if we downloaded it',
+    `if [ -s "${D}CONFIG_DIR/ca.pem" ]; then`,
+    `  echo "PATCHPILOT_CA_BUNDLE=${D}CONFIG_DIR/ca.pem" >> "${D}CONFIG_DIR/agent.conf"`,
+    'fi',
     `chmod 600 "${D}CONFIG_DIR/agent.conf"`,
     '',
     '# ── Create systemd service ────────────────────────────────────────────────────',
@@ -369,8 +394,10 @@ export function DeployPage() {
   const safeAgentId = AGENT_ID_RE.test(agentId) ? agentId : ''
 
   const urlValid = SERVER_URL_RE.test(effectiveUrl)
+  const isHttps = effectiveUrl.toLowerCase().startsWith('https://')
+  const curlFlags = isHttps ? '-fsSLk' : '-fsSL'
   const oneliner = urlValid
-    ? `curl -fsSL ${effectiveUrl}/agent/install.sh | sudo PATCHPILOT_SERVER=${effectiveUrl} PATCHPILOT_REGISTER_KEY=${registerKey || '<KEY>'}${safeAgentId ? ` PATCHPILOT_AGENT_ID=${safeAgentId}` : ''} bash`
+    ? `curl ${curlFlags} ${effectiveUrl}/agent/install.sh | sudo PATCHPILOT_SERVER=${effectiveUrl} PATCHPILOT_REGISTER_KEY=${registerKey || '<KEY>'}${safeAgentId ? ` PATCHPILOT_AGENT_ID=${safeAgentId}` : ''} bash`
     : ''
 
   const script = urlValid

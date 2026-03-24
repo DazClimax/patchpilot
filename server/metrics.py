@@ -61,7 +61,7 @@ def metrics():
         # --- agents_online (seen within last 120 s) ---
         agents_online = conn.execute(
             """SELECT COUNT(*) as n FROM agents
-               WHERE (julianday('now') - julianday(last_seen)) * 86400 < 120"""
+               WHERE (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120"""
         ).fetchone()["n"]
 
         # --- pending_updates_total ---

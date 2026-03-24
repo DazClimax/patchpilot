@@ -37,7 +37,7 @@ def _make_in_memory_conn():
             reboot_required INTEGER DEFAULT 0,
             pending_count   INTEGER DEFAULT 0,
             last_seen   TEXT,
-            registered  TEXT DEFAULT (datetime('now')),
+            registered  TEXT DEFAULT (datetime('now','localtime')),
             token       TEXT NOT NULL
         );
 
@@ -55,7 +55,7 @@ def _make_in_memory_conn():
             agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
             type        TEXT NOT NULL,
             status      TEXT DEFAULT 'pending',
-            created     TEXT DEFAULT (datetime('now')),
+            created     TEXT DEFAULT (datetime('now','localtime')),
             started     TEXT,
             finished    TEXT,
             output      TEXT,

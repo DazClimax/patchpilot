@@ -28,9 +28,9 @@ import metrics as metrics_module
 app = FastAPI(title="PatchPilot API")
 
 # ---------------------------------------------------------------------------
-# CORS — in Produktion auf konkrete Origin einschraenken.
-# Lies PATCHPILOT_ALLOWED_ORIGINS aus der Umgebung (kommasepariert) oder
-# falle auf localhost-Defaults zurueck. Wildcard "*" ist nicht zulaessig.
+# CORS — restrict to specific origins in production.
+# Read PATCHPILOT_ALLOWED_ORIGINS from env (comma-separated) or
+# fall back to localhost defaults. Wildcard "*" is not allowed.
 # ---------------------------------------------------------------------------
 _raw_origins = os.environ.get(
     "PATCHPILOT_ALLOWED_ORIGINS",
@@ -46,10 +46,10 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# Admin-Key — schuetzt alle Web-UI-Endpoints (Dashboard, Jobs, Schedules …).
-# Setze PATCHPILOT_ADMIN_KEY als Umgebungsvariable auf dem Server.
-# Ist die Variable nicht gesetzt, wird beim Start ein zufaelliger Key
-# generiert und ins Log geschrieben (sicher fuer Erstinstallation).
+# Admin-Key — protects all Web-UI endpoints (Dashboard, Jobs, Schedules …).
+# Set PATCHPILOT_ADMIN_KEY as an environment variable on the server.
+# If not set, a random key is generated at startup and logged
+# (safe for initial installation).
 # ---------------------------------------------------------------------------
 _ADMIN_KEY_ENV = os.environ.get("PATCHPILOT_ADMIN_KEY", "")
 if not _ADMIN_KEY_ENV:
@@ -650,14 +650,19 @@ async def register_agent(request: Request):
         existing = conn.execute("SELECT token FROM agents WHERE id=?", (agent_id,)).fetchone()
         if existing:
             x_token = request.headers.get("x-token", "")
-            if not x_token:
-                raise HTTPException(status_code=403, detail="Re-registration requires current token")
-            submitted_hash = _hash_token(x_token)
-            stored = existing["token"]
-            hash_ok = hmac.compare_digest(submitted_hash, stored)
-            plain_ok = len(stored) == 64 and hmac.compare_digest(x_token, stored)  # legacy
-            if not (hash_ok or plain_ok):
-                raise HTTPException(status_code=403, detail="Invalid token for re-registration")
+            reg_key = request.headers.get("x-register-key", "") or data.get("register_key", "")
+            if x_token:
+                submitted_hash = _hash_token(x_token)
+                stored = existing["token"]
+                hash_ok = hmac.compare_digest(submitted_hash, stored)
+                plain_ok = len(stored) == 64 and hmac.compare_digest(x_token, stored)  # legacy
+                if not (hash_ok or plain_ok):
+                    raise HTTPException(status_code=403, detail="Invalid token for re-registration")
+            elif reg_key:
+                # Allow re-registration with a valid register key (fresh install scenario)
+                _verify_register_key(reg_key)
+            else:
+                raise HTTPException(status_code=403, detail="Re-registration requires current token or valid register key")
         else:
             # NEW agent: require valid rotating register key
             reg_key = request.headers.get("x-register-key", "") or data.get("register_key", "")
@@ -731,11 +736,14 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
         except (ValueError, TypeError):
             uptime_seconds = None
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Detect connection protocol from the request
+    protocol = "https" if request.url.scheme == "https" else "http"
     with get_db_ctx() as conn:
         conn.execute(
             """UPDATE agents SET
                 hostname=?, ip=?, os_pretty=?, kernel=?, arch=?,
-                reboot_required=?, pending_count=?, last_seen=?, uptime_seconds=?
+                reboot_required=?, pending_count=?, last_seen=?, uptime_seconds=?,
+                protocol=?
                WHERE id=?""",
             (
                 fields["hostname"],
@@ -747,6 +755,7 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
                 len(packages),
                 now,
                 uptime_seconds,
+                protocol,
                 agent_id,
             ),
         )
@@ -824,9 +833,13 @@ async def job_result(
                 params = json.loads(job_row["params"] or "{}")
                 chain_type = params.get("chain")
                 if chain_type and chain_type in ALLOWED_JOB_TYPES:
+                    # Forward batch id to chained job for tracking
+                    chain_params = {}
+                    if params.get("batch"):
+                        chain_params["batch"] = params["batch"]
                     conn.execute(
-                        "INSERT INTO jobs (agent_id, type, params) VALUES (?, ?, '{}')",
-                        (agent_id, chain_type),
+                        "INSERT INTO jobs (agent_id, type, params) VALUES (?, ?, ?)",
+                        (agent_id, chain_type, json.dumps(chain_params)),
                     )
             except (json.JSONDecodeError, AttributeError):
                 pass
@@ -864,6 +877,20 @@ def cancel_job(agent_id: str, job_id: int):
             (job_id, agent_id),
         )
     return {"status": "ok"}
+
+
+@app.post("/api/agents/{agent_id}/jobs/cancel-pending", dependencies=[Depends(require_role("admin","user"))])
+def cancel_pending_jobs(agent_id: str):
+    """Cancel all pending jobs for an agent."""
+    with get_db_ctx() as conn:
+        result = conn.execute(
+            "UPDATE jobs SET status='failed', output=COALESCE(output,'') || '\n[cancelled by user]', "
+            "finished=datetime('now','localtime') WHERE agent_id=? AND status='pending'",
+            (agent_id,),
+        )
+        count = result.rowcount
+    _cache_invalidate("dashboard")
+    return {"status": "ok", "cancelled": count}
 
 
 # ===========================================================================
@@ -1213,6 +1240,7 @@ _SENSITIVE_KEYS = {"smtp_password", "telegram_token"}
 _SETTINGS_ALLOWED_KEYS = {
     "telegram_token", "telegram_chat_id", "telegram_enabled",
     "telegram_notify_offline", "telegram_notify_patches", "telegram_notify_failures", "telegram_notify_success",
+    "email_enabled",
     "smtp_host", "smtp_port", "smtp_security", "smtp_user", "smtp_password", "smtp_to",
     "notify_offline", "notify_offline_minutes", "notify_patches", "notify_failures",
     "server_port",
@@ -1366,6 +1394,9 @@ async def api_test_notification(channel: str):
 
 def _update_env_ssl(certfile: str, keyfile: str) -> None:
     """Persist SSL_CERTFILE and SSL_KEYFILE in the systemd EnvironmentFile."""
+    # SEC: Sanitize newlines to prevent env injection
+    certfile = certfile.replace('\n', '').replace('\r', '')
+    keyfile = keyfile.replace('\n', '').replace('\r', '')
     try:
         lines = _ENV_FILE.read_text().splitlines() if _ENV_FILE.exists() else []
         cert_ok = key_ok = False
@@ -1662,67 +1693,79 @@ def api_deploy_ssl_to_agents():
 
     The update_agent job runs first (lower ID = picked up first) so the agent
     gets the new code that understands deploy_ssl before it receives that job.
+    Returns a batch_id so the frontend can track exactly this run.
     """
     cert = _SSL_DIR / "cert.pem"
     if not cert.exists():
         raise HTTPException(status_code=400, detail="No certificate generated yet — generate one first")
+    import uuid as _uuid
+    batch_id = _uuid.uuid4().hex[:12]
     with get_db_ctx() as conn:
+        # Target ALL agents — offline ones will pick up jobs when they reconnect
         agents = conn.execute("SELECT id, hostname FROM agents").fetchall()
+        if not agents:
+            raise HTTPException(status_code=422, detail="No agents registered")
         count = 0
         for a in agents:
-            # Create update_agent with chain param — when it finishes successfully,
-            # the job_result handler will automatically create the deploy_ssl job.
+            params = json.dumps({"chain": "deploy_ssl", "batch": batch_id})
             conn.execute(
-                'INSERT INTO jobs (agent_id, type, params) VALUES (?, \'update_agent\', \'{"chain": "deploy_ssl"}\')',
-                (a["id"],),
+                'INSERT INTO jobs (agent_id, type, params) VALUES (?, \'update_agent\', ?)',
+                (a["id"], params),
             )
             count += 1
     _cache_invalidate("dashboard")
-    return {"status": "deployed", "agent_count": count}
+    return {"status": "deployed", "agent_count": count, "batch_id": batch_id}
 
 
 @app.get("/api/settings/deploy-ssl/status", dependencies=[Depends(require_role("admin"))])
-def api_deploy_ssl_status():
-    """Return progress of SSL deployment (update_agent chain → deploy_ssl).
+def api_deploy_ssl_status(batch: str = ""):
+    """Return progress of SSL deployment for a specific batch.
 
     Shows the most advanced job per agent: deploy_ssl if it exists, otherwise
     the chained update_agent.  Phase: 'updating' while update_agent runs,
     'deploying' while deploy_ssl runs, status when done/failed.
     """
+    if not batch:
+        return {"agents": [], "total": 0, "completed": 0}
+
+    batch_filter = f'%"batch": "{batch}"%'
     with get_db_ctx() as conn:
-        # Get the latest deploy_ssl job per agent (if any)
+        # Get deploy_ssl jobs for this batch
         ssl_rows = conn.execute("""
             SELECT j.agent_id, a.hostname, j.status, j.output, j.finished
             FROM jobs j JOIN agents a ON a.id = j.agent_id
-            WHERE j.type = 'deploy_ssl'
-              AND j.id IN (SELECT MAX(id) FROM jobs WHERE type = 'deploy_ssl' GROUP BY agent_id)
-        """).fetchall()
+            WHERE j.type = 'deploy_ssl' AND j.params LIKE ?
+        """, (batch_filter,)).fetchall()
         ssl_map = {r["agent_id"]: r for r in ssl_rows}
 
-        # Get the latest chained update_agent per agent
+        # Get the chained update_agent jobs for this batch
         upd_rows = conn.execute("""
             SELECT j.agent_id, a.hostname, j.status, j.output, j.finished
             FROM jobs j JOIN agents a ON a.id = j.agent_id
-            WHERE j.type = 'update_agent' AND j.params LIKE '%deploy_ssl%'
-              AND j.id IN (
-                SELECT MAX(id) FROM jobs WHERE type = 'update_agent' AND params LIKE '%deploy_ssl%' GROUP BY agent_id
-              )
+            WHERE j.type = 'update_agent' AND j.params LIKE ?
+        """, (batch_filter,)).fetchall()
+
+        # Get online status for all agents (seen within last 2 min)
+        online_rows = conn.execute("""
+            SELECT id, (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120 AS is_online
+            FROM agents WHERE last_seen IS NOT NULL
         """).fetchall()
+        online_map = {r["id"]: bool(r["is_online"]) for r in online_rows}
 
     agents = []
     for r in upd_rows:
         aid = r["agent_id"]
+        is_online = online_map.get(aid, False)
         if aid in ssl_map:
-            # deploy_ssl job exists — show that status
             sr = ssl_map[aid]
             phase = "done" if sr["status"] == "done" else "failed" if sr["status"] == "failed" else "deploying"
             agents.append({
                 "agent_id": aid, "hostname": sr["hostname"],
                 "status": sr["status"], "phase": phase,
                 "output": sr["output"] or "", "finished": sr["finished"],
+                "online": is_online,
             })
         else:
-            # Still in update_agent phase
             phase = "updating" if r["status"] in ("pending", "running") else (
                 "failed" if r["status"] == "failed" else "waiting"
             )
@@ -1732,10 +1775,16 @@ def api_deploy_ssl_status():
                 "phase": phase,
                 "output": r["output"] or "" if r["status"] == "failed" else "",
                 "finished": r["finished"],
+                "online": is_online,
             })
+    # Sort: online first, then by hostname
+    agents.sort(key=lambda a: (not a["online"], a["hostname"]))
+    total_online = sum(1 for a in agents if a["online"])
     total = len(agents)
     done = sum(1 for a in agents if a["status"] in ("done", "failed"))
-    return {"agents": agents, "total": total, "completed": done}
+    # Consider deployment "complete" when all online agents are done
+    # Offline agents will pick up jobs when they reconnect
+    return {"agents": agents, "total": total, "total_online": total_online, "completed": done}
 
 
 # ===========================================================================

@@ -45,7 +45,16 @@ def _make_ssl_context() -> "ssl.SSLContext":
     """
     ctx = ssl.create_default_context()
     ca_bundle = os.environ.get("PATCHPILOT_CA_BUNDLE", "")
-    if ca_bundle:
+    # Also check agent.conf directly — env var may not be set at import time
+    if not ca_bundle:
+        conf = Path("/etc/patchpilot/agent.conf")
+        if conf.exists():
+            for line in conf.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("PATCHPILOT_CA_BUNDLE="):
+                    ca_bundle = line.split("=", 1)[1].strip()
+                    break
+    if ca_bundle and Path(ca_bundle).is_file():
         ctx.load_verify_locations(cafile=ca_bundle)
     return ctx
 
@@ -210,8 +219,29 @@ def _request(method: str, url: str, data=None, headers=None):
     except _TokenInvalid:
         raise
     except Exception as e:
+        # Protocol fallback: if HTTP fails, try HTTPS and vice versa.
+        # This handles the transition when the server switches protocol
+        # (e.g. SSL enabled/disabled) and the agent hasn't migrated yet.
+        alt_url = _protocol_fallback(url)
+        if alt_url:
+            try:
+                alt_req = urlreq.Request(alt_url, data=body, headers=headers, method=method)
+                with urlreq.urlopen(alt_req, timeout=30, context=_SSL_CTX) as resp:
+                    print(f"[agent] Fallback succeeded: {url} → {alt_url}")
+                    return json.loads(resp.read())
+            except Exception:
+                pass  # fallback also failed, report original error
         print(f"[agent] Request failed {url}: {e}", file=sys.stderr)
         return None
+
+
+def _protocol_fallback(url: str) -> str | None:
+    """Return the URL with swapped protocol (http↔https), or None."""
+    if url.startswith("http://"):
+        return "https://" + url[7:]
+    elif url.startswith("https://"):
+        return "http://" + url[8:]
+    return None
 
 
 class _TokenInvalid(Exception):
@@ -506,6 +536,35 @@ def _update_config_key(key: str, value: str):
         cfg_path.write_text(f"{key}={value}\n")
 
 
+def _bootstrap_ca_cert(server_url: str):
+    """Re-download CA cert from server using an unverified connection (bootstrap trust).
+    This handles the case where the server cert was regenerated after initial deployment."""
+    ca_url = f"{server_url}/agent/ca.pem"
+    ca_path = CONFIG_DIR / "ca.pem"
+    try:
+        # Download with no verification (like install.sh -k)
+        nossl = ssl.create_default_context()
+        nossl.check_hostname = False
+        nossl.verify_mode = ssl.CERT_NONE
+        req = urlreq.Request(ca_url, method="GET")
+        with urlreq.urlopen(req, timeout=15, context=nossl) as r:
+            cert_data = r.read()
+        # Basic PEM validation
+        if not cert_data.startswith(b"-----BEGIN CERTIFICATE-----"):
+            print("[agent] WARNING: downloaded CA cert is not valid PEM, skipping", file=sys.stderr)
+            return
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        ca_path.write_bytes(cert_data)
+        os.chmod(str(ca_path), 0o644)
+        # Update config and reload SSL context
+        _update_config_key("PATCHPILOT_CA_BUNDLE", str(ca_path))
+        os.environ["PATCHPILOT_CA_BUNDLE"] = str(ca_path)
+        _reload_ssl_context()
+        print(f"[agent] CA cert re-bootstrapped at {ca_path}")
+    except Exception as e:
+        print(f"[agent] WARNING: CA cert bootstrap failed: {e}", file=sys.stderr)
+
+
 def _update_self(params: dict) -> tuple:
     """Download the latest agent.py from the server, verify its SHA-256, and replace
     the running script.  The agent restarts automatically via systemd (Restart=always).
@@ -525,9 +584,21 @@ def _update_self(params: dict) -> tuple:
 
     try:
         # Download SHA-256 checksum first (SEC M-2: use SSL context)
-        req_hash = urlreq.Request(hash_url, method="GET")
-        with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
-            expected_hash = r.read().decode().split()[0].strip()
+        # On SSL error: the server cert may have been regenerated.
+        # Bootstrap trust by re-downloading the CA cert (like install.sh).
+        try:
+            req_hash = urlreq.Request(hash_url, method="GET")
+            with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
+                expected_hash = r.read().decode().split()[0].strip()
+        except urllib.error.URLError as ssl_err:
+            if "SSL" in str(ssl_err) or "CERTIFICATE" in str(ssl_err).upper():
+                print("[agent] SSL error — server cert may have changed, re-fetching CA cert...")
+                _bootstrap_ca_cert(server_url)
+                req_hash = urlreq.Request(hash_url, method="GET")
+                with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
+                    expected_hash = r.read().decode().split()[0].strip()
+            else:
+                raise
 
         # Download new agent binary
         req_agent = urlreq.Request(agent_url, method="GET")

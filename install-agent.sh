@@ -17,13 +17,13 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --server) SERVER="$2"; shift 2 ;;
     --interval) INTERVAL="$2"; shift 2 ;;
-    *) echo "Unbekannter Parameter: $1"; exit 1 ;;
+    *) echo "Unknown parameter: $1"; exit 1 ;;
   esac
 done
 
 if [ -z "$SERVER" ]; then
-  echo "FEHLER: --server ist erforderlich"
-  echo "Beispiel: sudo bash install-agent.sh --server http://192.168.1.10:8000"
+  echo "ERROR: --server is required"
+  echo "Example: sudo bash install-agent.sh --server http://192.168.1.10:8000"
   exit 1
 fi
 
@@ -31,7 +31,7 @@ echo "=== PatchPilot Agent Installation ==="
 echo "Server   : $SERVER"
 echo "Interval : ${INTERVAL}s"
 
-# Dependencies (Python 3 stdlib only — kein pip nötig)
+# Dependencies (Python 3 stdlib only — no pip required)
 apt-get update -qq
 apt-get install -y python3
 
@@ -47,11 +47,11 @@ if [ ! -f "$CONFIG_DIR/agent.conf" ]; then
 PATCHPILOT_SERVER=$SERVER
 PATCHPILOT_INTERVAL=$INTERVAL
 EOF
-  echo "Config erstellt: $CONFIG_DIR/agent.conf"
+  echo "Config created: $CONFIG_DIR/agent.conf"
 else
   # Update only server URL
   sed -i "s|PATCHPILOT_SERVER=.*|PATCHPILOT_SERVER=$SERVER|" "$CONFIG_DIR/agent.conf"
-  echo "Config aktualisiert: $CONFIG_DIR/agent.conf"
+  echo "Config updated: $CONFIG_DIR/agent.conf"
 fi
 
 # Systemd
@@ -79,8 +79,8 @@ systemctl enable patchpilot-agent
 systemctl restart patchpilot-agent
 
 echo ""
-echo "=== Agent installiert auf $(hostname) ==="
+echo "=== Agent installed on $(hostname) ==="
 echo "Status : systemctl status patchpilot-agent"
 echo "Logs   : journalctl -u patchpilot-agent -f"
 echo ""
-echo "Der Agent meldet sich innerhalb von ${INTERVAL}s beim Server."
+echo "The agent will check in with the server within ${INTERVAL}s."

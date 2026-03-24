@@ -115,7 +115,61 @@ function OfflineBanner({ hostnames, onDismiss }: { hostnames: string[]; onDismis
 
 // ─── Sort types ────────────────────────────────────────────────────────────────
 
-type SortKey = 'status' | 'hostname' | 'ip' | 'os' | 'kernel' | 'updates' | 'reboot' | 'last_job' | 'uptime' | 'last_seen'
+type SortKey = 'status' | 'conn' | 'hostname' | 'ip' | 'os' | 'updates' | 'reboot' | 'last_job' | 'uptime' | 'last_seen'
+
+/** Map OS name to font-logos CSS class */
+function osIcon(os: string | null): string {
+  if (!os) return 'fl-tux'
+  const l = os.toLowerCase()
+  // Major distros
+  if (l.includes('debian')) return 'fl-debian'
+  if (l.includes('ubuntu')) return 'fl-ubuntu'
+  if (l.includes('kubuntu')) return 'fl-kubuntu'
+  if (l.includes('fedora')) return 'fl-fedora'
+  if (l.includes('centos')) return 'fl-centos'
+  if (l.includes('red hat') || l.includes('redhat') || l.includes('rhel')) return 'fl-redhat'
+  if (l.includes('alma')) return 'fl-almalinux'
+  if (l.includes('rocky')) return 'fl-rocky-linux'
+  if (l.includes('opensuse') || l.includes('suse') || l.includes('tumbleweed')) return 'fl-opensuse'
+  if (l.includes('alpine')) return 'fl-alpine'
+  // Arch-based
+  if (l.includes('manjaro')) return 'fl-manjaro'
+  if (l.includes('endeavour')) return 'fl-endeavour'
+  if (l.includes('garuda')) return 'fl-garuda'
+  if (l.includes('artix')) return 'fl-artix'
+  if (l.includes('arcolinux')) return 'fl-arcolinux'
+  if (l.includes('archcraft')) return 'fl-archcraft'
+  if (l.includes('arch')) return 'fl-archlinux'
+  // Debian-based
+  if (l.includes('mint')) return 'fl-linuxmint'
+  if (l.includes('pop!_os') || l.includes('pop os') || l.includes('pop_os')) return 'fl-pop-os'
+  if (l.includes('elementary')) return 'fl-elementary'
+  if (l.includes('zorin')) return 'fl-zorin'
+  if (l.includes('mx linux') || l.includes('mxlinux')) return 'fl-mxlinux'
+  if (l.includes('kali')) return 'fl-kali-linux'
+  if (l.includes('parrot')) return 'fl-parrot'
+  if (l.includes('devuan')) return 'fl-devuan'
+  if (l.includes('deepin')) return 'fl-deepin'
+  if (l.includes('tails')) return 'fl-tails'
+  if (l.includes('puppy')) return 'fl-puppy'
+  // Independent
+  if (l.includes('gentoo')) return 'fl-gentoo'
+  if (l.includes('nixos')) return 'fl-nixos'
+  if (l.includes('void')) return 'fl-void'
+  if (l.includes('solus')) return 'fl-solus'
+  if (l.includes('slackware')) return 'fl-slackware'
+  if (l.includes('mageia')) return 'fl-mageia'
+  if (l.includes('nobara')) return 'fl-nobara'
+  if (l.includes('qubes')) return 'fl-qubesos'
+  // BSD
+  if (l.includes('freebsd')) return 'fl-freebsd'
+  if (l.includes('openbsd')) return 'fl-openbsd'
+  // Hardware / special
+  if (l.includes('raspb') || l.includes('raspberry')) return 'fl-raspberry-pi'
+  if (l.includes('coreos')) return 'fl-coreos'
+  // Fallback
+  return 'fl-tux'
+}
 type SortDir = 'asc' | 'desc'
 
 function sortAgents(agents: Agent[], key: SortKey, dir: SortDir): Agent[] {
@@ -131,10 +185,10 @@ function sortAgents(agents: Agent[], key: SortKey, dir: SortDir): Agent[] {
       // Sort IPs numerically by converting each octet
       const toNum = (ip: string | null) => (ip ?? '').split('.').reduce((acc, o) => acc * 256 + (parseInt(o) || 0), 0)
       cmp = toNum(a.ip) - toNum(b.ip)
+    } else if (key === 'conn') {
+      cmp = (a.protocol ?? '').localeCompare(b.protocol ?? '')
     } else if (key === 'os') {
       cmp = (a.os_pretty ?? '').localeCompare(b.os_pretty ?? '')
-    } else if (key === 'kernel') {
-      cmp = (a.kernel ?? '').localeCompare(b.kernel ?? '')
     } else if (key === 'updates') {
       cmp = (a.pending_count ?? 0) - (b.pending_count ?? 0)
     } else if (key === 'reboot') {
@@ -268,7 +322,7 @@ function AgentRow({
       style={{
         cursor: 'pointer',
         background: hover
-          ? `linear-gradient(90deg, ${colors.primary}08 0%, transparent 100%)`
+          ? `linear-gradient(90deg, ${colors.primary}12 0%, ${colors.primary}06 60%, transparent 100%)`
           : 'transparent',
         borderBottom: `1px solid ${colors.border}`,
         transition: 'background 0.15s ease',
@@ -278,6 +332,17 @@ function AgentRow({
     >
       <td style={{ padding: '12px 16px' }}>
         <OnlineDot online={online} />
+      </td>
+      <td className="pp-hide-mobile" style={{ padding: '12px 10px', textAlign: 'center' }}>
+        <span title={agent.protocol === 'https' ? 'Connected via HTTPS' : 'Connected via HTTP'} style={{
+          fontSize: '9px', letterSpacing: '0.1em',
+          padding: '1px 5px',
+          border: `1px solid ${agent.protocol === 'https' ? colors.success : colors.textMuted}44`,
+          color: agent.protocol === 'https' ? colors.success : colors.textMuted,
+          fontFamily: "'Orbitron', sans-serif",
+        }}>
+          {agent.protocol === 'https' ? 'TLS' : 'HTTP'}
+        </span>
       </td>
       <td style={{ padding: '12px 16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -291,7 +356,6 @@ function AgentRow({
           }}>
             {agent.hostname}
           </span>
-
           {/* Tag chips + editor — hidden on mobile */}
           {!editingTags && tagList.map(tag => (
             <Badge key={tag} color={colors.primaryDim} className="pp-hide-mobile" style={{ fontSize: '10px', padding: '1px 6px' }}>
@@ -344,10 +408,10 @@ function AgentRow({
         {agent.ip ?? '—'}
       </td>
       <td className="pp-hide-mobile" style={{ padding: '12px 16px', color: colors.textDim, fontSize: '12px' }}>
-        {agent.os_pretty ?? '—'}
-      </td>
-      <td className="pp-hide-mobile" style={{ padding: '12px 16px', color: colors.textMuted, fontFamily: 'monospace', fontSize: '11px' }}>
-        {agent.kernel ?? '—'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span className={osIcon(agent.os_pretty)} style={{ fontSize: '14px', color: colors.textMuted, flexShrink: 0 }} />
+          <span>{agent.os_pretty ?? '—'}</span>
+        </div>
       </td>
       <td style={{ padding: '12px 16px', textAlign: 'center' }}>
         {(agent.pending_count ?? 0) > 0 ? (
@@ -403,7 +467,7 @@ function AgentRow({
 function SkeletonRow() {
   return (
     <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
-      {[80, 130, 90, 160, 120, 50, 60, 65, 55, 40].map((w, i) => (
+      {[80, 40, 130, 90, 160, 50, 60, 65, 55, 40].map((w, i) => (
         <td key={i} style={{ padding: '12px 16px' }}>
           <div style={{
             height: '12px',
@@ -694,6 +758,7 @@ export function Dashboard() {
                   onSort={handleSort}
                   align="left"
                 />
+                <SortTh label="Conn" sortKey="conn" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="center" className="pp-hide-mobile" />
                 <SortTh
                   label="Hostname"
                   sortKey="hostname"
@@ -704,7 +769,6 @@ export function Dashboard() {
                 />
                 <SortTh label="IP"     sortKey="ip"     activeKey={sortKey} dir={sortDir} onSort={handleSort} className="pp-hide-mobile" />
                 <SortTh label="OS"     sortKey="os"     activeKey={sortKey} dir={sortDir} onSort={handleSort} className="pp-hide-mobile" />
-                <SortTh label="Kernel" sortKey="kernel" activeKey={sortKey} dir={sortDir} onSort={handleSort} className="pp-hide-mobile" />
                 <SortTh label="Updates" sortKey="updates" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="center" />
                 <SortTh label="Reboot"  sortKey="reboot"  activeKey={sortKey} dir={sortDir} onSort={handleSort} align="center" />
                 <SortTh label="Last Job" sortKey="last_job" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="center" className="pp-hide-mobile" />

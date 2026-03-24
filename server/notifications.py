@@ -222,9 +222,10 @@ class NotificationManager:
         smtp_pass     = _get("smtp_password")
         smtp_to       = _get("smtp_to")
 
-        self._notify_offline  = _get("notify_offline",  "1") == "1"
-        self._notify_patches  = _get("notify_patches",  "1") == "1"
-        self._notify_failures = _get("notify_failures", "1") == "1"
+        self._email_enabled    = _get("email_enabled",    "1") == "1"
+        self._notify_offline   = _get("notify_offline",  "1") == "1"
+        self._notify_patches   = _get("notify_patches",  "1") == "1"
+        self._notify_failures  = _get("notify_failures", "1") == "1"
         self._telegram_enabled = _get("telegram_enabled", "1") == "1"
 
         # Per-channel event toggles for Telegram
@@ -235,7 +236,7 @@ class NotificationManager:
 
         self._telegram = TelegramNotifier(tg_token, tg_chat) if (tg_token and self._telegram_enabled) else None
         self._email    = EmailNotifier(smtp_host, smtp_port, smtp_user, smtp_pass, smtp_to, smtp_security) \
-                         if smtp_host else None
+                         if (smtp_host and self._email_enabled) else None
         self._loaded = True
 
     def reload(self):

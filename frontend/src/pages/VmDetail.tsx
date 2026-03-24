@@ -504,7 +504,28 @@ export function VmDetail() {
 
       {/* Job history */}
       <div style={{ marginBottom: '32px' }}>
-        <SectionHeader>Job History</SectionHeader>
+        <SectionHeader right={
+          jobs.filter(j => j.status === 'pending').length > 1 && isAdmin ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              style={{ color: colors.danger }}
+              onClick={() => setConfirm({
+                title: 'Cancel All Pending',
+                message: `Cancel all ${jobs.filter(j => j.status === 'pending').length} pending jobs for this agent?`,
+                onConfirm: async () => {
+                  setConfirm(null)
+                  try {
+                    await api.cancelPendingJobs(id!)
+                    load()
+                  } catch (e) { console.error(e) }
+                },
+              })}
+            >
+              ✕ CANCEL ALL PENDING
+            </Button>
+          ) : undefined
+        }>Job History</SectionHeader>
         <div style={{
           border: `1px solid ${colors.border}`,
           background: glassBg(0.65),
@@ -514,12 +535,12 @@ export function VmDetail() {
         }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', tableLayout: 'fixed' }}>
             <colgroup>
-              <col style={{ width: '60px' }} />
-              <col style={{ width: '120px' }} />
-              <col style={{ width: '100px' }} />
-              <col style={{ width: '170px' }} />
+              <col style={{ width: '50px' }} />
+              <col style={{ width: '110px' }} />
+              <col style={{ width: '90px' }} />
+              <col style={{ width: '150px' }} />
               <col />
-              <col style={{ width: '80px' }} />
+              <col style={{ width: '110px' }} />
             </colgroup>
             <thead>
               <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
@@ -601,7 +622,6 @@ export function VmDetail() {
                       color: colors.textDim,
                       fontFamily: 'monospace',
                       fontSize: '11px',
-                      maxWidth: '260px',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { api, Settings, auth } from '../api/client'
 import { Animator, FrameCorners } from '@arwes/react'
 import { colors, glow, glowText, glassBg } from '../theme'
@@ -249,6 +250,7 @@ const SMTP_DEFAULT_PORTS: Record<string, string> = {
 const EMPTY: Settings = {
   telegram_token: '',
   telegram_chat_id: '',
+  email_enabled: '1',
   smtp_host: '',
   smtp_port: '587',
   smtp_security: 'starttls',
@@ -393,11 +395,44 @@ export function SettingsPage() {
     margin: '24px 0',
   }
 
+  const [tab, setTab] = useState<'notifications' | 'server'>('notifications')
+
   return (
     <div style={{ padding: 'clamp(16px, 4vw, 32px)', maxWidth: '1400px' }}>
       <PageHeader>Settings</PageHeader>
 
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: '0', marginBottom: '24px', borderBottom: `1px solid ${colors.border}` }}>
+        {(['notifications', 'server'] as const).map(t => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setTab(t)}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              padding: '10px 24px',
+              fontFamily: "'Orbitron', sans-serif",
+              fontSize: '11px',
+              letterSpacing: '0.18em',
+              textTransform: 'uppercase',
+              color: tab === t ? colors.primary : colors.textMuted,
+              textShadow: tab === t ? glowText(colors.primary, 4) : 'none',
+              borderBottom: tab === t ? `2px solid ${colors.primary}` : '2px solid transparent',
+              marginBottom: '-1px',
+              transition: 'all 0.15s',
+            }}
+          >
+            {t === 'notifications' ? 'Notifications' : 'Server'}
+          </button>
+        ))}
+      </div>
+
       <form onSubmit={handleSubmit}>
+
+        {/* ================================================================== */}
+        {/* TAB: Notifications                                                  */}
+        {/* ================================================================== */}
+        {tab === 'notifications' && <>
 
         {/* ------------------------------------------------------------------ */}
         {/* Telegram                                                             */}
@@ -478,7 +513,7 @@ export function SettingsPage() {
               type="button"
               size="sm"
               variant="ghost"
-              disabled={testing === 'email'}
+              disabled={testing === 'email' || form.email_enabled !== '1'}
               onClick={() => handleTest('email')}
             >
               {testing === 'email' ? 'SENDING...' : 'SEND TEST'}
@@ -487,7 +522,19 @@ export function SettingsPage() {
             E-Mail (SMTP)
           </SectionHeader>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+          <Toggle
+            label="Enable Email Notifications"
+            name="email_enabled"
+            value={form.email_enabled}
+            onChange={handleChange}
+          />
+
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px',
+            marginTop: '14px',
+            opacity: form.email_enabled === '1' ? 1 : 0.4,
+            pointerEvents: form.email_enabled === '1' ? 'auto' : 'none',
+          }}>
             <Field
               label="SMTP Host"
               name="smtp_host"
@@ -539,63 +586,46 @@ export function SettingsPage() {
               placeholder="admin@example.com"
             />
           </div>
-        </Card>
 
-        {/* ------------------------------------------------------------------ */}
-        {/* Event-Toggles                                                        */}
-        {/* ------------------------------------------------------------------ */}
-        <Card style={{ marginBottom: '20px' }}>
-          <SectionHeader>Notification Events</SectionHeader>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-              <Toggle
-                label="VM offline after"
-                name="notify_offline"
-                value={form.notify_offline}
-                onChange={handleChange}
-              />
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <input
-                  type="number"
-                  min="1"
-                  max="120"
-                  value={form.notify_offline_minutes}
-                  onChange={e => handleChange('notify_offline_minutes', e.target.value)}
-                  disabled={form.notify_offline === '0'}
-                  style={{
-                    width: '64px',
-                    padding: '4px 8px',
-                    background: colors.bg,
-                    border: `1px solid ${form.notify_offline === '1' ? colors.border : colors.border + '44'}`,
-                    color: form.notify_offline === '1' ? colors.text : colors.textMuted,
-                    fontFamily: "'Electrolize', monospace",
-                    fontSize: '13px',
-                    outline: 'none',
-                    textAlign: 'center',
-                  }}
-                />
-                <span style={{ fontSize: '12px', color: colors.textMuted, fontFamily: "'Electrolize', monospace" }}>
-                  minutes
-                </span>
-              </div>
+          <div style={{
+            marginTop: '14px', paddingTop: '14px', borderTop: `1px solid ${colors.border}`,
+            opacity: form.email_enabled === '1' ? 1 : 0.4,
+            pointerEvents: form.email_enabled === '1' ? 'auto' : 'none',
+          }}>
+            <div style={{ fontSize: '10px', letterSpacing: '0.15em', color: colors.textMuted, fontFamily: "'Orbitron', sans-serif", marginBottom: '10px' }}>
+              EMAIL EVENTS
             </div>
-            <div style={divider} />
-            <Toggle
-              label="Updates available / Reboot required"
-              name="notify_patches"
-              value={form.notify_patches}
-              onChange={handleChange}
-            />
-            <div style={divider} />
-            <Toggle
-              label="Patch job failed"
-              name="notify_failures"
-              value={form.notify_failures}
-              onChange={handleChange}
-            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                <Toggle label="VM offline after" name="notify_offline" value={form.notify_offline} onChange={handleChange} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input
+                    type="number" min="1" max="120"
+                    value={form.notify_offline_minutes}
+                    onChange={e => handleChange('notify_offline_minutes', e.target.value)}
+                    disabled={form.notify_offline === '0'}
+                    style={{
+                      width: '52px', padding: '3px 6px', background: colors.bg,
+                      border: `1px solid ${form.notify_offline === '1' ? colors.border : colors.border + '44'}`,
+                      color: form.notify_offline === '1' ? colors.text : colors.textMuted,
+                      fontFamily: "'Electrolize', monospace", fontSize: '12px', outline: 'none', textAlign: 'center',
+                    }}
+                  />
+                  <span style={{ fontSize: '11px', color: colors.textMuted, fontFamily: "'Electrolize', monospace" }}>min</span>
+                </div>
+              </div>
+              <Toggle label="Updates available / Reboot required" name="notify_patches" value={form.notify_patches} onChange={handleChange} />
+              <Toggle label="Patch job failed" name="notify_failures" value={form.notify_failures} onChange={handleChange} />
+            </div>
           </div>
         </Card>
+
+        </>}
+
+        {/* ================================================================== */}
+        {/* TAB: Server                                                         */}
+        {/* ================================================================== */}
+        {tab === 'server' && <>
 
         {/* ------------------------------------------------------------------ */}
         {/* Server                                                               */}
@@ -631,13 +661,20 @@ export function SettingsPage() {
         {/* ------------------------------------------------------------------ */}
         <SslSection />
 
+        </>}
+
         {/* ------------------------------------------------------------------ */}
-        {/* Save button                                                          */}
+        {/* Save button (always visible)                                         */}
         {/* ------------------------------------------------------------------ */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <Button type="submit" disabled={saving || !isDirty}>
             {saving ? 'SAVING...' : isDirty ? '● SAVE SETTINGS' : 'SAVE SETTINGS'}
           </Button>
+          {isDirty && (
+            <Button type="button" variant="ghost" onClick={() => setForm(savedForm)}>
+              ↩ UNDO
+            </Button>
+          )}
           {isDirty && (
             <span style={{
               fontSize: '11px',
@@ -692,8 +729,8 @@ export function SettingsPage() {
 // ---------------------------------------------------------------------------
 // SSL / HTTPS Section
 // ---------------------------------------------------------------------------
-type DeployAgent = { agent_id: string; hostname: string; status: string; output: string; finished: string | null }
-type DeployStatus = { agents: DeployAgent[]; total: number; completed: number }
+type DeployAgent = { agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null; online: boolean }
+type DeployStatus = { agents: DeployAgent[]; total: number; total_online: number; completed: number }
 
 const CERT_VALIDITY_OPTIONS = [
   { value: '1', label: '1 Year' },
@@ -720,7 +757,11 @@ function DeployModal({
   onEnableHttps: () => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
-  const isDone = deployStatus != null && deployStatus.total > 0 && deployStatus.completed >= deployStatus.total
+  // Deployment is "done" when all online agents finished — offline ones will catch up later
+  const onlineTotal = deployStatus ? (deployStatus.total_online ?? deployStatus.total) : 0
+  const allOnlineDone = deployStatus != null && onlineTotal > 0 && deployStatus.completed >= onlineTotal
+  // Also treat as "done" if polling stopped (timeout or all done) — busy=false signals this
+  const isDone = allOnlineDone || (deployStatus != null && !busy)
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -741,15 +782,14 @@ function DeployModal({
   const hasFailed = deployStatus?.agents.some(a => a.status === 'failed') ?? false
   const barColor = hasFailed ? colors.danger : isDone ? colors.success : colors.primary
 
-  return (
+  return createPortal(
     <div
       onClick={e => { if (e.target === e.currentTarget && isDone) onClose() }}
       style={{
-        position: 'fixed', inset: 0, zIndex: 200,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: 'rgba(2,12,14,0.85)',
-        backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
-        animation: 'pp-fadein 0.2s ease both',
+        position: 'fixed', inset: 0, zIndex: 10000,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        background: `${colors.bg}ee`,
+        backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
       }}
     >
       <Animator active>
@@ -805,7 +845,7 @@ function DeployModal({
                 <div style={{ height: '4px', background: `${colors.border}44`, borderRadius: '2px', overflow: 'hidden' }}>
                   <div style={{
                     height: '100%', borderRadius: '2px', transition: 'width 0.5s ease',
-                    width: `${(deployStatus.completed / deployStatus.total) * 100}%`,
+                    width: `${(deployStatus.completed / (onlineTotal || deployStatus.total)) * 100}%`,
                     background: barColor,
                     boxShadow: glow(barColor, 4),
                   }} />
@@ -814,7 +854,7 @@ function DeployModal({
                   fontSize: '10px', color: colors.textMuted, marginTop: '6px',
                   fontFamily: "'Electrolize', monospace", textAlign: 'right',
                 }}>
-                  {deployStatus.completed} / {deployStatus.total} agents
+                  {deployStatus.completed} / {onlineTotal} online{deployStatus.total > onlineTotal ? ` (${deployStatus.total - onlineTotal} offline)` : ''}
                 </div>
               </div>
             )}
@@ -834,16 +874,20 @@ function DeployModal({
                   Updating agents and deploying certificate...
                 </div>
               ) : deployStatus.agents.map(a => {
-                const phase = (a as any).phase || a.status
+                const phase = a.phase || a.status
+                const isOffline = !a.online
+                const isPending = a.status === 'pending' || phase === 'pending'
                 const label = a.status === 'done' ? 'CERT INSTALLED'
                   : a.status === 'failed' ? 'FAILED'
                   : phase === 'updating' ? 'UPDATING AGENT...'
                   : phase === 'waiting' ? 'AGENT UPDATED'
                   : phase === 'deploying' ? 'INSTALLING CERT...'
+                  : isOffline && isPending ? 'OFFLINE — WAITING'
                   : 'PENDING'
                 const dotColor = a.status === 'done' ? colors.success
                   : a.status === 'failed' ? colors.danger
                   : (phase === 'updating' || phase === 'deploying') ? colors.warn
+                  : isOffline ? colors.textMuted
                   : colors.textMuted
                 const isActive = phase === 'updating' || phase === 'deploying'
                 return (
@@ -851,6 +895,7 @@ function DeployModal({
                     display: 'flex', alignItems: 'center', gap: '10px',
                     padding: '6px 0', borderBottom: `1px solid ${colors.border}22`,
                     fontSize: '11px', fontFamily: "'Electrolize', monospace",
+                    opacity: isOffline && isPending ? 0.5 : 1,
                   }}>
                     <span style={{
                       width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
@@ -858,7 +903,12 @@ function DeployModal({
                       boxShadow: isActive ? `0 0 6px ${colors.warn}` : a.status === 'done' ? `0 0 4px ${colors.success}` : 'none',
                       animation: isActive ? 'pp-pulse 1.5s ease-in-out infinite' : 'none',
                     }} />
-                    <span style={{ flex: 1, color: colors.text }}>{a.hostname}</span>
+                    <span style={{ flex: 1, color: isOffline && isPending ? colors.textMuted : colors.text }}>
+                      {a.hostname}
+                      {isOffline && isPending && (
+                        <span style={{ fontSize: '8px', marginLeft: '6px', color: colors.textMuted }}>●  OFFLINE</span>
+                      )}
+                    </span>
                     <span style={{ fontSize: '9px', letterSpacing: '0.1em', color: dotColor }}>
                       {label}
                     </span>
@@ -891,35 +941,60 @@ function DeployModal({
           }}>
             {isDone ? (
               <>
+                {/* Status summary */}
+                {deployStatus && (
+                  <span style={{
+                    fontSize: '10px', fontFamily: "'Electrolize', monospace",
+                    color: hasFailed ? colors.warn : colors.success,
+                    letterSpacing: '0.06em', marginRight: 'auto',
+                  }}>
+                    {deployStatus.agents.filter(a => a.status === 'done').length} installed
+                    {hasFailed ? ` · ${deployStatus.agents.filter(a => a.status === 'failed').length} failed` : ''}
+                  </span>
+                )}
                 {hasFailed && (
                   <Button variant="ghost" onClick={onRetry}>Retry Failed</Button>
                 )}
-                {!hasFailed && !ssl?.enabled && ssl?.certfile && ssl?.keyfile && (
-                  <Button disabled={busy} onClick={onEnableHttps}>Enable HTTPS Now</Button>
+                {!ssl?.enabled && ssl?.certfile && ssl?.keyfile && (
+                  <Button disabled={busy} onClick={onEnableHttps}>Enable HTTPS</Button>
                 )}
                 <Button variant="ghost" onClick={onClose}>Close</Button>
               </>
             ) : (
-              <div style={{
-                textAlign: 'center',
-                padding: '8px 16px',
-                background: `${colors.warn}0a`,
-                border: `1px solid ${colors.warn}33`,
+              <span style={{
+                fontSize: '10px', fontFamily: "'Orbitron', sans-serif",
+                letterSpacing: '0.08em', color: colors.textMuted,
               }}>
-                <span style={{
-                  fontSize: '10px', fontFamily: "'Orbitron', sans-serif",
-                  letterSpacing: '0.15em', textTransform: 'uppercase',
-                  color: colors.warn,
-                  textShadow: glowText(colors.warn, 3),
-                }}>
-                  Do not close this page while deployment is in progress
-                </span>
-              </div>
+                Waiting for agents...
+              </span>
             )}
           </div>
         </div>
       </Animator>
-    </div>
+
+      {/* Prominent warning outside modal panel */}
+      {!isDone && (
+        <div style={{
+          marginTop: '24px',
+          padding: '10px 24px',
+          background: `${colors.warn}0a`,
+          border: `1px solid ${colors.warn}33`,
+          animation: 'pp-fadein 0.4s ease both',
+          textAlign: 'center',
+        }}>
+          <span style={{
+            fontSize: '11px', fontFamily: "'Orbitron', sans-serif",
+            letterSpacing: '0.18em', textTransform: 'uppercase',
+            color: colors.warn,
+            textShadow: glowText(colors.warn, 4),
+            fontWeight: 600,
+          }}>
+            ⚠ Do not leave this page while deployment is in progress
+          </span>
+        </div>
+      )}
+    </div>,
+    document.body,
   )
 }
 
@@ -933,6 +1008,8 @@ function SslSection() {
   const [deployStatus, setDeployStatus] = useState<DeployStatus | null>(null)
   const [confirmDisable, setConfirmDisable] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const batchRef = useRef<string>('')
+  const deployStartRef = useRef<number>(0)
   const { showToast } = useToast()
 
   const load = useCallback(async () => {
@@ -967,10 +1044,15 @@ function SslSection() {
   }, [deployModal])
 
   const pollDeployStatus = useCallback(async () => {
+    if (!batchRef.current) return
     try {
-      const res = await api.deploySslStatus()
+      const res = await api.deploySslStatus(batchRef.current)
       setDeployStatus(res)
-      if (res.total > 0 && res.completed >= res.total) {
+      // Stop polling when all ONLINE agents are done — offline ones catch up later
+      const onlineCount = res.total_online ?? res.total
+      const elapsed = Date.now() - deployStartRef.current
+      const timedOut = elapsed > 180_000  // 3 min timeout
+      if ((onlineCount > 0 && res.completed >= onlineCount) || timedOut) {
         if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
         setBusy(false)
       }
@@ -979,10 +1061,13 @@ function SslSection() {
 
   const handleDeploySsl = async () => {
     setBusy(true)
-    setDeployModal(true)
     setDeployStatus(null)
+    batchRef.current = ''
+    deployStartRef.current = Date.now()
+    setDeployModal(true)
     try {
-      await api.deploySslToAgents()
+      const res = await api.deploySslToAgents()
+      batchRef.current = res.batch_id
       pollDeployStatus()
       pollRef.current = setInterval(pollDeployStatus, 3000)
     } catch (err) {
