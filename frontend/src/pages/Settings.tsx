@@ -484,9 +484,9 @@ export function SettingsPage() {
             <div style={{ fontSize: '10px', letterSpacing: '0.15em', color: colors.textMuted, fontFamily: "'Orbitron', sans-serif", marginBottom: '10px' }}>
               TELEGRAM EVENTS
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px 16px' }}>
               <Toggle label="VM offline" name="telegram_notify_offline" value={form.telegram_notify_offline} onChange={handleChange} />
-              <Toggle label="Updates available / Reboot required" name="telegram_notify_patches" value={form.telegram_notify_patches} onChange={handleChange} />
+              <Toggle label="Updates available" name="telegram_notify_patches" value={form.telegram_notify_patches} onChange={handleChange} />
               <Toggle label="Job failed" name="telegram_notify_failures" value={form.telegram_notify_failures} onChange={handleChange} />
               <Toggle label="Job completed" name="telegram_notify_success" value={form.telegram_notify_success} onChange={handleChange} />
             </div>
@@ -584,27 +584,27 @@ export function SettingsPage() {
             <div style={{ fontSize: '10px', letterSpacing: '0.15em', color: colors.textMuted, fontFamily: "'Orbitron', sans-serif", marginBottom: '10px' }}>
               EMAIL EVENTS
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px 16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                 <Toggle label="VM offline after" name="notify_offline" value={form.notify_offline} onChange={handleChange} />
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <input
                     type="number" min="1" max="120"
                     value={form.notify_offline_minutes}
                     onChange={e => handleChange('notify_offline_minutes', e.target.value)}
                     disabled={form.notify_offline === '0'}
                     style={{
-                      width: '52px', padding: '3px 6px', background: colors.bg,
+                      width: '46px', padding: '3px 6px', background: colors.bg,
                       border: `1px solid ${form.notify_offline === '1' ? colors.border : colors.border + '44'}`,
                       color: form.notify_offline === '1' ? colors.text : colors.textMuted,
                       fontFamily: "'Electrolize', monospace", fontSize: '12px', outline: 'none', textAlign: 'center',
                     }}
                   />
-                  <span style={{ fontSize: '11px', color: colors.textMuted, fontFamily: "'Electrolize', monospace" }}>min</span>
+                  <span style={{ fontSize: '10px', color: colors.textMuted, fontFamily: "'Electrolize', monospace" }}>min</span>
                 </div>
               </div>
-              <Toggle label="Updates available / Reboot required" name="notify_patches" value={form.notify_patches} onChange={handleChange} />
-              <Toggle label="Patch job failed" name="notify_failures" value={form.notify_failures} onChange={handleChange} />
+              <Toggle label="Updates available" name="notify_patches" value={form.notify_patches} onChange={handleChange} />
+              <Toggle label="Job failed" name="notify_failures" value={form.notify_failures} onChange={handleChange} />
             </div>
           </div>
         </Card>

@@ -100,7 +100,8 @@ class EmailNotifier:
         self.port = int(port) if port else 587
         self.user = user.strip()
         self.password = password  # intentionally not logged
-        self.to = to.strip()
+        # SEC: Sanitize email to prevent header injection
+        self.to = to.strip().replace('\n', '').replace('\r', '')
         self.security = (security or "starttls").strip().lower()
 
     @staticmethod

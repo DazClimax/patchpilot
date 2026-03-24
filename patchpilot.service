@@ -14,6 +14,11 @@ RestartSec=5
 # Hardening
 NoNewPrivileges=yes
 PrivateTmp=yes
+ProtectHome=yes
+# Resource limits
+MemoryMax=512M
+TasksMax=200
+CPUQuota=80%
 
 [Install]
 WantedBy=multi-user.target

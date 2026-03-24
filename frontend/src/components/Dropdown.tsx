@@ -93,7 +93,7 @@ export function Dropdown({ value, onChange, options, placeholder }: DropdownProp
           top: 'calc(100% + 2px)',
           left: 0,
           right: 0,
-          zIndex: 300,
+          zIndex: 150,
           background: glassBg(0.98),
           backdropFilter: 'blur(16px)',
           WebkitBackdropFilter: 'blur(16px)',

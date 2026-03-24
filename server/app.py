@@ -68,15 +68,17 @@ async def _port_routing(request: Request, call_next):
         is_agent_path = any(path.startswith(p) for p in _AGENT_PREFIXES)
         is_shared = path in ("/api/ping", "/api/server-time")
 
+        # Agent-only paths: heartbeat, job polling, result reporting, registration
+        _agent_only = ("/api/agents/register", "/agent/")
+        is_agent_only = any(path.startswith(p) or path == p.rstrip("/") for p in _agent_only) or \
+            (path.startswith("/api/agents/") and ("/heartbeat" in path or "/jobs" in path and "/result" in path))
+
         if not is_shared:
             if port == _AGENT_PORT and not is_agent_path:
                 return JSONResponse(status_code=404, content={"detail": "Not available on agent port"})
-            if port == _UI_PORT and is_agent_path:
-                # Allow agent-detail view (GET /api/agents/{id}) and job creation from UI
-                if request.method in ("GET", "POST", "PATCH", "DELETE") and not path.startswith("/agent/"):
-                    pass  # UI can access /api/agents/* for dashboard
-                else:
-                    return JSONResponse(status_code=404, content={"detail": "Not available on UI port"})
+            if port == _UI_PORT and path.startswith("/agent/"):
+                # Block raw file downloads on UI port
+                return JSONResponse(status_code=404, content={"detail": "Not available on UI port"})
     return await call_next(request)
 
 # ---------------------------------------------------------------------------
@@ -1401,22 +1403,7 @@ async def api_save_settings(request: Request):
         row_as = conn.execute("SELECT value FROM settings WHERE key='agent_ssl'").fetchone()
         old_agent_ssl = row_as["value"] if row_as else "0"
 
-    with get_db_ctx() as conn:
-        for key, value in data.items():
-            # Skip masked placeholder — do not overwrite real value with "***"
-            if value == "***":
-                continue
-            conn.execute(
-                "INSERT INTO settings (key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (key, str(value)),
-            )
-    # Reload notification config so changes take effect immediately
-    notification_manager.reload()
-    from telegram_bot import telegram_bot
-    telegram_bot.reload_settings()
-
-    # MEDIUM-11: Verify Telegram token validity with getMe if a new token was saved
+    # Verify Telegram token validity BEFORE saving
     tg_valid = None
     if tg_token and tg_token != "***":
         try:
@@ -1431,6 +1418,20 @@ async def api_save_settings(request: Request):
                 tg_valid = result.get("ok", False)
         except Exception:
             tg_valid = False
+
+    # Save all settings to DB
+    with get_db_ctx() as conn:
+        for key, value in data.items():
+            if value == "***":
+                continue
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, str(value)),
+            )
+    notification_manager.reload()
+    from telegram_bot import telegram_bot
+    telegram_bot.reload_settings()
 
     # Port changed → update .env and restart service.
     restart_pending = False
@@ -1799,7 +1800,7 @@ async def api_deploy_ssl_to_agents(request: Request):
         data = await request.json()
     except Exception:
         pass
-    retry_batch = data.get("retry_batch", "")
+    retry_batch = re.sub(r'[^a-fA-F0-9]', '', data.get("retry_batch", ""))  # SEC: sanitize
 
     with get_db_ctx() as conn:
         if retry_batch:
@@ -1837,6 +1838,7 @@ def api_deploy_ssl_status(batch: str = ""):
     the chained update_agent.  Phase: 'updating' while update_agent runs,
     'deploying' while deploy_ssl runs, status when done/failed.
     """
+    batch = re.sub(r'[^a-fA-F0-9]', '', batch or '')  # SEC: sanitize
     if not batch:
         return {"agents": [], "total": 0, "completed": 0}
 

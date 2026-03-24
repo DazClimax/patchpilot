@@ -537,30 +537,49 @@ def _update_config_key(key: str, value: str):
 
 
 def _bootstrap_ca_cert(server_url: str):
-    """Re-download CA cert from server using an unverified connection (bootstrap trust).
-    This handles the case where the server cert was regenerated after initial deployment."""
+    """Re-download CA cert from server with SHA-256 integrity verification.
+
+    Uses an unverified TLS connection (bootstrap trust) which is inherent to
+    the chicken-and-egg problem of deploying a new CA cert.  The SHA-256 hash
+    is downloaded separately and must match — this doesn't prevent a full MITM
+    but does catch partial corruption and ensures both endpoints agree.
+    """
+    import hashlib as _hl
     ca_url = f"{server_url}/agent/ca.pem"
+    hash_url = f"{server_url}/agent/ca.pem.sha256"
     ca_path = CONFIG_DIR / "ca.pem"
     try:
-        # Download with no verification (like install.sh -k)
         nossl = ssl.create_default_context()
         nossl.check_hostname = False
         nossl.verify_mode = ssl.CERT_NONE
-        req = urlreq.Request(ca_url, method="GET")
-        with urlreq.urlopen(req, timeout=15, context=nossl) as r:
+
+        # Download cert + hash in quick succession
+        req_cert = urlreq.Request(ca_url, method="GET")
+        with urlreq.urlopen(req_cert, timeout=15, context=nossl) as r:
             cert_data = r.read()
-        # Basic PEM validation
+
+        req_hash = urlreq.Request(hash_url, method="GET")
+        with urlreq.urlopen(req_hash, timeout=15, context=nossl) as r:
+            expected_hash = r.read().decode().split()[0].strip()
+
+        # PEM format check
         if not cert_data.startswith(b"-----BEGIN CERTIFICATE-----"):
             print("[agent] WARNING: downloaded CA cert is not valid PEM, skipping", file=sys.stderr)
             return
+
+        # SHA-256 integrity check
+        actual_hash = _hl.sha256(cert_data).hexdigest()
+        if actual_hash != expected_hash:
+            print(f"[agent] WARNING: CA cert hash mismatch ({actual_hash[:16]} vs {expected_hash[:16]}), skipping", file=sys.stderr)
+            return
+
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         ca_path.write_bytes(cert_data)
         os.chmod(str(ca_path), 0o644)
-        # Update config and reload SSL context
         _update_config_key("PATCHPILOT_CA_BUNDLE", str(ca_path))
         os.environ["PATCHPILOT_CA_BUNDLE"] = str(ca_path)
         _reload_ssl_context()
-        print(f"[agent] CA cert re-bootstrapped at {ca_path}")
+        print(f"[agent] CA cert re-bootstrapped at {ca_path} (sha256:{actual_hash[:16]})")
     except Exception as e:
         print(f"[agent] WARNING: CA cert bootstrap failed: {e}", file=sys.stderr)
 

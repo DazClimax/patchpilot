@@ -81,7 +81,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: '16px' }}>
       <span style={{
-        fontSize: '9px',
+        fontSize: '10px',
         letterSpacing: '0.2em',
         color: colors.textMuted,
         fontFamily: "'Orbitron', sans-serif",
