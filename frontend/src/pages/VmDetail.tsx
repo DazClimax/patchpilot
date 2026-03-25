@@ -15,7 +15,7 @@ function jobStatus(s: string): [string, string] {
   const map: Record<string, [string, string]> = {
     done:    ['✓ Done',    colors.success],
     failed:  ['✗ Failed',  colors.danger],
-    running: ['⟳ Running', colors.warn],
+    running: ['Running', colors.warn],
     pending: ['· Pending', colors.textDim],
   }
   return map[s] ?? [s.toUpperCase(), colors.textDim]
