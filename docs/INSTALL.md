@@ -29,7 +29,7 @@
 - Debian 11+ or Ubuntu 22.04+
 - Python 3 (stdlib only, no pip needed)
 - `root` privileges (agent calls `apt-get`)
-- HTTP connection to PatchPilot server
+- HTTPS (or HTTP) connection to the PatchPilot server agent port
 
 ---
 
@@ -58,30 +58,31 @@ This creates `frontend/dist/`. The install script copies it automatically. Witho
 sudo bash install-server.sh
 ```
 
-With custom port:
+With custom ports:
 
 ```bash
-sudo PORT=9000 bash install-server.sh
+sudo PORT=9443 AGENT_PORT=9050 bash install-server.sh
 ```
 
 The script:
 1. Installs `python3`, `python3-pip`, `python3-venv`, `openssl` via apt
 2. Creates the system user `patchpilot` (no login shell)
 3. Copies server, agent, and frontend files to `/opt/patchpilot/`
-4. Creates a Python venv at `/opt/patchpilot-venv/` and installs dependencies
-5. Creates `/opt/patchpilot/.env` with the configured port (preserves existing config)
-6. Installs, **enables** (survives reboot), and starts the systemd service `patchpilot`
-7. Sets up sudoers entry for service self-restart (needed for port/SSL changes from UI)
+4. Creates a Python venv at `/opt/patchpilot-venv/` and installs dependencies (including `cryptography` for Fernet encryption of sensitive settings)
+5. Generates a self-signed SSL certificate (RSA 2048-bit, 3-year validity) at `/opt/patchpilot/ssl/` if none exists
+6. Creates `/opt/patchpilot/.env` with dual-port configuration and SSL enabled (preserves existing config on re-install)
+7. Installs, **enables** (`systemctl enable` — survives reboot), and starts the systemd service `patchpilot`
+8. Sets up sudoers entry for service self-restart (needed for port/SSL changes from the Settings UI)
 
-### Step 4: Set the Admin Key
+### Step 4: Create the Admin User
 
-On first start, the server generates a random key and logs it:
+On first start, open the web UI and create an admin account. If `PATCHPILOT_ADMIN_KEY` is not set, the server generates an ephemeral key and logs it:
 
 ```bash
 journalctl -u patchpilot | grep "ephemeral key"
 ```
 
-For production, set a fixed key:
+For production, set a fixed admin key:
 
 ```bash
 # Generate a key
@@ -92,13 +93,15 @@ echo "PATCHPILOT_ADMIN_KEY=your-key-here" >> /opt/patchpilot/.env
 sudo systemctl restart patchpilot
 ```
 
+The admin key is also used to derive the Fernet encryption key for sensitive settings (SMTP password, Telegram token). Changing it will require re-entering those values.
+
 ### Step 5: Open the Web UI
 
 ```
-http://<server-ip>:8000
+https://<server-ip>:8443
 ```
 
-Log in with the admin key from Step 4.
+The default UI port is 8443 (HTTPS). Your browser will warn about the self-signed certificate — this is expected.
 
 ---
 
@@ -107,15 +110,17 @@ Log in with the admin key from Step 4.
 ### Option A: One-Liner (Recommended)
 
 1. Open the **Deploy** page in the PatchPilot UI
-2. Set the correct server URL (internal IP + port)
+2. Set the correct server URL (internal IP + agent port)
 3. Click **Generate Key** — a registration key valid for 5 minutes appears
 4. Copy the one-liner command and run it on the target VM:
 
 ```bash
-curl -fsSL http://<server-ip>:8000/agent/install.sh | \
-  sudo PATCHPILOT_SERVER=http://<server-ip>:8000 \
+curl -fsSLk https://<server-ip>:8050/agent/install.sh | \
+  sudo PATCHPILOT_SERVER=https://<server-ip>:8050 \
   PATCHPILOT_REGISTER_KEY=<key> bash
 ```
+
+The `-k` flag skips certificate verification for the initial download when using self-signed certificates. After registration, the agent receives the CA certificate via the `deploy_ssl` job and verifies all subsequent connections.
 
 ### Option B: Manual Installation
 
@@ -124,7 +129,7 @@ curl -fsSL http://<server-ip>:8000/agent/install.sh | \
 scp agent/agent.py agent/install.sh user@vm:~/
 
 # Run installer
-sudo PATCHPILOT_SERVER=http://<server-ip>:8000 \
+sudo PATCHPILOT_SERVER=https://<server-ip>:8050 \
      PATCHPILOT_REGISTER_KEY=<key> \
      bash install.sh
 ```
@@ -145,9 +150,10 @@ The VM should appear on the dashboard within 30 seconds.
 ### Agent Config: `/etc/patchpilot/agent.conf`
 
 ```ini
-PATCHPILOT_SERVER=http://192.168.1.10:8000
+PATCHPILOT_SERVER=https://192.168.1.10:8050
 PATCHPILOT_INTERVAL=60
 # PATCHPILOT_AGENT_ID=my-vm  (set automatically)
+# PATCHPILOT_CA_BUNDLE=/etc/patchpilot/ca.pem  (set by deploy_ssl job)
 ```
 
 ### Agent State: `/etc/patchpilot/state.json`
@@ -158,21 +164,34 @@ Stores `agent_id`, `token`, and `server` URL. Permissions: `chmod 600`. Do not d
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `8000` | Listen port (changeable from Settings UI) |
-| `PATCHPILOT_ADMIN_KEY` | random | Admin key for web dashboard |
+| `PORT` | `8443` | UI port (HTTPS) |
+| `AGENT_PORT` | `8050` | Agent API port (HTTPS) |
+| `AGENT_SSL` | `1` | Enable SSL on agent port (`1` = on) |
+| `SSL_CERTFILE` | (auto) | Path to SSL certificate |
+| `SSL_KEYFILE` | (auto) | Path to SSL private key |
+| `PATCHPILOT_ADMIN_KEY` | (auto) | Admin key for legacy auth and Fernet encryption |
 | `PATCHPILOT_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:8000` | CORS origins |
-| `SSL_CERTFILE` | *(empty)* | Path to SSL certificate (enables HTTPS) |
-| `SSL_KEYFILE` | *(empty)* | Path to SSL private key |
 
 ### SSL / HTTPS
 
-SSL can be set up entirely from the **Settings** page in the web UI:
+SSL is enabled by default with a self-signed certificate generated during installation. Both the UI port and agent port can independently have SSL enabled.
 
-1. **Generate Certificate** — creates a self-signed cert under `/opt/patchpilot/ssl/`
+From the **Settings** page in the web UI you can:
+
+1. **Generate Certificate** — creates a self-signed cert (1-10 year validity) under `/opt/patchpilot/ssl/`
 2. **Deploy to Agents** — pushes the CA cert to all agents via the job system (agents are auto-updated first)
-3. **Enable HTTPS** — activates SSL and restarts the server; agents migrate automatically
+3. **Enable/Disable HTTPS** — activates or deactivates SSL; agents migrate automatically via `canonical_url`
 
-No SSH access to VMs required. The agent stores the CA bundle at `/etc/patchpilot/ca.pem` and trusts HTTPS connections automatically.
+No SSH access to VMs required. The agent stores the CA bundle at `/etc/patchpilot/ca.pem` and trusts HTTPS connections automatically. The agent enforces TLS 1.2 as the minimum protocol version.
+
+### Dual-Port Architecture
+
+The server runs two uvicorn processes on separate ports:
+
+- **UI port** (default 8443): Serves the web dashboard, settings, auth, static files
+- **Agent port** (default 8050): Serves agent registration, heartbeat, jobs, file downloads
+
+Endpoint routing is enforced by middleware — agent-only endpoints return 404 on the UI port and vice versa. If both ports are configured to the same value, the server runs a single process in backward-compatible single-port mode.
 
 ---
 
@@ -186,6 +205,8 @@ sudo journalctl -u patchpilot -f          # Live logs
 sudo systemctl restart patchpilot
 sudo systemctl stop patchpilot
 ```
+
+The service is enabled by default (`systemctl enable`), so it starts automatically on boot.
 
 ### Agent (on each VM)
 
@@ -226,7 +247,8 @@ journalctl -u patchpilot -n 50 --no-pager
 Common causes:
 - Port already in use: `sudo ss -tlnp | grep <port>`
 - Missing dependencies: `sudo /opt/patchpilot-venv/bin/pip install -r /opt/patchpilot/server/requirements.txt`
-- Permission issue: `sudo chown patchpilot:patchpilot /opt/patchpilot/server/`
+- Permission issue: `sudo chown -R patchpilot:patchpilot /opt/patchpilot/`
+- SSL cert missing: Check that `/opt/patchpilot/ssl/cert.pem` and `key.pem` exist
 
 ### Agent not appearing on dashboard
 
@@ -235,9 +257,10 @@ journalctl -u patchpilot-agent -n 30 --no-pager
 ```
 
 Common causes:
-- Wrong server URL in `/etc/patchpilot/agent.conf`
-- Registration key expired — generate a new one from Deploy page
-- Firewall blocking the connection: `curl http://<server-ip>:<port>/metrics`
+- Wrong server URL in `/etc/patchpilot/agent.conf` (should point to the agent port, e.g., `https://192.168.1.10:8050`)
+- Registration key expired — generate a new one from the Deploy page
+- Firewall blocking the connection: `curl -k https://<server-ip>:<agent-port>/api/ping`
+- SSL certificate not trusted: Check `/etc/patchpilot/ca.pem` exists and `PATCHPILOT_CA_BUNDLE` is set in `agent.conf`
 
 ### Agent re-registering with new ID on every restart
 
@@ -248,7 +271,9 @@ ls -la /etc/patchpilot/state.json
 # Must exist and be owned by root (600)
 ```
 
-### "Invalid or missing admin key" in browser
+### "Authentication required" in browser
+
+Log in with your username and password. If you have not created a user account yet, use the legacy admin key:
 
 ```bash
 # Get current key from log
@@ -271,7 +296,7 @@ systemctl cat patchpilot-agent | grep User
 ### Config file conflict during patching
 
 PatchPilot uses `--force-confdef --force-confold`:
-- Unmodified config files → updated to new version
-- Manually modified config files → kept as-is
+- Unmodified config files are updated to the new version
+- Manually modified config files are kept as-is
 
 When a config file is kept, the job output includes a warning and a Telegram notification is sent (if configured). Check the job log for details on which config file was affected.

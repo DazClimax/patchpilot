@@ -4,19 +4,41 @@ Complete reference for all API endpoints.
 
 ## Base URL
 
+The server runs on two ports (configurable via `.env`):
+
+| Port | Default | Purpose |
+|------|---------|---------|
+| UI port (`PORT`) | 8443 | Web dashboard, settings, auth, static files |
+| Agent port (`AGENT_PORT`) | 8050 | Agent registration, heartbeat, jobs, file downloads |
+
 ```
-http://<server-host>:<port>
+https://<server-host>:<UI-port>      # Web UI endpoints
+https://<server-host>:<agent-port>   # Agent endpoints
 ```
+
+If both ports are the same, all endpoints are served on a single port. Both ports can independently have SSL enabled or disabled.
+
+Shared endpoints available on both ports: `/api/ping`, `/api/server-time`.
 
 ---
 
 ## Authentication
 
-PatchPilot uses two authentication mechanisms:
+PatchPilot supports two authentication mechanisms for web UI endpoints.
 
-### Admin Key (Web UI Endpoints)
+### Session Auth (Primary)
 
-All endpoints under `/api/dashboard`, `/api/schedules`, and most `/api/agents/...` management endpoints require the header:
+Users log in with username + password via `POST /api/auth/login`, which returns a session token. All subsequent requests include:
+
+```
+Authorization: Bearer <session-token>
+```
+
+Sessions expire after 24 hours. Three roles control access: `admin`, `user`, `readonly`.
+
+### Legacy Admin Key
+
+For backward compatibility, the `x-admin-key` header is accepted on all web UI endpoints and treated as an `admin` session:
 
 ```
 x-admin-key: <PATCHPILOT_ADMIN_KEY>
@@ -38,20 +60,75 @@ New agents must include a time-limited registration key:
 x-register-key: <key>
 ```
 
-Registration keys are generated on-demand from the Deploy page and expire after 5 minutes.
+Registration keys are generated on-demand from the Deploy page and expire after 5 minutes. The key is SHA-256 hashed in the database.
 
 **Token Flow:**
 ```
 1. Admin generates registration key via UI (Deploy page)
-2. Agent  → POST /api/agents/register  (Header: x-register-key)
-3. Server → { agent_id, token }
+2. Agent  -> POST /api/agents/register  (Header: x-register-key)
+3. Server -> { agent_id, token }
 4. Agent stores token in /etc/patchpilot/state.json (chmod 600)
-5. Agent  → POST /api/agents/{id}/heartbeat  (Header: x-token)
-6. Agent  → GET  /api/agents/{id}/jobs       (Header: x-token)
-7. Agent  → POST /api/agents/{id}/jobs/{id}/result (Header: x-token)
+5. Agent  -> POST /api/agents/{id}/heartbeat  (Header: x-token)
+6. Agent  -> GET  /api/agents/{id}/jobs       (Header: x-token)
+7. Agent  -> POST /api/agents/{id}/jobs/{id}/result (Header: x-token)
 ```
 
 Re-registration of an existing agent ID requires the current valid token (not the registration key).
+
+---
+
+## Auth Endpoints
+
+### POST /api/auth/login
+
+Authenticate with username and password. Returns a session token.
+
+**Auth:** None (public)
+
+**Request Body (JSON):**
+
+| Field      | Type   | Required | Description |
+|------------|--------|----------|-------------|
+| `username` | string | yes      | Username |
+| `password` | string | yes      | Password (max 1024 chars) |
+
+**Response (200):**
+
+```json
+{
+  "token": "a1b2c3d4e5f6...",
+  "role": "admin",
+  "username": "admin"
+}
+```
+
+---
+
+### POST /api/auth/logout
+
+Invalidate the current session.
+
+**Auth:** `Authorization: Bearer <token>`
+
+**Response (200):**
+
+```json
+{ "status": "ok" }
+```
+
+---
+
+### GET /api/auth/me
+
+Return the current user's info.
+
+**Auth:** Any role (admin, user, readonly)
+
+**Response (200):**
+
+```json
+{ "username": "admin", "role": "admin" }
+```
 
 ---
 
@@ -109,12 +186,13 @@ Sends current system status. Called every 60 seconds by the agent.
 ```json
 {
   "status": "ok",
+  "canonical_url": "https://192.168.1.10:8050",
   "canonical_port": "8050",
-  "canonical_id": "new-name"
+  "canonical_id": "my-vm"
 }
 ```
 
-`canonical_port` signals port migration. `canonical_id` signals an agent rename.
+`canonical_url` signals a full URL migration (protocol + host + port). `canonical_port` is the legacy field for port-only migration. `canonical_id` signals an agent rename.
 
 ---
 
@@ -136,7 +214,7 @@ Returns all pending jobs. Jobs are marked `running` server-side when fetched.
 ]
 ```
 
-Job types: `patch`, `reboot`, `autoremove`, `update_agent`
+Job types: `patch`, `reboot`, `autoremove`, `update_agent`, `deploy_ssl`
 
 ---
 
@@ -155,15 +233,71 @@ Reports job result.
 
 ---
 
-## Web API (Admin)
+## Agent File Downloads
 
-All following endpoints require the header `x-admin-key: <PATCHPILOT_ADMIN_KEY>`.
+These endpoints serve files needed by agents. Available on the **agent port** only.
+
+### GET /agent/agent.py
+
+Download the latest agent script.
+
+### GET /agent/agent.py.sha256
+
+Download the SHA-256 checksum for agent.py.
+
+### GET /agent/install.sh
+
+Download the agent installer script.
+
+### GET /agent/ca.pem
+
+Download the server's SSL CA certificate (for agent trust of self-signed certs).
+
+### GET /agent/ca.pem.sha256
+
+Download the SHA-256 checksum for ca.pem.
+
+---
+
+## Web API
+
+All following endpoints require session auth (`Authorization: Bearer <token>`) or legacy admin key (`x-admin-key`). Role requirements are noted per endpoint.
+
+---
+
+### GET /api/ping
+
+Unauthenticated liveness check. Available on both ports.
+
+**Response (200):**
+
+```json
+{ "status": "ok", "utc": "2026-03-25T12:00:00+00:00" }
+```
+
+---
+
+### GET /api/server-time
+
+Return the server's local time and timezone. No auth required.
+
+**Response (200):**
+
+```json
+{
+  "local": "2026-03-25 14:00:00",
+  "tz": "CET",
+  "iso": "2026-03-25T14:00:00+01:00"
+}
+```
 
 ---
 
 ### GET /api/dashboard
 
 Returns all agents with aggregated statistics.
+
+**Auth:** admin, user, or readonly
 
 **Response (200):**
 
@@ -201,15 +335,35 @@ An agent is considered "online" when `seconds_ago < 120`.
 
 ---
 
+### GET /api/agents/{agent_id}
+
+Returns detailed info for a single agent including packages and recent jobs.
+
+**Auth:** admin, user, or readonly
+
+**Response (200):**
+
+```json
+{
+  "agent": { ... },
+  "packages": [ ... ],
+  "jobs": [ ... ]
+}
+```
+
+---
+
 ### POST /api/agents/{agent_id}/jobs
 
 Creates a new job for an agent.
+
+**Auth:** admin or user
 
 **Request Body (JSON):**
 
 | Field    | Type   | Description |
 |----------|--------|-------------|
-| `type`   | string | `"patch"`, `"reboot"`, `"autoremove"`, or `"update_agent"` |
+| `type`   | string | `"patch"`, `"reboot"`, `"autoremove"`, `"update_agent"`, or `"deploy_ssl"` |
 | `params` | object | Optional parameters |
 
 ---
@@ -218,17 +372,35 @@ Creates a new job for an agent.
 
 Cancels a pending or running job.
 
+**Auth:** admin or user
+
 **Response (200):**
 
 ```json
-{ "status": "cancelled" }
+{ "status": "ok" }
 ```
 
 ---
 
-### PUT /api/agents/{agent_id}/rename
+### POST /api/agents/{agent_id}/jobs/cancel-pending
 
-Renames an agent. The agent picks up the new ID on its next heartbeat via `canonical_id`.
+Cancels all pending jobs for an agent.
+
+**Auth:** admin or user
+
+**Response (200):**
+
+```json
+{ "status": "ok", "cancelled": 3 }
+```
+
+---
+
+### PATCH /api/agents/{agent_id}/rename
+
+Renames an agent. The agent picks up the new ID on its next heartbeat via `canonical_id`. All references (jobs, packages, schedules) are updated atomically.
+
+**Auth:** admin
 
 **Request Body (JSON):**
 
@@ -238,9 +410,25 @@ Renames an agent. The agent picks up the new ID on its next heartbeat via `canon
 
 ---
 
+### PATCH /api/agents/{agent_id}/tags
+
+Set tags for an agent (comma-separated string).
+
+**Auth:** admin or user
+
+**Request Body (JSON):**
+
+| Field  | Type   | Description |
+|--------|--------|-------------|
+| `tags` | string | Comma-separated tags, max 512 chars total |
+
+---
+
 ### POST /api/agents/update-all
 
 Queues `update_agent` jobs for all agents that have been seen within the last 24 hours.
+
+**Auth:** admin
 
 **Response (200):**
 
@@ -254,11 +442,15 @@ Queues `update_agent` jobs for all agents that have been seen within the last 24
 
 Deletes an agent and all associated packages and jobs (CASCADE).
 
+**Auth:** admin
+
 ---
 
 ### POST /api/register-key
 
 Generates a new registration key valid for 5 minutes.
+
+**Auth:** admin
 
 **Response (200):**
 
@@ -271,15 +463,29 @@ Generates a new registration key valid for 5 minutes.
 
 ---
 
+### GET /api/register-key
+
+Returns the current registration key if one is active, or null.
+
+**Auth:** admin
+
+---
+
+## Schedules
+
 ### GET /api/schedules
 
 Returns all configured schedules and the agent list.
+
+**Auth:** admin or user
 
 ---
 
 ### POST /api/schedules
 
 Creates a new schedule.
+
+**Auth:** admin
 
 **Request Body (JSON):**
 
@@ -294,7 +500,25 @@ Creates a new schedule.
 
 ### PATCH /api/schedules/{sid}
 
-Toggle or update a schedule.
+Toggle a schedule on/off.
+
+**Auth:** admin
+
+---
+
+### PUT /api/schedules/{sid}
+
+Update a schedule (name, cron, action, target).
+
+**Auth:** admin
+
+---
+
+### POST /api/schedules/{sid}/run
+
+Manually trigger a schedule now.
+
+**Auth:** admin or user
 
 ---
 
@@ -302,21 +526,207 @@ Toggle or update a schedule.
 
 Deletes a schedule.
 
+**Auth:** admin
+
 ---
+
+## Settings
 
 ### GET /api/settings
 
-Returns current server settings (Telegram, SMTP, port).
+Returns current server settings. Sensitive values (`smtp_password`, `telegram_token`) are replaced with `"***"`. Also includes computed `internal_url`, `agent_url`, and `ssl_enabled` fields.
+
+**Auth:** admin, user, or readonly
 
 ---
 
-### PUT /api/settings
+### POST /api/settings
 
-Updates server settings.
+Updates server settings. Values equal to `"***"` are kept unchanged (masked fields are not overwritten). Sensitive values are encrypted with Fernet (AES-128-CBC + HMAC-SHA256) before storing in the database, keyed from `PATCHPILOT_ADMIN_KEY` via PBKDF2. Unknown keys are rejected.
+
+**Auth:** admin
+
+**Allowed keys:** `telegram_token`, `telegram_chat_id`, `telegram_enabled`, `telegram_notify_offline`, `telegram_notify_patches`, `telegram_notify_failures`, `telegram_notify_success`, `email_enabled`, `smtp_host`, `smtp_port`, `smtp_security`, `smtp_user`, `smtp_password`, `smtp_to`, `notify_offline`, `notify_offline_minutes`, `notify_patches`, `notify_failures`, `server_port`, `agent_port`, `agent_ssl`
+
+Port or SSL changes trigger a server restart automatically.
+
+---
+
+### POST /api/settings/test/{channel}
+
+Test a notification channel. Channel is `telegram` or `email`.
+
+**Auth:** admin
+
+---
+
+## SSL Management
+
+### POST /api/settings/generate-cert
+
+Generate a self-signed SSL certificate (RSA 2048-bit) with configurable validity.
+
+**Auth:** admin
+
+**Request Body (JSON, optional):**
+
+| Field   | Type | Default | Description |
+|---------|------|---------|-------------|
+| `years` | int  | 3       | Certificate validity (1-10 years) |
+
+**Response (200):**
+
+```json
+{
+  "status": "generated",
+  "certfile": "/opt/patchpilot/ssl/cert.pem",
+  "keyfile": "/opt/patchpilot/ssl/key.pem",
+  "info": { "subject": "CN=hostname", "expires": "Mar 25 2029", "path": "..." },
+  "restart_pending": false
+}
+```
+
+---
+
+### POST /api/settings/ssl-enable
+
+Enable SSL with the specified certificate and key paths. Paths must be within the SSL directory. Triggers a server restart.
+
+**Auth:** admin
+
+**Request Body (JSON):**
+
+| Field      | Type   | Description |
+|------------|--------|-------------|
+| `certfile` | string | Path to SSL certificate (must be in `/opt/patchpilot/ssl/`) |
+| `keyfile`  | string | Path to SSL private key (must be in `/opt/patchpilot/ssl/`) |
+
+---
+
+### POST /api/settings/ssl-disable
+
+Disable SSL and restart the server on plain HTTP.
+
+**Auth:** admin
+
+---
+
+### GET /api/settings/ssl-info
+
+Return current SSL status and certificate info.
+
+**Auth:** admin
+
+**Response (200):**
+
+```json
+{
+  "enabled": true,
+  "certfile": "/opt/patchpilot/ssl/cert.pem",
+  "keyfile": "/opt/patchpilot/ssl/key.pem",
+  "info": { "subject": "CN=hostname", "expires": "Mar 25 2029", "path": "..." }
+}
+```
+
+---
+
+### POST /api/settings/deploy-ssl
+
+Deploy the CA certificate to all agents via the job system. Creates chained `update_agent` + `deploy_ssl` jobs per agent. Returns a batch ID for tracking progress.
+
+**Auth:** admin
+
+**Request Body (JSON, optional):**
+
+| Field         | Type   | Description |
+|---------------|--------|-------------|
+| `retry_batch` | string | Previous batch ID to retry only failed agents |
+
+**Response (200):**
+
+```json
+{ "status": "deployed", "agent_count": 5, "batch_id": "a1b2c3d4e5f6" }
+```
+
+---
+
+### GET /api/settings/deploy-ssl/status?batch={batch_id}
+
+Return progress of SSL deployment for a specific batch. Shows per-agent status (updating, deploying, done, failed).
+
+**Auth:** admin
+
+---
+
+## User Management
+
+### GET /api/users
+
+List all users.
+
+**Auth:** admin
+
+**Response (200):**
+
+```json
+{
+  "users": [
+    { "id": 1, "username": "admin", "role": "admin", "created": "2026-03-20 10:00:00" }
+  ]
+}
+```
+
+---
+
+### POST /api/users
+
+Create a new user.
+
+**Auth:** admin
+
+**Request Body (JSON):**
+
+| Field      | Type   | Required | Description |
+|------------|--------|----------|-------------|
+| `username` | string | yes      | Username (max 64 chars) |
+| `password` | string | yes      | Password (4-1024 chars) |
+| `role`     | string | no       | `"admin"`, `"user"`, or `"readonly"` (default: `"user"`) |
+
+---
+
+### PATCH /api/users/{user_id}
+
+Update a user's role or password. Active sessions for the user are invalidated immediately.
+
+**Auth:** admin
+
+---
+
+### DELETE /api/users/{user_id}
+
+Delete a user. Active sessions are invalidated.
+
+**Auth:** admin
 
 ---
 
 ## Monitoring
+
+### GET /api/alerts
+
+Return all VMs that have been offline for more than 5 minutes.
+
+**Auth:** admin, user, or readonly
+
+---
+
+### GET /api/status/badge
+
+Return a shields.io-style SVG badge showing X/Y online agents.
+
+**Auth:** admin, user, or readonly
+
+---
 
 ### GET /metrics
 
@@ -338,10 +748,10 @@ patchpilot_jobs_total{status="failed"} 2
 | HTTP Status | Meaning |
 |-------------|---------|
 | `200` | Success |
-| `401` | Invalid or missing token / admin key |
-| `403` | Re-registration requires current token / invalid registration key |
+| `401` | Invalid or missing token / authentication required |
+| `403` | Insufficient permissions / re-registration requires current token |
 | `404` | Agent not found |
-| `409` | Agent ID already exists (registration) |
-| `422` | Invalid request body |
+| `409` | Agent ID or username already exists |
+| `422` | Invalid request body or parameters |
 | `429` | Rate limit exceeded |
 | `500` | Internal server error |

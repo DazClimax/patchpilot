@@ -15,6 +15,9 @@ echo "[deploy] Syncing agent..."
 rsync -av --exclude='__pycache__' --exclude='*.pyc' \
   agent/ ${PI}:/opt/patchpilot/agent/
 
+echo "[deploy] Installing pip requirements..."
+ssh ${PI} "/opt/patchpilot-venv/bin/pip install --quiet -r /opt/patchpilot/server/requirements.txt"
+
 echo "[deploy] Installing service file..."
 scp patchpilot.service ${PI}:/etc/systemd/system/patchpilot.service
 # Ensure required env vars are set (add defaults if missing)

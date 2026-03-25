@@ -68,6 +68,9 @@ else
   echo "[patchpilot] Existing SSL certificate found — keeping it."
 fi
 
+# Generate admin key (used for API auth and Fernet encryption of secrets)
+ADMIN_KEY="$(openssl rand -hex 32)"
+
 # Environment file (only create if missing — never overwrite existing config)
 if [ ! -f "$INSTALL_DIR/.env" ]; then
   cat > "$INSTALL_DIR/.env" <<EOF
@@ -76,10 +79,16 @@ AGENT_PORT=$AGENT_PORT
 AGENT_SSL=1
 SSL_CERTFILE=$SSL_DIR/cert.pem
 SSL_KEYFILE=$SSL_DIR/key.pem
+PATCHPILOT_ADMIN_KEY=$ADMIN_KEY
 EOF
   chmod 600 "$INSTALL_DIR/.env"
   echo "Created $INSTALL_DIR/.env (HTTPS enabled on both ports)"
 else
+  # Ensure PATCHPILOT_ADMIN_KEY exists (needed for Fernet encryption)
+  if ! grep -q '^PATCHPILOT_ADMIN_KEY=' "$INSTALL_DIR/.env"; then
+    echo "PATCHPILOT_ADMIN_KEY=$ADMIN_KEY" >> "$INSTALL_DIR/.env"
+    echo "Added PATCHPILOT_ADMIN_KEY to existing .env"
+  fi
   echo "Keeping existing $INSTALL_DIR/.env"
 fi
 
