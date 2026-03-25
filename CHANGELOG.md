@@ -7,9 +7,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-03-25
+
 ### Changed
-- Dashboard: Updates column shows spinning indicator when a patch job is pending/running instead of the count
-- Dashboard API: last_job now includes pending/running jobs (not just completed)
+- Dashboard: "Update All Agents" replaced with "Patch All VMs" — only targets VMs with pending updates
+- Dashboard: Patch All button highlighted (primary variant) when updates available
+- Dashboard: Updates column shows spinning indicator when a patch job is pending/running
+- Dashboard: last_job API now includes pending/running jobs (not just completed)
+- Deploy page: oneliner and full script visible immediately with `<KEY>` placeholder
+- Deploy page: active but hidden register key shows expiry countdown instead of hash
+
+### Fixed
+- Register key SHA-256 hash was leaked to UI on page reload (now returns `key: null`)
+- Double spinner on job history "Running" status (removed redundant ⟳ character)
 
 ## [1.0.1] - 2026-03-25
 
