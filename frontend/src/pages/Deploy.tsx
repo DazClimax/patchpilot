@@ -528,10 +528,10 @@ export function DeployPage() {
 
       {/* Step 3 — One-liner */}
       <div style={{ marginBottom: '28px' }}>
-        <SectionHeader right={oneliner && registerKey ? <CopyButton text={oneliner} label="Copy Command" /> : undefined}>
+        <SectionHeader right={oneliner ? <CopyButton text={oneliner} label="Copy Command" /> : undefined}>
           3. Quick Install (One-Liner)
         </SectionHeader>
-        {oneliner && registerKey ? (
+        {oneliner ? (
           <>
             <div style={{
               background: 'rgba(1,8,10,0.95)',
