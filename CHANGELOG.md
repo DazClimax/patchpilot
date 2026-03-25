@@ -9,6 +9,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - Dashboard: Updates column shows spinning indicator when a patch job is pending/running instead of the count
+- Dashboard API: last_job now includes pending/running jobs (not just completed)
 
 ## [1.0.1] - 2026-03-25
 

@@ -993,7 +993,7 @@ def api_dashboard():
                FROM jobs j
                INNER JOIN (
                    SELECT agent_id, MAX(id) as max_id
-                   FROM jobs WHERE status IN ('done','failed')
+                   FROM jobs
                    GROUP BY agent_id
                ) latest ON j.id = latest.max_id"""
         ).fetchall()
