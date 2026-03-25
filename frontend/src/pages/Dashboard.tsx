@@ -626,7 +626,7 @@ export function Dashboard() {
       <PageHeader right={
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {canAct && <Button
-            variant="ghost"
+            variant={patchableAgents.length > 0 ? 'primary' : 'ghost'}
             size="sm"
             disabled={bulkBusy || patchableAgents.length === 0}
             onClick={() => setConfirm({
