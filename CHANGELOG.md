@@ -7,6 +7,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-03-25
+
+### Added
+- One-liner server installation: `curl -fsSL .../setup.sh | sudo bash`
+- `setup.sh` — automated installer (deps, Node.js 20, clone, build, install)
+- README: one-liner + manual install instructions
+
+### Changed
+- `deploy.sh` installs pip requirements before restart
+- `install-server.sh` generates PATCHPILOT_ADMIN_KEY if missing
+
 ## [1.0.2] - 2026-03-25
 
 ### Changed

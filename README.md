@@ -18,16 +18,28 @@ Pull-based agent model — lightweight agents on each VM poll the server for job
 
 ## Quick Start
 
-### Server
+### Server (One-liner)
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/setup.sh | sudo bash
+```
+
+Custom ports:
+```bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
+```
+
+This installs all dependencies (git, Node.js 20, Python 3, OpenSSL), builds the frontend, generates a 3-year self-signed SSL certificate, and starts PatchPilot on two ports: UI (default 8443) and Agent API (default 8050).
+
+### Server (Manual)
+
+```bash
+apt-get install -y git curl python3 python3-venv openssl nodejs npm
 git clone https://github.com/DazClimax/patchpilot.git
 cd patchpilot
 cd frontend && npm install && npm run build && cd ..
 sudo bash install-server.sh
 ```
-
-The installer creates a system user, sets up systemd (enabled for boot), generates a 3-year self-signed SSL certificate, and starts PatchPilot on two ports: UI (default 8443) and Agent API (default 8050).
 
 ### Agent (on each VM)
 
