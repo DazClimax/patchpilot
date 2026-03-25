@@ -1031,11 +1031,12 @@ def api_register_key_generate():
 
 @app.get("/api/register-key", dependencies=[Depends(require_role("admin"))])
 def api_register_key_status():
-    """Check if a register key is currently active."""
+    """Check if a register key is currently active.
+    Note: key is hashed in DB — we never return the hash to the UI."""
     key, remaining = _get_active_register_key()
     if key is None:
         return {"active": False, "key": None, "expires_in": 0}
-    return {"active": True, "key": key, "expires_in": int(remaining)}
+    return {"active": True, "key": None, "expires_in": int(remaining)}
 
 
 @app.get("/api/ping")

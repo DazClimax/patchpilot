@@ -168,8 +168,10 @@ function RegisterKeyWidget({ registerKey, setRegisterKey, expiresIn, setExpiresI
           </>
         ) : (
           <>
-            <span style={{ fontSize: '12px', color: colors.textMuted, fontFamily: 'monospace' }}>
-              No active key — generate one to register new agents
+            <span style={{ fontSize: '12px', color: expiresIn > 0 ? colors.warn : colors.textMuted, fontFamily: 'monospace' }}>
+              {expiresIn > 0
+                ? `Active key expires in ${Math.floor(expiresIn / 60)}:${String(expiresIn % 60).padStart(2, '0')} — generate new to reveal`
+                : 'No active key — generate one to register new agents'}
             </span>
             <Button variant="primary" size="sm" onClick={generate} disabled={generating}>
               {generating ? '⟳ Generating…' : '🔑 Generate Key'}
@@ -380,6 +382,10 @@ export function DeployPage() {
       api.registerKeyStatus().then(r => {
         if (r.active && r.key) {
           setRegisterKey(r.key)
+          setExpiresIn(r.expires_in)
+        } else if (r.active) {
+          // Key is hashed in DB — plaintext no longer available
+          setRegisterKey('')
           setExpiresIn(r.expires_in)
         }
       }).catch(() => {}),
