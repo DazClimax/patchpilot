@@ -414,7 +414,16 @@ function AgentRow({
         </div>
       </td>
       <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-        {(agent.pending_count ?? 0) > 0 ? (
+        {agent.last_job_type === 'patch' && (agent.last_job_status === 'pending' || agent.last_job_status === 'running') ? (
+          <span style={{
+            display: 'inline-block',
+            width: '14px', height: '14px',
+            border: `2px solid ${colors.warn}44`,
+            borderTopColor: colors.warn,
+            borderRadius: '50%',
+            animation: 'pp-spin 0.8s linear infinite',
+          }} title="Patching in progress…" />
+        ) : (agent.pending_count ?? 0) > 0 ? (
           <Badge color={colors.warn}>{agent.pending_count}</Badge>
         ) : (
           <span style={{ color: colors.success, fontSize: '13px', textShadow: glow(colors.success, 3) }}>✓</span>
