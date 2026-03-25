@@ -14,23 +14,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - Dashboard: Patch All button highlighted (primary variant) when updates available
 - Dashboard: Updates column shows spinning indicator when a patch job is pending/running
 - Dashboard: last_job API now includes pending/running jobs (not just completed)
-- Deploy page: oneliner and full script visible immediately with `<KEY>` placeholder
-- Deploy page: active but hidden register key shows expiry countdown instead of hash
 
 ### Fixed
-- Register key SHA-256 hash was leaked to UI on page reload (now returns `key: null`)
 - Double spinner on job history "Running" status (removed redundant ⟳ character)
 
 ## [1.0.1] - 2026-03-25
 
 ### Changed
-- Dashboard "Update All Agents" button replaced with "Patch All VMs" — only targets VMs with pending updates
-- Patch All button highlighted (primary variant) when updates are available, ghost when none
-- Register key no longer leaked as hash on page reload — shows "Active key expires in X:XX" instead
-- Deploy page shows oneliner and full script immediately with `<KEY>` placeholder (no double-generate needed)
+- Deploy page: oneliner and full script visible immediately with `<KEY>` placeholder (no double-generate needed)
+- Deploy page: active but hidden register key shows expiry countdown instead of hash
 
 ### Fixed
-- Register key hash was returned to UI on GET /api/register-key (now returns `key: null`)
+- Register key SHA-256 hash was leaked to UI on page reload (GET /api/register-key now returns `key: null`)
 
 ## [1.0.0] - 2026-03-25
 
