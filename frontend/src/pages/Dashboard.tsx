@@ -595,11 +595,12 @@ export function Dashboard() {
     }
   }, [])
 
-  const updateAllAgents = async () => {
+  const patchableAgents = (data?.agents ?? []).filter(a => (a.pending_count ?? 0) > 0)
+
+  const patchAll = async () => {
     setBulkBusy(true)
     try {
-      const ids = (data?.agents ?? []).map(a => a.id)
-      await Promise.allSettled(ids.map(id => api.createJob(id, 'update_agent')))
+      await Promise.allSettled(patchableAgents.map(a => api.createJob(a.id, 'patch')))
       load()
     } catch (e) {
       console.error(e)
@@ -627,14 +628,14 @@ export function Dashboard() {
           {canAct && <Button
             variant="ghost"
             size="sm"
-            disabled={bulkBusy || agents.length === 0}
+            disabled={bulkBusy || patchableAgents.length === 0}
             onClick={() => setConfirm({
-              title: 'Update All Agents',
-              message: `Update the PatchPilot agent on all ${agents.length} VMs to the latest version? Each agent will restart automatically.`,
-              onConfirm: () => { setConfirm(null); updateAllAgents() },
+              title: 'Patch All VMs',
+              message: `Install pending updates on ${patchableAgents.length} VM${patchableAgents.length === 1 ? '' : 's'}? This runs apt-get upgrade on each.`,
+              onConfirm: () => { setConfirm(null); patchAll() },
             })}
           >
-            {bulkBusy ? '⟳ Updating…' : '⟳ Update All Agents'}
+            {bulkBusy ? '⟳ Patching…' : `⟳ Patch All (${patchableAgents.length})`}
           </Button>}
           {loading && (
             <span style={{
