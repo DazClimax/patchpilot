@@ -145,6 +145,17 @@ export function VmDetail() {
     }
   }
 
+  const acknowledgeConfigReview = async () => {
+    if (!id || busy) return
+    setBusy(true)
+    try {
+      await api.acknowledgeConfigReview(id)
+      setTimeout(load, 1000)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const removeAgent = () => {
     if (!id) return
     setConfirm({
@@ -247,7 +258,7 @@ export function VmDetail() {
             size="sm"
             onClick={() => setConfirm({
               title: 'Autoremove',
-              message: `Run "apt autoremove" on "${agent?.hostname}" to clean up unused packages?`,
+              message: `Run package cleanup on "${agent?.hostname}" to remove unused dependencies?`,
               onConfirm: () => { setConfirm(null); triggerJob('autoremove') },
             })}
             disabled={busy}
@@ -348,6 +359,7 @@ export function VmDetail() {
         {[
           { label: 'IP Address', value: agent.ip ?? '—', accent: colors.primary },
           { label: 'OS',         value: agent.os_pretty ?? '—', accent: colors.primaryDim },
+          { label: 'Package Manager', value: agent.package_manager ?? '—', accent: colors.primaryDim },
           { label: 'Kernel',     value: agent.kernel ?? '—', accent: colors.primaryDim },
           { label: 'Arch',       value: agent.arch ?? '—', accent: colors.primaryDim },
           { label: 'Uptime',     value: fmtUptime(agent.uptime_seconds), accent: colors.primaryDim },
@@ -439,6 +451,60 @@ export function VmDetail() {
           <span>This VM requires a reboot to activate installed updates.</span>
         </div>
       )}
+
+      {agent.config_review_required ? (
+        <div style={{
+          border: `1px solid ${colors.warn}55`,
+          background: `${colors.warn}0c`,
+          padding: '14px 18px',
+          marginBottom: '24px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '16px',
+          flexWrap: 'wrap',
+          fontSize: '12px',
+          color: colors.warn,
+          textShadow: glow(colors.warn, 3),
+          fontFamily: "'Electrolize', monospace",
+          letterSpacing: '0.06em',
+          position: 'relative',
+          overflow: 'hidden',
+        }}>
+          <div style={{
+            position: 'absolute',
+            left: 0, top: 0, bottom: 0,
+            width: '3px',
+            background: `linear-gradient(180deg, ${colors.warn}, ${colors.warn}44)`,
+            boxShadow: `0 0 8px ${colors.warn}`,
+          }} />
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', flex: '1 1 360px' }}>
+            <span style={{ fontSize: '16px', marginLeft: '6px' }}>!</span>
+            <div>
+              <div style={{ marginBottom: '6px' }}>
+                This VM has package config changes that should be reviewed manually.
+              </div>
+              {agent.config_review_note ? (
+                <pre style={{
+                  margin: 0,
+                  whiteSpace: 'pre-wrap',
+                  fontSize: '11px',
+                  lineHeight: 1.5,
+                  color: colors.text,
+                  fontFamily: 'monospace',
+                }}>
+                  {agent.config_review_note}
+                </pre>
+              ) : null}
+            </div>
+          </div>
+          {canAct ? (
+            <Button size="sm" variant="ghost" onClick={acknowledgeConfigReview} disabled={busy}>
+              ✓ Reviewed
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* Pending updates */}
       <div style={{ marginBottom: '28px' }}>

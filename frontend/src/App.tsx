@@ -12,6 +12,7 @@ import { LoginPage } from './pages/Login'
 import { auth, Role } from './api/client'
 import { ToastProvider } from './components/Toast'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { UiEffectsProvider } from './effects'
 
 export const UserContext = createContext<{ role: Role; username: string }>({
   role: 'readonly',
@@ -45,6 +46,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
+    <UiEffectsProvider>
     <ToastProvider>
     <BrowserRouter>
       <UserContext.Provider value={{ role, username }}>
@@ -73,6 +75,7 @@ export default function App() {
       </UserContext.Provider>
     </BrowserRouter>
     </ToastProvider>
+    </UiEffectsProvider>
     </ErrorBoundary>
   )
 }

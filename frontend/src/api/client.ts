@@ -65,6 +65,7 @@ export interface Agent {
   os_pretty: string | null
   kernel: string | null
   arch: string | null
+  package_manager: string | null
   reboot_required: number
   pending_count: number
   last_seen: string | null
@@ -75,6 +76,8 @@ export interface Agent {
   last_job_status: string | null
   last_job_finished: string | null
   protocol: string | null
+  config_review_required: number
+  config_review_note: string | null
 }
 
 export interface Package {
@@ -134,6 +137,9 @@ export interface Settings {
   ssl_certfile: string
   ssl_keyfile: string
   ssl_enabled: boolean
+  ui_audio_enabled: string
+  ui_audio_volume: string
+  ui_login_animation_enabled: string
 }
 
 export interface User {
@@ -141,6 +147,10 @@ export interface User {
   username: string
   role: Role
   created: string
+}
+
+export interface DeployBootstrap {
+  ca_pem_b64: string
 }
 
 export const api = {
@@ -185,6 +195,9 @@ export const api = {
 
   deleteAgent: (id: string) =>
     req('DELETE', `/agents/${id}`),
+
+  acknowledgeConfigReview: (id: string) =>
+    req<{ status: string }>('POST', `/agents/${id}/config-review/ack`),
 
   // Schedules
   schedules: () =>
@@ -242,6 +255,9 @@ export const api = {
 
   generateRegisterKey: () =>
     req<{ key: string; expires_in: number }>('POST', '/register-key'),
+
+  deployBootstrap: () =>
+    req<DeployBootstrap>('GET', '/deploy/bootstrap'),
 
   renameAgent: (id: string, newId: string) =>
     req<{ status: string; old_id: string; new_id: string }>('PATCH', `/agents/${id}/rename`, { new_id: newId }),

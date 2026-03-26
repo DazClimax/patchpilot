@@ -5,6 +5,7 @@ import {
   AnimatorGeneralProvider,
   Dots,
   MovingLines,
+  useBleeps,
 } from '@arwes/react'
 import { colors, glow, glowText, glowStrong, globalKeyframes, scrollbarCSS } from '../theme'
 import { auth, Role } from '../api/client'
@@ -25,6 +26,7 @@ const ROLE_LEVELS: Record<Role, number> = { readonly: 0, user: 1, admin: 2 }
 
 function NavItem({ to, label, icon }: { to: string; label: string; icon: string }) {
   const loc = useLocation()
+  const bleeps = useBleeps()
   const active = loc.pathname === to || (to !== '/' && loc.pathname.startsWith(to))
   const [hover, setHover] = useState(false)
   const lit = active || hover
@@ -32,6 +34,7 @@ function NavItem({ to, label, icon }: { to: string; label: string; icon: string 
   return (
     <Link
       to={to}
+      onClick={() => bleeps.click?.play()}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
@@ -273,11 +276,11 @@ export function Layout({ children }: { children: ReactNode }) {
                 marginTop: '5px',
                 fontFamily: "'Electrolize', monospace",
               }}>
-                Debian Patch Management
+                Linux Patch Management
               </div>
 
               {/* Blinking cursor + logged-in user */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '12px' }}>
                 <span style={{
                   display: 'inline-block',
                   width: '6px',
@@ -394,7 +397,7 @@ export function Layout({ children }: { children: ReactNode }) {
               letterSpacing: '0.1em',
               fontFamily: "'Electrolize', monospace",
             }}>
-              v1.0.3
+              v1.5.0
             </div>
 
             {/* Bottom edge glow line */}

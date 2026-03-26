@@ -53,6 +53,7 @@ def init_db():
                 os_pretty   TEXT,
                 kernel      TEXT,
                 arch        TEXT,
+                package_manager TEXT,
                 reboot_required INTEGER DEFAULT 0,
                 pending_count   INTEGER DEFAULT 0,
                 last_seen   TEXT,
@@ -145,6 +146,21 @@ def init_db():
         except sqlite3.OperationalError:
             pass  # column already present — nothing to do
 
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN config_review_required INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already present — nothing to do
+
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN config_review_note TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # column already present — nothing to do
+
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN package_manager TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already present — nothing to do
+
         # Insert default settings rows (skip if key already exists)
         _defaults = [
             ("telegram_token",   ""),
@@ -163,6 +179,9 @@ def init_db():
             ("server_port",            "8443"),
             ("agent_port",             "8050"),
             ("agent_ssl",              "1"),
+            ("ui_audio_enabled",       "1"),
+            ("ui_audio_volume",        "70"),
+            ("ui_login_animation_enabled", "1"),
             ("ssl_certfile",           ""),
             ("ssl_keyfile",            ""),
         ]

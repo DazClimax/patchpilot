@@ -1,18 +1,21 @@
 import React, { useState } from 'react'
-import { Animator, Dots, MovingLines } from '@arwes/react'
-import { AnimatorGeneralProvider } from '@arwes/react'
+import { Animator, AnimatorGeneralProvider, Dots, MovingLines, useBleeps } from '@arwes/react'
 import { auth, api } from '../api/client'
 import { colors, glow, glowText, glassBg, globalKeyframes } from '../theme'
+import { useUiEffects } from '../effects'
 
 interface LoginPageProps {
   onLogin: () => void
 }
 
 export function LoginPage({ onLogin }: LoginPageProps) {
+  const bleeps = useBleeps()
+  const { loginAnimationEnabled } = useUiEffects()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [loginFxActive, setLoginFxActive] = useState(false)
   const [mode, setMode] = useState<'login' | 'key'>('login')
 
   // Legacy admin key login
@@ -33,7 +36,12 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         const res = await api.login(username.trim(), password)
         auth.setSession(res.token, res.role, res.username)
       }
-      onLogin()
+      if (loginAnimationEnabled) {
+        setLoginFxActive(true)
+        window.setTimeout(() => onLogin(), 3200)
+      } else {
+        onLogin()
+      }
     } catch (err) {
       auth.clear()
       const msg = err instanceof Error ? err.message : 'Login failed'
@@ -71,7 +79,56 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
   return (
     <>
-      <style>{globalKeyframes}</style>
+      <style>{globalKeyframes}{`
+        @keyframes pp-login-window {
+          0% {
+            opacity: 0;
+            transform: translate(-50%, -50%) scale(0.2);
+            clip-path: inset(49% 49% 49% 49%);
+          }
+          20% {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(0.45);
+            clip-path: inset(34% 38% 34% 38%);
+          }
+          42% {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(0.78);
+            clip-path: inset(14% 18% 14% 18%);
+          }
+          62% {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1);
+            clip-path: inset(0% 0% 0% 0%);
+          }
+          100% {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1);
+            clip-path: inset(0% 0% 0% 0%);
+          }
+        }
+        @keyframes pp-login-corner {
+          0% { opacity: 0; transform: scale(0.2); }
+          28% { opacity: 1; transform: scale(1.1); }
+          100% { opacity: 1; transform: scale(1); }
+        }
+        @keyframes pp-login-frame-glow {
+          0% { opacity: 0; box-shadow: 0 0 0 ${colors.primary}00; }
+          30% { opacity: 1; box-shadow: 0 0 28px ${colors.primary}22, inset 0 0 28px ${colors.primary}12; }
+          100% { opacity: 1; box-shadow: 0 0 36px ${colors.primary}18, inset 0 0 36px ${colors.primary}10; }
+        }
+        @keyframes pp-login-title {
+          0% { opacity: 0; transform: translateY(10px) scale(0.96); }
+          18% { opacity: 0; transform: translateY(10px) scale(0.96); }
+          24% { opacity: 1; transform: translateY(0) scale(1); }
+          30% { opacity: 0.25; transform: translateY(0) scale(1); }
+          36% { opacity: 1; transform: translateY(0) scale(1); }
+          42% { opacity: 0.25; transform: translateY(0) scale(1); }
+          48% { opacity: 1; transform: translateY(0) scale(1); }
+          72% { opacity: 1; transform: translateY(0) scale(1); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+      `}</style>
       <AnimatorGeneralProvider duration={{ enter: 0.4, exit: 0.3 }}>
         <Animator active>
           <div style={{
@@ -83,6 +140,115 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             position: 'relative',
             overflow: 'hidden',
           }}>
+            {loginFxActive && (
+              <div style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 30,
+                pointerEvents: 'none',
+                overflow: 'hidden',
+                background: `radial-gradient(circle at center, ${colors.primary}0d 0%, ${colors.bg}cc 55%, ${colors.bg} 100%)`,
+                animation: 'pp-fadein 0.1s ease both',
+              }}>
+                <div style={{
+                  position: 'absolute',
+                  left: '50%',
+                  top: '50%',
+                  width: '100vw',
+                  height: '100vh',
+                  transform: 'translate(-50%, -50%)',
+                  border: `1px solid ${colors.primary}28`,
+                  background: `linear-gradient(180deg, ${colors.bg}f0 0%, ${colors.bg}dc 100%)`,
+                  animation: 'pp-login-window 1.05s cubic-bezier(0.22, 1, 0.36, 1) forwards, pp-login-frame-glow 1.05s ease-out forwards',
+                }}>
+                  <div style={{
+                    position: 'absolute',
+                    top: 18,
+                    left: 18,
+                    width: '34px',
+                    height: '34px',
+                    borderTop: `2px solid ${colors.primary}`,
+                    borderLeft: `2px solid ${colors.primary}`,
+                    opacity: 0.9,
+                    boxShadow: `0 0 12px ${colors.primary}44`,
+                    animation: 'pp-login-corner 1.05s ease-out forwards',
+                  }} />
+                  <div style={{
+                    position: 'absolute',
+                    top: 18,
+                    right: 18,
+                    width: '34px',
+                    height: '34px',
+                    borderTop: `2px solid ${colors.primary}`,
+                    borderRight: `2px solid ${colors.primary}`,
+                    opacity: 0.9,
+                    boxShadow: `0 0 12px ${colors.primary}44`,
+                    animation: 'pp-login-corner 1.05s ease-out forwards',
+                  }} />
+                  <div style={{
+                    position: 'absolute',
+                    bottom: 18,
+                    left: 18,
+                    width: '34px',
+                    height: '34px',
+                    borderBottom: `2px solid ${colors.primary}`,
+                    borderLeft: `2px solid ${colors.primary}`,
+                    opacity: 0.75,
+                    boxShadow: `0 0 12px ${colors.primary}30`,
+                    animation: 'pp-login-corner 1.05s ease-out forwards',
+                  }} />
+                  <div style={{
+                    position: 'absolute',
+                    bottom: 18,
+                    right: 18,
+                    width: '34px',
+                    height: '34px',
+                    borderBottom: `2px solid ${colors.primary}`,
+                    borderRight: `2px solid ${colors.primary}`,
+                    opacity: 0.75,
+                    boxShadow: `0 0 12px ${colors.primary}30`,
+                    animation: 'pp-login-corner 1.05s ease-out forwards',
+                  }} />
+                  <div style={{
+                    position: 'absolute',
+                    top: 18,
+                    left: 56,
+                    right: 56,
+                    height: '1px',
+                    background: `linear-gradient(90deg, transparent 0%, ${colors.primary}88 50%, transparent 100%)`,
+                    boxShadow: `0 0 10px ${colors.primary}44`,
+                    opacity: 0.9,
+                  }} />
+                  <div style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: `radial-gradient(circle at top left, ${colors.primary}12, transparent 34%)`,
+                    opacity: 0.8,
+                  }} />
+                </div>
+                <div style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}>
+                  <div style={{
+                    padding: '12px 22px',
+                    background: `${colors.bg}bb`,
+                    color: colors.primary,
+                    fontFamily: "'Orbitron', sans-serif",
+                    fontSize: '11px',
+                    letterSpacing: '0.28em',
+                    textTransform: 'uppercase',
+                    textShadow: glowText(colors.primary, 6),
+                    animation: 'pp-login-title 3.9s ease-out forwards',
+                  }}>
+                    System Access Granted
+                  </div>
+                </div>
+              </div>
+            )}
             {/* Ambient background */}
             <div style={{ position: 'absolute', inset: 0, opacity: 0.12, pointerEvents: 'none' }}>
               <Dots color={colors.primary} size={1} distance={30} />
@@ -92,7 +258,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
             </div>
 
             {/* Login card */}
-            <div style={{
+            {!loginFxActive && <div style={{
               position: 'relative',
               zIndex: 10,
               width: 'min(420px, 92vw)',
@@ -186,6 +352,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
                 <button
                   type="submit"
+                  onClick={() => { if (canSubmit && !loading) bleeps.click?.play() }}
                   disabled={loading || !canSubmit}
                   style={{
                     width: '100%',
@@ -237,7 +404,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
                   </span>
                 </div>
               </form>
-            </div>
+            </div>}
           </div>
         </Animator>
       </AnimatorGeneralProvider>

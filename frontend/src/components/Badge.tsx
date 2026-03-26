@@ -36,7 +36,7 @@ export function Badge({ children, color = colors.primary, style, className }: Ba
 // ─── Status dot with animated pulse ──────────────────────────────────────────
 
 export function OnlineDot({ online }: { online: boolean }) {
-  const color = online ? colors.success : colors.textMuted
+  const color = online ? colors.success : colors.danger
 
   return (
     <span style={{
@@ -51,24 +51,22 @@ export function OnlineDot({ online }: { online: boolean }) {
     }}>
       {/* Outer ring + inner dot */}
       <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
-        {online && (
-          <span style={{
-            position: 'absolute',
-            width: '12px',
-            height: '12px',
-            borderRadius: '50%',
-            border: `1px solid ${color}`,
-            boxShadow: glow(color, 4),
-            animation: 'pp-pulse 2.2s ease-in-out infinite',
-            opacity: 0.5,
-          }} />
-        )}
+        <span style={{
+          position: 'absolute',
+          width: '12px',
+          height: '12px',
+          borderRadius: '50%',
+          border: `1px solid ${color}`,
+          boxShadow: glow(color, 4),
+          animation: 'pp-pulse 2.2s ease-in-out infinite',
+          opacity: 0.5,
+        }} />
         <span style={{
           width: '6px',
           height: '6px',
           borderRadius: '50%',
           background: color,
-          boxShadow: online ? `0 0 6px ${color}, 0 0 12px ${color}66` : 'none',
+          boxShadow: `0 0 6px ${color}, 0 0 12px ${color}66`,
         }} />
       </span>
       <span className="pp-hide-mobile" style={{ textTransform: 'uppercase' }}>

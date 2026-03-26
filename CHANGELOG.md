@@ -7,6 +7,34 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-03-27
+
+### Added
+- RPM groundwork for Linux fleet support, including `dnf`/`yum` detection in the agent
+- Dashboard and VM detail now show the detected package manager (`apt`, `dnf`, `yum`)
+- Config review warnings for package-managed config file conflicts, including acknowledge flow in the VM detail page
+- UI sound effects with local bundled Arwes assets and settings controls
+- Configurable login animation under `Settings > Effects`
+- GitHub contribution templates and improved repository onboarding docs
+- README screenshots moved into the top preview area for a stronger GitHub first impression
+
+### Changed
+- Version bumped to `1.5.0`
+- Settings `Effects` panel renamed to `Sound Effects`
+- Deploy/bootstrap flow hardened around authenticated UI-generated installers
+- Login animation timing and presentation refined for the current sci-fi fullscreen transition
+- README and install docs now describe Linux/RPM support more clearly instead of only Debian/Ubuntu
+- Sidebar product copy already reflects Linux-wide positioning instead of Debian-only wording
+
+### Fixed
+- Agent token hashes are no longer exposed in dashboard/detail API responses
+- Fedora/RPM reboot detection is more robust and less noisy, especially for container-like environments
+- Users page now surfaces failure states instead of silently rendering an empty view
+- Offline VM visuals are clearer with red status text/pulse and dimmed TLS badge styling
+
+### Security
+- Refreshed `SECURITY.md` to reflect the current hardened bootstrap, agent auth, SMTP delivery checks, and latest review outcome
+
 ## [1.0.3] - 2026-03-25
 
 ### Added

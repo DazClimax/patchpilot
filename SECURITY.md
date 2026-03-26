@@ -1,9 +1,9 @@
 # PatchPilot — Security Audit Report
 
-**Last updated:** 2026-03-22
+**Last updated:** 2026-03-27
 **Scope:** All backend, frontend, agent, and deployment files
 **Context:** Private home network (Raspberry Pi), no external exposure planned
-**Auditors:** Automated Security Audit Agent (2 rounds)
+**Auditors:** Automated security review plus manual follow-up checks
 
 ---
 
@@ -15,6 +15,30 @@
 | HIGH     | 5     | 5     | — |
 | MEDIUM   | 13    | 11    | 2 |
 | LOW      | 11    | 9     | 2 |
+
+---
+
+## Latest Review (2026-03-27)
+
+This follow-up review focused on the current live hardening state after the recent deploy/bootstrap and agent-auth changes.
+
+### Verified in this pass
+
+- Secure Deploy bootstrap no longer relies on `curl -k | bash` as the default path
+- Agent token hashes are no longer reusable as bearer tokens
+- SMTP delivery validates the destination again at send time to reduce DNS rebinding risk
+- Agent token hashes are no longer exposed back to the dashboard API
+- RPM agent support now reports its detected package manager for clearer operations visibility
+
+### Result
+
+No new PatchPilot application-level critical or high severity findings were identified in this pass.
+
+### Validation notes
+
+- `python3 -m py_compile server/app.py server/db.py agent/agent.py server/notifications.py` passed
+- `cd frontend && npm run build` passed
+- `python3 -m pytest -q server/tests` could not be executed in this environment because `pytest` is not installed
 
 ---
 

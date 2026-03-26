@@ -5,8 +5,10 @@ All external I/O uses stdlib only — no requests, no httpx.
 """
 
 import json
+import ipaddress
 import logging
 import os
+import socket
 import smtplib
 import ssl
 import urllib.error
@@ -105,6 +107,34 @@ class EmailNotifier:
         self.security = (security or "starttls").strip().lower()
 
     @staticmethod
+    def _resolve_public_host(host: str) -> str:
+        """Resolve *host* and return a public IP address for the SMTP session."""
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        public_addrs: list[str] = []
+        for info in infos:
+            addr = info[4][0]
+            try:
+                ip = ipaddress.ip_address(addr)
+            except ValueError:
+                continue
+            if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved:
+                raise ValueError("SMTP host resolves to a private/reserved address")
+            public_addrs.append(addr)
+        if not public_addrs:
+            raise ValueError("SMTP host could not be resolved to a public address")
+        return public_addrs[0]
+
+    def _connect_smtp_ssl(self, context: ssl.SSLContext, resolved_host: str) -> smtplib.SMTP:
+        """Connect to a resolved IP while keeping TLS hostname verification on the original host."""
+        raw_sock = socket.create_connection((resolved_host, self.port), timeout=15)
+        wrapped = context.wrap_socket(raw_sock, server_hostname=self.host)
+        smtp = smtplib.SMTP(timeout=15)
+        smtp.sock = wrapped
+        smtp.file = wrapped.makefile("rb")
+        smtp._host = self.host
+        return smtp
+
+    @staticmethod
     def _html(subject: str, body_text: str) -> str:
         lines = body_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         rows = "".join(
@@ -142,15 +172,18 @@ class EmailNotifier:
         msg.attach(MIMEText(body, "plain", "utf-8"))
         msg.attach(MIMEText(self._html(subject, body), "html", "utf-8"))
         try:
+            resolved_host = self._resolve_public_host(self.host)
             context = ssl.create_default_context()
             if self.security == "ssl":
-                with smtplib.SMTP_SSL(self.host, self.port, context=context, timeout=15) as smtp:
+                with self._connect_smtp_ssl(context, resolved_host) as smtp:
                     smtp.ehlo()
                     if self.user and self.password:
                         smtp.login(self.user, self.password)
                     smtp.sendmail(from_addr, [self.to], msg.as_string())
             elif self.security == "starttls":
-                with smtplib.SMTP(self.host, self.port, timeout=15) as smtp:
+                with smtplib.SMTP(timeout=15) as smtp:
+                    smtp.connect(resolved_host, self.port)
+                    smtp._host = self.host
                     smtp.ehlo()
                     smtp.starttls(context=context)
                     smtp.ehlo()
@@ -158,7 +191,8 @@ class EmailNotifier:
                         smtp.login(self.user, self.password)
                     smtp.sendmail(from_addr, [self.to], msg.as_string())
             else:
-                with smtplib.SMTP(self.host, self.port, timeout=15) as smtp:
+                with smtplib.SMTP(timeout=15) as smtp:
+                    smtp.connect(resolved_host, self.port)
                     smtp.ehlo()
                     if self.security == "plain" and self.user and self.password:
                         smtp.login(self.user, self.password)

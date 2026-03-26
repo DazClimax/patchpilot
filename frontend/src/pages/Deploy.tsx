@@ -194,9 +194,41 @@ function RegisterKeyWidget({ registerKey, setRegisterKey, expiresIn, setExpiresI
 const AGENT_ID_RE = /^[a-zA-Z0-9._-]{1,64}$/
 const SERVER_URL_RE = /^https?:\/\/[a-zA-Z0-9._:[\]-]+$/
 
-function buildScript(serverUrl: string, agentId: string, registerKey: string): string {
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`
+}
+
+function buildOneLiner(serverUrl: string, agentId: string, registerKey: string, caPemB64: string): string {
+  const effectiveRegisterKey = registerKey || '<KEY>'
+  const envParts = [
+    `PATCHPILOT_SERVER=${shellSingleQuote(serverUrl)}`,
+    `PATCHPILOT_REGISTER_KEY=${shellSingleQuote(effectiveRegisterKey)}`,
+  ]
+  if (agentId) {
+    envParts.push(`PATCHPILOT_AGENT_ID=${shellSingleQuote(agentId)}`)
+  }
+
+  if (serverUrl.toLowerCase().startsWith('https://')) {
+    const ca = shellSingleQuote(caPemB64)
+    const installUrl = shellSingleQuote(`${serverUrl}/agent/install.sh`)
+    return [
+      `PP_CA_B64=${ca}`,
+      'PP_CA_FILE=$(mktemp)',
+      `printf '%s' "$PP_CA_B64" | base64 -d > "$PP_CA_FILE"`,
+      `curl -fsSL --cacert "$PP_CA_FILE" ${installUrl} | sudo ${envParts.join(' ')} PATCHPILOT_CA_PEM_B64="$PP_CA_B64" bash`,
+      'rm -f "$PP_CA_FILE"',
+    ].join(' && ')
+  }
+
+  const installUrl = shellSingleQuote(`${serverUrl}/agent/install.sh`)
+  return `curl -fsSL ${installUrl} | sudo ${envParts.join(' ')} bash`
+}
+
+function buildScript(serverUrl: string, agentId: string, registerKey: string, caPemB64: string): string {
   // Build as array to avoid template-literal escaping nightmare with shell ${}
   const D = '$'  // shell dollar sign
+  const effectiveRegisterKey = registerKey || '<KEY>'
+  const caLine = caPemB64 ? `CA_PEM_B64=${shellSingleQuote(caPemB64)}` : "CA_PEM_B64=''"
   const lines = [
     '#!/bin/bash',
     '# PatchPilot Agent Installer',
@@ -205,7 +237,8 @@ function buildScript(serverUrl: string, agentId: string, registerKey: string): s
     '',
     `AGENT_ID="${D}{PATCHPILOT_AGENT_ID:-${agentId || `${D}(hostname)`}}"`,
     `SERVER_URL="${serverUrl}"`,
-    `REGISTER_KEY="${registerKey}"`,
+    `REGISTER_KEY="${effectiveRegisterKey}"`,
+    caLine,
     'AGENT_DIR="/opt/patchpilot/agent"',
     'CONFIG_DIR="/etc/patchpilot"',
     'MISSING_PKGS=()',
@@ -225,8 +258,14 @@ function buildScript(serverUrl: string, agentId: string, registerKey: string): s
     'elif command -v apt &>/dev/null; then',
     '  PKG_INSTALL="apt install -y -qq"',
     '  PKG_UPDATE="apt update -qq"',
+    'elif command -v dnf &>/dev/null; then',
+    '  PKG_INSTALL="dnf install -y -q"',
+    '  PKG_UPDATE="dnf makecache -q"',
+    'elif command -v yum &>/dev/null; then',
+    '  PKG_INSTALL="yum install -y -q"',
+    '  PKG_UPDATE="yum makecache -q"',
     'else',
-    '  echo "ERROR: No supported package manager found (requires apt/apt-get)" >&2',
+    '  echo "ERROR: No supported package manager found (requires apt, dnf, or yum)" >&2',
     '  exit 1',
     'fi',
     '',
@@ -265,25 +304,18 @@ function buildScript(serverUrl: string, agentId: string, registerKey: string): s
     '# ── Create directories ────────────────────────────────────────────────────────',
     `mkdir -p "${D}AGENT_DIR" "${D}CONFIG_DIR"`,
     '',
-    '# ── SSL: fetch CA certificate if server uses HTTPS ──────────────────────────',
+    '# ── SSL bootstrap ────────────────────────────────────────────────────────────',
     'CURL_OPTS=""',
     'WGET_OPTS=""',
     `if echo "${D}SERVER_URL" | grep -qi '^https://'; then`,
-    '  echo "[patchpilot] HTTPS server detected — fetching CA certificate..."',
-    '  if command -v curl &>/dev/null; then',
-    `    curl -fsSLk "${D}SERVER_URL/agent/ca.pem" -o "${D}CONFIG_DIR/ca.pem" 2>/dev/null || true`,
-    '  else',
-    `    wget --no-check-certificate -qO "${D}CONFIG_DIR/ca.pem" "${D}SERVER_URL/agent/ca.pem" 2>/dev/null || true`,
+    `  if [ -z "${D}CA_PEM_B64" ]; then`,
+    '    echo "ERROR: HTTPS bootstrap data missing. Regenerate this installer from the Deploy page." >&2',
+    '    exit 1',
     '  fi',
-    `  if [ -s "${D}CONFIG_DIR/ca.pem" ]; then`,
-    `    echo "[patchpilot] CA certificate installed at ${D}CONFIG_DIR/ca.pem"`,
-    `    CURL_OPTS="--cacert ${D}CONFIG_DIR/ca.pem"`,
-    `    WGET_OPTS="--ca-certificate=${D}CONFIG_DIR/ca.pem"`,
-    '  else',
-    '    echo "[patchpilot] WARNING: Could not fetch CA cert — falling back to insecure mode"',
-    '    CURL_OPTS="-k"',
-    '    WGET_OPTS="--no-check-certificate"',
-    '  fi',
+    `  printf '%s' "${D}CA_PEM_B64" | base64 -d > "${D}CONFIG_DIR/ca.pem"`,
+    `  chmod 644 "${D}CONFIG_DIR/ca.pem"`,
+    `  CURL_OPTS="--cacert ${D}CONFIG_DIR/ca.pem"`,
+    `  WGET_OPTS="--ca-certificate=${D}CONFIG_DIR/ca.pem"`,
     'fi',
     '',
     '# ── Download agent ────────────────────────────────────────────────────────────',
@@ -370,6 +402,7 @@ export function DeployPage() {
   const [agentId, setAgentId] = useState('')
   const [registerKey, setRegisterKey] = useState('')
   const [expiresIn, setExpiresIn] = useState(0)
+  const [caPemB64, setCaPemB64] = useState('')
 
   // Load settings + active key in parallel on mount
   useEffect(() => {
@@ -389,6 +422,9 @@ export function DeployPage() {
           setExpiresIn(r.expires_in)
         }
       }).catch(() => {}),
+      api.deployBootstrap().then(r => {
+        setCaPemB64(r.ca_pem_b64 || '')
+      }).catch(() => {}),
     ]).finally(() => setPageReady(true))
   }, [])
 
@@ -402,15 +438,10 @@ export function DeployPage() {
   const safeAgentId = AGENT_ID_RE.test(agentId) ? agentId : ''
 
   const urlValid = SERVER_URL_RE.test(effectiveUrl)
-  const isHttps = effectiveUrl.toLowerCase().startsWith('https://')
-  const curlFlags = isHttps ? '-fsSLk' : '-fsSL'
-  const oneliner = urlValid
-    ? `curl ${curlFlags} ${effectiveUrl}/agent/install.sh | sudo PATCHPILOT_SERVER=${effectiveUrl} PATCHPILOT_REGISTER_KEY=${registerKey || '<KEY>'}${safeAgentId ? ` PATCHPILOT_AGENT_ID=${safeAgentId}` : ''} bash`
-    : ''
-
   const script = urlValid
-    ? buildScript(effectiveUrl, safeAgentId, registerKey)
+    ? buildScript(effectiveUrl, safeAgentId, registerKey, caPemB64)
     : ''
+  const oneliner = urlValid ? buildOneLiner(effectiveUrl, safeAgentId, registerKey, caPemB64) : ''
 
   const downloadScript = () => {
     if (!script) return
@@ -542,8 +573,10 @@ export function DeployPage() {
               color: colors.success,
               textShadow: glow(colors.success, 2),
               overflowX: 'auto',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
+              overflowY: 'hidden',
+              whiteSpace: 'pre',
+              wordBreak: 'normal',
+              lineHeight: 1.5,
               position: 'relative',
             }}>
               <div style={{
@@ -557,7 +590,7 @@ export function DeployPage() {
               fontFamily: 'monospace', marginTop: '6px',
               letterSpacing: '0.06em',
             }}>
-              Run as root on the target VM. Requires python3 and curl or wget.
+              Run as root on the target VM. Supports apt, dnf, or yum systems and requires python3 plus curl or wget.
             </div>
           </>
         ) : (

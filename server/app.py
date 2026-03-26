@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import hmac
 import ipaddress
@@ -176,7 +177,7 @@ STATIC_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 # ---------------------------------------------------------------------------
 _AGENT_ID_RE = re.compile(r'^[a-zA-Z0-9._-]{1,64}$')
 _TG_TOKEN_RE  = re.compile(r'^\d+:[A-Za-z0-9_-]{35,}$')
-ALLOWED_JOB_TYPES = {"patch", "reboot", "update_agent", "autoremove", "deploy_ssl"}
+ALLOWED_JOB_TYPES = {"patch", "reboot", "update_agent", "autoremove", "deploy_ssl", "ack_config_review"}
 
 def _validate_agent_id(agent_id: str):
     if not _AGENT_ID_RE.match(agent_id):
@@ -189,12 +190,25 @@ _FIELD_LIMITS = {
     "os_pretty": 128,
     "kernel":    64,
     "arch":      16,
+    "package_manager": 16,
 }
 
 def _sanitize_agent_fields(data: dict) -> dict:
     """Truncate free-form agent fields to their maximum allowed length."""
     return {k: (str(data[k])[:lim] if data.get(k) else data.get(k))
             for k, lim in _FIELD_LIMITS.items()}
+
+
+def _infer_package_manager(fields: dict) -> str | None:
+    package_manager = fields.get("package_manager")
+    if package_manager:
+        return package_manager
+    os_pretty = (fields.get("os_pretty") or "").lower()
+    if any(name in os_pretty for name in ("debian", "ubuntu", "raspbian", "mint", "pop!_os", "pop os")):
+        return "apt"
+    if any(name in os_pretty for name in ("fedora", "rhel", "red hat", "redhat", "rocky", "alma", "centos", "nobara")):
+        return "dnf"
+    return None
 
 def _validate_cron(cron: str):
     """MED-8: Validate cron expression using APScheduler before DB insert."""
@@ -636,35 +650,29 @@ def _hash_token(token: str) -> str:
     """CRIT-5: One-way hash tokens before DB storage."""
     return hashlib.sha256(token.encode()).hexdigest()
 
+
+def _redact_agent_record(row: dict) -> dict:
+    """Remove sensitive fields before returning agent data to the UI."""
+    row.pop("token", None)
+    return row
+
+
 def verify_agent(agent_id: str, x_token: str):
-    """Verify agent token.  Supports both hashed (v0.3.4+) and legacy plaintext
-    tokens — on a plaintext match the stored token is transparently upgraded to
-    its SHA-256 hash so the agent never needs to re-register.
-    """
+    """Verify agent token against the stored SHA-256 hash."""
     with get_db_ctx() as conn:
         row = conn.execute(
             "SELECT token FROM agents WHERE id = ?", (agent_id,)
         ).fetchone()
-    # Always compute both forms so response time doesn't leak whether agent_id exists.
-    dummy   = secrets.token_hex(32)
-    stored  = row["token"] if row else dummy
+
+    # Always compute against a plausible hash so response time doesn't leak
+    # whether agent_id exists.
+    dummy = _hash_token(secrets.token_hex(32))
+    stored = row["token"] if row else dummy
     submitted_hash = _hash_token(x_token)
-
-    # Primary check: submitted token hashed == stored hash (normal path after migration)
     hash_ok = hmac.compare_digest(submitted_hash, stored)
-    # Fallback: submitted token matches stored plaintext (pre-v0.3.4 agents)
-    plain_ok = hmac.compare_digest(x_token, stored)
 
-    if not row or not (hash_ok or plain_ok):
+    if not row or not hash_ok:
         raise HTTPException(status_code=401, detail="Invalid token")
-
-    # Transparently upgrade plaintext token to hash so this path is only taken once
-    if plain_ok and not hash_ok:
-        with get_db_ctx() as conn:
-            conn.execute(
-                "UPDATE agents SET token = ? WHERE id = ?",
-                (submitted_hash, agent_id),
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +721,7 @@ async def register_agent(request: Request):
     _validate_agent_id(agent_id)
     # SEC M-3: Single transaction to avoid TOCTOU race on agent existence check
     fields = _sanitize_agent_fields(data)   # MED-6: cap free-form fields
+    fields["package_manager"] = _infer_package_manager(fields)
     token = secrets.token_hex(32)
     with get_db_ctx() as conn:
         existing = conn.execute("SELECT token FROM agents WHERE id=?", (agent_id,)).fetchone()
@@ -723,8 +732,7 @@ async def register_agent(request: Request):
                 submitted_hash = _hash_token(x_token)
                 stored = existing["token"]
                 hash_ok = hmac.compare_digest(submitted_hash, stored)
-                plain_ok = len(stored) == 64 and hmac.compare_digest(x_token, stored)  # legacy
-                if not (hash_ok or plain_ok):
+                if not hash_ok:
                     raise HTTPException(status_code=403, detail="Invalid token for re-registration")
             elif reg_key:
                 # Allow re-registration with a valid register key (fresh install scenario)
@@ -736,14 +744,15 @@ async def register_agent(request: Request):
             reg_key = request.headers.get("x-register-key", "") or data.get("register_key", "")
             _verify_register_key(reg_key)
         conn.execute(
-            """INSERT INTO agents (id, hostname, ip, os_pretty, kernel, arch, token)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO agents (id, hostname, ip, os_pretty, kernel, arch, package_manager, token)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    hostname = excluded.hostname,
                    ip       = excluded.ip,
                    os_pretty= excluded.os_pretty,
                    kernel   = excluded.kernel,
                    arch     = excluded.arch,
+                   package_manager = excluded.package_manager,
                    token    = excluded.token""",
             (
                 agent_id,
@@ -752,6 +761,7 @@ async def register_agent(request: Request):
                 fields["os_pretty"],
                 fields["kernel"],
                 fields["arch"],
+                fields["package_manager"],
                 _hash_token(token),   # CRIT-5: store hash, return plaintext once
             ),
         )
@@ -792,6 +802,7 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
     if len(packages) > 2000:
         packages = packages[:2000]
     fields = _sanitize_agent_fields(data)   # MED-6: cap free-form fields
+    fields["package_manager"] = _infer_package_manager(fields)
     # MEDIUM-6: Validate uptime_seconds type and range
     raw_uptime = data.get("uptime_seconds")
     uptime_seconds = None
@@ -803,14 +814,16 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
         except (ValueError, TypeError):
             uptime_seconds = None
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    config_review_required = 1 if data.get("config_review_required") else 0
+    config_review_note = str(data.get("config_review_note", ""))[:4000] if config_review_required else ""
     # Detect connection protocol from the request
     protocol = "https" if request.url.scheme == "https" else "http"
     with get_db_ctx() as conn:
         conn.execute(
             """UPDATE agents SET
-                hostname=?, ip=?, os_pretty=?, kernel=?, arch=?,
+                hostname=?, ip=?, os_pretty=?, kernel=?, arch=?, package_manager=?,
                 reboot_required=?, pending_count=?, last_seen=?, uptime_seconds=?,
-                protocol=?
+                protocol=?, config_review_required=?, config_review_note=?
                WHERE id=?""",
             (
                 fields["hostname"],
@@ -818,11 +831,14 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
                 fields["os_pretty"],
                 fields["kernel"],
                 fields["arch"],
+                fields["package_manager"],
                 1 if data.get("reboot_required") else 0,
                 len(packages),
                 now,
                 uptime_seconds,
                 protocol,
+                config_review_required,
+                config_review_note,
                 agent_id,
             ),
         )
@@ -1000,7 +1016,7 @@ def api_dashboard():
     last_job_map = {r["agent_id"]: dict(r) for r in last_jobs}
     result = []
     for a in agents:
-        row = dict(a)
+        row = _redact_agent_record(dict(a))
         lj = last_job_map.get(row["id"])
         if lj:
             row["last_job_type"] = lj["type"]
@@ -1037,6 +1053,18 @@ def api_register_key_status():
     if key is None:
         return {"active": False, "key": None, "expires_in": 0}
     return {"active": True, "key": None, "expires_in": int(remaining)}
+
+
+@app.get("/api/deploy/bootstrap", dependencies=[Depends(require_role("admin"))])
+def api_deploy_bootstrap():
+    """Return authenticated bootstrap material for the Deploy page."""
+    cert = _SSL_DIR / "cert.pem"
+    ca_pem_b64 = ""
+    if cert.exists():
+        ca_pem_b64 = base64.b64encode(cert.read_bytes()).decode()
+    return {
+        "ca_pem_b64": ca_pem_b64,
+    }
 
 
 @app.get("/api/ping")
@@ -1086,7 +1114,7 @@ def api_agent(agent_id: str):
             "SELECT * FROM jobs WHERE agent_id=? ORDER BY id DESC LIMIT 50", (agent_id,)
         ).fetchall()
     payload = {
-        "agent": dict(agent),
+        "agent": _redact_agent_record(dict(agent)),
         "packages": [dict(p) for p in packages],
         "jobs": [dict(j) for j in jobs],
     }
@@ -1111,6 +1139,24 @@ async def create_job(agent_id: str, request: Request):
             (agent_id, job_type, json.dumps(params)),
         )
     # PERFORMANCE: Invalidate caches so the new job appears immediately in the UI.
+    _cache_invalidate("dashboard", f"agent:{agent_id}")
+    return {"status": "queued"}
+
+
+@app.post("/api/agents/{agent_id}/config-review/ack", dependencies=[Depends(require_role("admin","user"))])
+def api_ack_config_review(agent_id: str):
+    with get_db_ctx() as conn:
+        agent = conn.execute("SELECT id FROM agents WHERE id=?", (agent_id,)).fetchone()
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        conn.execute(
+            "UPDATE agents SET config_review_required=0, config_review_note='' WHERE id=?",
+            (agent_id,),
+        )
+        conn.execute(
+            "INSERT INTO jobs (agent_id, type, params) VALUES (?, ?, ?)",
+            (agent_id, "ack_config_review", "{}"),
+        )
     _cache_invalidate("dashboard", f"agent:{agent_id}")
     return {"status": "queued"}
 
@@ -1328,6 +1374,7 @@ _SETTINGS_ALLOWED_KEYS = {
     "smtp_host", "smtp_port", "smtp_security", "smtp_user", "smtp_password", "smtp_to",
     "notify_offline", "notify_offline_minutes", "notify_patches", "notify_failures",
     "server_port", "agent_port", "agent_ssl",
+    "ui_audio_enabled", "ui_audio_volume", "ui_login_animation_enabled",
 }
 
 _SSL_DIR = Path(__file__).parent.parent / "ssl"
@@ -1390,6 +1437,14 @@ async def api_save_settings(request: Request):
                 raise ValueError
         except (ValueError, TypeError):
             raise HTTPException(status_code=422, detail="notify_offline_minutes must be an integer between 1 and 10080")
+    ui_audio_volume = data.get("ui_audio_volume")
+    if ui_audio_volume is not None and str(ui_audio_volume) != "***":
+        try:
+            val = int(ui_audio_volume)
+            if not (0 <= val <= 100):
+                raise ValueError
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="ui_audio_volume must be an integer between 0 and 100")
     # Validate server_port as integer in [1, 65535]
     server_port_val = data.get("server_port")
     if server_port_val is not None and str(server_port_val) != "***":

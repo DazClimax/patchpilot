@@ -1,5 +1,6 @@
 import React, { ButtonHTMLAttributes, CSSProperties } from 'react'
 import { colors, glow, glowStrong } from '../theme'
+import { useBleeps } from '@arwes/react'
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'danger' | 'ghost'
@@ -36,8 +37,10 @@ export function Button({
   children,
   loading = false,
   disabled,
+  onClick,
   ...rest
 }: ButtonProps) {
+  const bleeps = useBleeps()
   const v = variants[variant]
   const padding  = size === 'sm' ? '6px 10px'  : '10px 18px'
   const fontSize = size === 'sm' ? '10px'       : '12px'
@@ -73,6 +76,10 @@ export function Button({
     <button
       style={baseStyle}
       disabled={isDisabled}
+      onClick={e => {
+        if (!isDisabled) bleeps.click?.play()
+        onClick?.(e)
+      }}
       onMouseEnter={e => {
         if (isDisabled) return
         const el = e.currentTarget

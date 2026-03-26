@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PatchPilot Agent — runs on each Debian VM.
+PatchPilot Agent — runs on Linux VMs.
 Configure via /etc/patchpilot/agent.conf or environment variables.
 
 ENV vars:
@@ -15,6 +15,7 @@ import os
 import platform
 import re
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -113,6 +114,18 @@ def load_state() -> dict:
     return {}
 
 
+def _set_config_review(required: bool, note: str = ""):
+    state = load_state()
+    state["config_review_required"] = bool(required)
+    state["config_review_note"] = note[:4000] if required else ""
+    save_state(state)
+
+
+def _get_config_review() -> tuple[bool, str]:
+    state = load_state()
+    return bool(state.get("config_review_required")), str(state.get("config_review_note", ""))
+
+
 # ---------------------------------------------------------------------------
 # System info helpers
 # ---------------------------------------------------------------------------
@@ -150,8 +163,27 @@ def get_arch() -> str:
     return platform.machine()
 
 
+def get_package_manager() -> str:
+    try:
+        return _pkg_backend()["name"]
+    except Exception:
+        return "unknown"
+
+
 def reboot_required() -> bool:
-    return Path("/var/run/reboot-required").exists()
+    if Path("/var/run/reboot-required").exists():
+        return True
+    try:
+        backend = _pkg_backend()
+        if backend["name"] in {"dnf", "yum"}:
+            return _rpm_reboot_required(backend)
+        cmd = backend.get("reboot_check")
+        if cmd:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            return result.returncode == 1
+    except Exception:
+        pass
+    return False
 
 
 def get_uptime_seconds() -> int | None:
@@ -162,36 +194,191 @@ def get_uptime_seconds() -> int | None:
         return None
 
 
-def get_pending_updates() -> list:
-    """Return list of {name, current, new} for upgradeable packages."""
+def _is_container() -> bool:
+    if Path("/run/.containerenv").exists() or Path("/.dockerenv").exists():
+        return True
+    if os.environ.get("container"):
+        return True
     try:
-        # Update package lists quietly
-        subprocess.run(
-            ["apt-get", "update", "-qq"],
+        result = subprocess.run(
+            ["systemd-detect-virt", "--quiet", "--container"],
             capture_output=True,
-            timeout=120,
+            timeout=10,
         )
-        out = subprocess.run(
-            ["apt-get", "--just-print", "upgrade"],
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _rpm_reboot_required(backend: dict) -> bool:
+    # Container guests share the host kernel. Kernel/package based reboot hints
+    # are therefore noisy and often permanently wrong there.
+    if _is_container():
+        return False
+
+    kernel_reboot_needed = _rpm_kernel_reboot_required()
+    cmd = backend.get("reboot_check")
+    if not cmd:
+        return kernel_reboot_needed
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        return kernel_reboot_needed
+    except Exception:
+        return kernel_reboot_needed
+
+    if result.returncode == 0:
+        return False
+    if result.returncode == 1 and kernel_reboot_needed:
+        return True
+
+    combined = f"{result.stdout}\n{result.stderr}".lower()
+    reboot_markers = (
+        "reboot is required",
+        "reboot should be performed",
+        "system restart is required",
+        "kernel update",
+    )
+    if any(marker in combined for marker in reboot_markers):
+        return True
+    return kernel_reboot_needed
+
+
+def _rpm_kernel_reboot_required() -> bool:
+    try:
+        result = subprocess.run(
+            ["rpm", "-qa", "--qf", "%{NAME}\t%{VERSION}-%{RELEASE}.%{ARCH}\t%{INSTALLTIME}\n"],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=30,
+        )
+    except Exception:
+        return False
+
+    if result.returncode != 0:
+        return False
+
+    newest_release = ""
+    newest_installtime = -1
+    kernel_names = {"kernel", "kernel-core", "kernel-rt", "kernel-rt-core"}
+    for raw in result.stdout.splitlines():
+        parts = raw.strip().split("\t")
+        if len(parts) != 3:
+            continue
+        name, release, installtime_raw = parts
+        if name not in kernel_names:
+            continue
+        try:
+            installtime = int(installtime_raw)
+        except ValueError:
+            continue
+        if installtime > newest_installtime:
+            newest_installtime = installtime
+            newest_release = release
+
+    if not newest_release:
+        return False
+
+    running_kernel = platform.release().strip()
+    return newest_release != running_kernel
+
+
+def _extract_config_review_note(output: str, backend_name: str) -> str:
+    lines = []
+    for raw in output.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        lower = line.lower()
+        if backend_name == "apt":
+            markers = ("force-confold", "configuration file", "konfigurationsdatei", "keeping old config", "installing new version")
+            if any(marker in lower for marker in markers) and ("==>" in line or "conf" in lower):
+                lines.append(line)
+        else:
+            if ".rpmnew" in lower or ".rpmsave" in lower or "saved as" in lower:
+                lines.append(line)
+    unique = []
+    for line in lines:
+        if line not in unique:
+            unique.append(line)
+    return "\n".join(unique[:8])
+
+
+def get_pending_updates() -> list:
+    """Return list of {name, current, new} for upgradeable packages."""
+    backend = _pkg_backend()
+    try:
+        refresh_cmd = backend.get("refresh")
+        if refresh_cmd:
+            subprocess.run(refresh_cmd, capture_output=True, timeout=180)
+        out = subprocess.run(
+            backend["list_updates"],
+            capture_output=True,
+            text=True,
+            timeout=120,
         ).stdout
     except Exception as e:
-        print(f"[agent] apt-get error: {e}", file=sys.stderr)
+        print(f"[agent] package manager error: {e}", file=sys.stderr)
         return []
 
     packages = []
-    # Lines like: Inst <name> [<current>] (<new> ...)
-    for line in out.splitlines():
-        m = re.match(r"Inst (\S+) \[(\S+)\] \((\S+)", line)
-        if m:
-            packages.append({"name": m.group(1), "current": m.group(2), "new": m.group(3)})
-        elif line.startswith("Inst "):
+    if backend["name"] == "apt":
+        # Lines like: Inst <name> [<current>] (<new> ...)
+        for line in out.splitlines():
+            m = re.match(r"Inst (\S+) \[(\S+)\] \((\S+)", line)
+            if m:
+                packages.append({"name": m.group(1), "current": m.group(2), "new": m.group(3)})
+            elif line.startswith("Inst "):
+                parts = line.split()
+                if len(parts) >= 2:
+                    packages.append({"name": parts[1], "current": None, "new": None})
+    else:
+        for line in out.splitlines():
+            line = line.strip()
+            if not line or line.startswith(("Last metadata expiration", "Obsoleting", "Security:", "Available Upgrades")):
+                continue
             parts = line.split()
-            if len(parts) >= 2:
-                packages.append({"name": parts[1], "current": None, "new": None})
+            if len(parts) >= 3 and "." in parts[0]:
+                packages.append({"name": parts[0].rsplit(".", 1)[0], "current": None, "new": parts[1]})
     return packages
+
+
+def _pkg_backend() -> dict:
+    if shutil.which("apt-get"):
+        return {
+            "name": "apt",
+            "refresh": ["apt-get", "update", "-qq"],
+            "list_updates": ["apt-get", "--just-print", "upgrade"],
+            "patch_all": ["apt-get", "upgrade", "-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"],
+            "patch_selected_prefix": ["apt-get", "install", "-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", "--only-upgrade"],
+            "autoremove": ["apt-get", "autoremove", "-y"],
+            "env": {**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+            "reboot_check": None,
+        }
+    if shutil.which("dnf"):
+        return {
+            "name": "dnf",
+            "refresh": ["dnf", "-q", "makecache"],
+            "list_updates": ["dnf", "-q", "check-update"],
+            "patch_all": ["dnf", "-y", "upgrade", "--refresh"],
+            "patch_selected_prefix": ["dnf", "-y", "upgrade", "--refresh"],
+            "autoremove": ["dnf", "-y", "autoremove"],
+            "env": dict(os.environ),
+            "reboot_check": ["dnf", "needs-restarting", "-r"],
+        }
+    if shutil.which("yum"):
+        return {
+            "name": "yum",
+            "refresh": ["yum", "-q", "makecache"],
+            "list_updates": ["yum", "-q", "check-update"],
+            "patch_all": ["yum", "-y", "update"],
+            "patch_selected_prefix": ["yum", "-y", "update"],
+            "autoremove": None,
+            "env": dict(os.environ),
+            "reboot_check": None,
+        }
+    raise RuntimeError("No supported package manager found (requires apt, dnf, or yum)")
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +460,7 @@ def register(server: str, agent_id: str, token: str) -> tuple:
             "os_pretty": get_os_pretty(),
             "kernel": get_kernel(),
             "arch": get_arch(),
+            "package_manager": get_package_manager(),
         },
         headers=hdrs,
     )
@@ -284,6 +472,7 @@ def register(server: str, agent_id: str, token: str) -> tuple:
 
 
 def send_heartbeat(server: str, agent_id: str, token: str, packages: list) -> dict:
+    config_review_required, config_review_note = _get_config_review()
     resp = _request(
         "POST",
         f"{server}/api/agents/{agent_id}/heartbeat",
@@ -293,8 +482,11 @@ def send_heartbeat(server: str, agent_id: str, token: str, packages: list) -> di
             "os_pretty": get_os_pretty(),
             "kernel": get_kernel(),
             "arch": get_arch(),
+            "package_manager": get_package_manager(),
             "reboot_required": reboot_required(),
             "uptime_seconds": get_uptime_seconds(),
+            "config_review_required": config_review_required,
+            "config_review_note": config_review_note,
             "packages": packages,
         },
         headers={"x-token": token},
@@ -320,17 +512,11 @@ def report_result(server: str, agent_id: str, token: str, job_id: int, status: s
     )
 
 
-_SAFE_PKG_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9.+\-]{0,127}$")
+_SAFE_PKG_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9.+:_\-]{0,127}$")
 
 
 def _validate_package_names(pkg_list: list) -> list:
-    """Return only package names that match the Debian package-name grammar.
-
-    Debian policy (section 5.6.1) allows [a-z0-9][a-z0-9.+-]+.
-    We also permit uppercase for robustness.  Any name that does not match
-    is dropped and logged so a compromised server cannot inject shell
-    metacharacters into the apt-get invocation.
-    """
+    """Return only package names that look safe for apt/dnf/yum invocations."""
     safe = []
     for name in pkg_list:
         if isinstance(name, str) and _SAFE_PKG_RE.match(name):
@@ -352,44 +538,39 @@ def execute_job(job: dict) -> tuple:
     if jtype == "patch":
         raw_pkg_list = params.get("packages", [])
         # SECURITY: Validate every package name before passing it to
-        # apt-get.  This prevents a compromised server (or MITM) from
+        # the package manager.  This prevents a compromised server (or MITM) from
         # injecting shell metacharacters.  subprocess is called with a
         # list (not shell=True) so shell injection is already structurally
         # blocked, but name validation adds defence-in-depth.
         pkg_list = _validate_package_names(raw_pkg_list) if raw_pkg_list else []
-        apt_env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
-        dpkg_opts = ["-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"]
+        backend = _pkg_backend()
         if pkg_list:
-            cmd = ["apt-get", "install", "-y"] + dpkg_opts + ["--only-upgrade"] + pkg_list
+            cmd = backend["patch_selected_prefix"] + pkg_list
         else:
-            cmd = ["apt-get", "upgrade", "-y"] + dpkg_opts
+            cmd = backend["patch_all"]
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=600,
-                env=apt_env,
+                env=backend["env"],
             )
             output = result.stdout + result.stderr
             status = "done" if result.returncode == 0 else "failed"
-            # Detect kept config files and warn the user
-            confold_markers = ["force-confold", "Konfigurationsdatei", "configuration file",
-                               "keeping old config", "installing new version"]
-            kept_configs = [l.strip() for l in output.splitlines()
-                           if any(m.lower() in l.lower() for m in confold_markers)
-                           and ("==>" in l or "conf" in l.lower())]
-            if kept_configs:
-                output += "\n\n⚠️  CONFIG NOTICE: Some packages had modified config files. " \
-                          "The existing config was kept. Review manually if the new version " \
-                          "requires config changes:\n" + "\n".join(f"  • {c}" for c in kept_configs)
+            review_note = _extract_config_review_note(output, backend["name"])
+            if review_note:
+                _set_config_review(True, review_note)
+                output += "\n\nCONFIG REVIEW REQUIRED:\n" + review_note + "\n\nReview the changed config files and acknowledge the warning in PatchPilot once everything looks good."
+            elif status == "done":
+                _set_config_review(False)
             # Auto-run autoremove after successful patch to clean up
-            if status == "done":
+            if status == "done" and backend.get("autoremove"):
                 try:
                     ar = subprocess.run(
-                        ["apt-get", "autoremove", "-y"],
+                        backend["autoremove"],
                         capture_output=True, text=True, timeout=300,
-                        env=apt_env,
+                        env=backend["env"],
                     )
                     if ar.stdout.strip():
                         output += "\n--- autoremove ---\n" + ar.stdout
@@ -411,13 +592,16 @@ def execute_job(job: dict) -> tuple:
             return "failed", str(e)
 
     elif jtype == "autoremove":
+        backend = _pkg_backend()
+        if not backend.get("autoremove"):
+            return "failed", f"Autoremove is not supported on {backend['name']}"
         try:
             result = subprocess.run(
-                ["apt-get", "autoremove", "-y"],
+                backend["autoremove"],
                 capture_output=True,
                 text=True,
                 timeout=300,
-                env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
+                env=backend["env"],
             )
             output = result.stdout + result.stderr
             status = "done" if result.returncode == 0 else "failed"
@@ -436,6 +620,10 @@ def execute_job(job: dict) -> tuple:
     elif jtype == "deploy_ssl":
         # Download CA certificate from server and install it locally.
         return _deploy_ssl_cert()
+
+    elif jtype == "ack_config_review":
+        _set_config_review(False)
+        return "done", "Configuration review status acknowledged"
 
     else:
         return "failed", f"Unknown job type: {jtype}"

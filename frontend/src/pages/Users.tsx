@@ -32,17 +32,24 @@ export function UsersPage() {
   const [users, setUsers] = useState<User[]>([])
   const [newUser, setNewUser] = useState({ username: '', password: '', role: 'user' })
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string>('')
   const [resetId, setResetId] = useState<number | null>(null)
   const [resetPw, setResetPw] = useState('')
   const { showToast } = useToast()
 
   const load = useCallback(async () => {
+    setLoadError('')
     try {
       const res = await api.users()
-      setUsers(res.users)
-    } catch { /* ignore */ }
+      setUsers(Array.isArray(res.users) ? res.users : [])
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load users'
+      setUsers([])
+      setLoadError(message)
+      showToast(message, 'error')
+    }
     finally { setLoading(false) }
-  }, [])
+  }, [showToast])
 
   useEffect(() => { load() }, [load])
 
@@ -121,6 +128,16 @@ export function UsersPage() {
       <Card style={{ padding: '20px 22px', marginBottom: '28px' }}>
         {loading ? (
           <div style={{ color: colors.textMuted, fontSize: '12px' }}>Loading users...</div>
+        ) : loadError ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '16px', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ color: colors.danger, fontSize: '12px', marginBottom: '4px' }}>Failed to load users</div>
+              <div style={{ color: colors.textMuted, fontSize: '11px' }}>{loadError}</div>
+            </div>
+            <Button onClick={() => { setLoading(true); load() }}>Retry</Button>
+          </div>
+        ) : users.length === 0 ? (
+          <div style={{ color: colors.textMuted, fontSize: '12px' }}>No users found.</div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', fontFamily: "'Electrolize', monospace" }}>

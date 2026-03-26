@@ -337,8 +337,9 @@ function AgentRow({
         <span title={agent.protocol === 'https' ? 'Connected via HTTPS' : 'Connected via HTTP'} style={{
           fontSize: '9px', letterSpacing: '0.1em',
           padding: '1px 5px',
-          border: `1px solid ${agent.protocol === 'https' ? colors.success : colors.textMuted}44`,
-          color: agent.protocol === 'https' ? colors.success : colors.textMuted,
+          border: `1px solid ${!online ? colors.border : agent.protocol === 'https' ? colors.success : colors.textMuted}44`,
+          color: !online ? colors.textMuted : agent.protocol === 'https' ? colors.success : colors.textMuted,
+          opacity: !online ? 0.55 : 1,
           fontFamily: "'Orbitron', sans-serif",
         }}>
           {agent.protocol === 'https' ? 'TLS' : 'HTTP'}
@@ -410,7 +411,18 @@ function AgentRow({
       <td className="pp-hide-mobile" style={{ padding: '12px 16px', color: colors.textDim, fontSize: '12px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
           <span className={osIcon(agent.os_pretty)} style={{ fontSize: '14px', color: colors.textMuted, flexShrink: 0 }} />
-          <span>{agent.os_pretty ?? '—'}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span>{agent.os_pretty ?? '—'}</span>
+            <span style={{
+              fontSize: '10px',
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+              color: colors.textMuted,
+              fontFamily: "'Electrolize', monospace",
+            }}>
+              {agent.package_manager ? `${agent.package_manager} packages` : 'Package manager unknown'}
+            </span>
+          </div>
         </div>
       </td>
       <td style={{ padding: '12px 16px', textAlign: 'center' }}>
@@ -425,6 +437,13 @@ function AgentRow({
           }} title="Patching in progress…" />
         ) : (agent.pending_count ?? 0) > 0 ? (
           <Badge color={colors.warn}>{agent.pending_count}</Badge>
+        ) : agent.config_review_required ? (
+          <span
+            title="Config changes need manual review"
+            style={{ color: colors.warn, fontSize: '15px', textShadow: glow(colors.warn, 4) }}
+          >
+            !
+          </span>
         ) : (
           <span style={{ color: colors.success, fontSize: '13px', textShadow: glow(colors.success, 3) }}>✓</span>
         )}
@@ -535,7 +554,7 @@ function EmptyState() {
             fontFamily: "'Electrolize', monospace",
             opacity: 0.6,
           }}>
-            Install the PatchPilot agent on your Debian VMs to get started
+            Install the PatchPilot agent on your Linux VMs to get started
           </div>
         </div>
       </td>
@@ -640,7 +659,7 @@ export function Dashboard() {
             disabled={bulkBusy || patchableAgents.length === 0}
             onClick={() => setConfirm({
               title: 'Patch All VMs',
-              message: `Install pending updates on ${patchableAgents.length} VM${patchableAgents.length === 1 ? '' : 's'}? This runs apt-get upgrade on each.`,
+              message: `Install pending updates on ${patchableAgents.length} VM${patchableAgents.length === 1 ? '' : 's'}? This runs the system package upgrade on each.`,
               onConfirm: () => { setConfirm(null); patchAll() },
             })}
           >

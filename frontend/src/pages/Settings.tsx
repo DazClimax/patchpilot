@@ -9,6 +9,7 @@ import { Button } from '../components/Button'
 import { PageHeader, SectionHeader } from '../components/SectionHeader'
 import { Dropdown } from '../components/Dropdown'
 import { useToast } from '../components/Toast'
+import { persistUiEffectsSettings } from '../effects'
 
 // ---------------------------------------------------------------------------
 // Style helpers (identical pattern to Schedule.tsx)
@@ -269,6 +270,9 @@ const EMPTY: Settings = {
   server_port: '8443',
   agent_port: '8050',
   agent_ssl: '0',
+  ui_audio_enabled: '1',
+  ui_audio_volume: '70',
+  ui_login_animation_enabled: '1',
   agent_url: '',
   ssl_certfile: '',
   ssl_keyfile: '',
@@ -286,7 +290,7 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState<'telegram' | 'email' | null>(null)
   const [restarting, setRestarting] = useState(false)
-  const [tab, setTab] = useState<'notifications' | 'server'>('notifications')
+  const [tab, setTab] = useState<'notifications' | 'effects' | 'server'>('notifications')
   const { showToast } = useToast()
 
   const isDirty = JSON.stringify(form) !== JSON.stringify(savedForm)
@@ -297,6 +301,11 @@ export function SettingsPage() {
       const merged = { ...EMPTY, ...data }
       setForm(merged)
       setSavedForm(merged)
+      persistUiEffectsSettings({
+        audioEnabled: merged.ui_audio_enabled === '1',
+        audioVolume: Number(merged.ui_audio_volume || '70'),
+        loginAnimationEnabled: merged.ui_login_animation_enabled !== '0',
+      })
     } catch {
       showToast('Error loading settings', 'error')
     } finally {
@@ -331,6 +340,11 @@ export function SettingsPage() {
       // Strip computed/non-DB fields before saving
       const { ssl_enabled, ssl_certfile, ssl_keyfile, internal_url, agent_url, ...saveable } = form as any
       const result = await api.saveSettings(saveable)
+      persistUiEffectsSettings({
+        audioEnabled: form.ui_audio_enabled === '1',
+        audioVolume: Number(form.ui_audio_volume || '70'),
+        loginAnimationEnabled: form.ui_login_animation_enabled !== '0',
+      })
       if (result.restart_pending) {
         setSavedForm({ ...form })
         showToast('Settings saved — server restarting', 'success')
@@ -392,7 +406,7 @@ export function SettingsPage() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: '0', marginBottom: '24px', borderBottom: `1px solid ${colors.border}` }}>
-        {(['notifications', 'server'] as const).map(t => (
+        {(['notifications', 'effects', 'server'] as const).map(t => (
           <button
             key={t}
             type="button"
@@ -411,7 +425,7 @@ export function SettingsPage() {
               transition: 'all 0.15s',
             }}
           >
-            {t === 'notifications' ? 'Notifications' : 'Server'}
+            {t === 'notifications' ? 'Notifications' : t === 'effects' ? 'Effects' : 'Server'}
           </button>
         ))}
       </div>
@@ -606,6 +620,89 @@ export function SettingsPage() {
               <Toggle label="Updates available" name="notify_patches" value={form.notify_patches} onChange={handleChange} />
               <Toggle label="Job failed" name="notify_failures" value={form.notify_failures} onChange={handleChange} />
             </div>
+          </div>
+        </Card>
+
+        </>}
+
+        {/* ================================================================== */}
+        {/* TAB: Effects                                                        */}
+        {/* ================================================================== */}
+        {tab === 'effects' && <>
+
+        <Card style={{ marginBottom: '20px' }}>
+          <SectionHeader>Sound Effects</SectionHeader>
+
+          <Toggle
+            label="Enable UI Sound Effects"
+            name="ui_audio_enabled"
+            value={form.ui_audio_enabled}
+            onChange={handleChange}
+          />
+
+          <div style={{
+            marginTop: '16px',
+            opacity: form.ui_audio_enabled === '1' ? 1 : 0.45,
+            pointerEvents: form.ui_audio_enabled === '1' ? 'auto' : 'none',
+            transition: 'opacity 0.2s ease',
+          }}>
+            <label style={labelStyle}>Sound Volume</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={form.ui_audio_volume}
+                onChange={e => handleChange('ui_audio_volume', e.target.value)}
+                style={{ flex: '1 1 260px', accentColor: colors.primary }}
+              />
+              <div style={{
+                minWidth: '58px',
+                padding: '6px 10px',
+                border: `1px solid ${colors.border}`,
+                color: colors.primary,
+                fontFamily: "'Electrolize', monospace",
+                fontSize: '12px',
+                textAlign: 'center',
+                background: `${colors.primary}08`,
+              }}>
+                {form.ui_audio_volume}%
+              </div>
+            </div>
+            <div style={{
+              marginTop: '10px',
+              fontSize: '11px',
+              color: colors.textMuted,
+              fontFamily: "'Electrolize', monospace",
+              letterSpacing: '0.04em',
+              lineHeight: 1.6,
+            }}>
+              Uses Arwes bleeps for interface clicks. Changes apply immediately after saving.
+            </div>
+          </div>
+
+          <div style={{ margin: '24px 0', borderTop: `1px solid ${colors.border}` }} />
+
+          <div style={{ ...labelStyle, marginBottom: '12px' }}>Login Animation</div>
+
+          <Toggle
+            label="Enable Login Animation"
+            name="ui_login_animation_enabled"
+            value={form.ui_login_animation_enabled}
+            onChange={handleChange}
+          />
+
+          <div style={{
+            marginTop: '10px',
+            fontSize: '11px',
+            color: colors.textMuted,
+            fontFamily: "'Electrolize', monospace",
+            letterSpacing: '0.04em',
+            lineHeight: 1.6,
+            opacity: form.ui_login_animation_enabled === '1' ? 1 : 0.55,
+          }}>
+            Plays a short sci-fi transition overlay after successful sign-in before the dashboard opens.
           </div>
         </Card>
 

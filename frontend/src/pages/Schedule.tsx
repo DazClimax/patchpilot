@@ -642,8 +642,8 @@ export function SchedulePage() {
                     value={form.action}
                     onChange={v => setForm(f => ({ ...f, action: v }))}
                     options={[
-                      { value: 'patch', label: 'Patch (apt upgrade)' },
-                      { value: 'autoremove', label: 'Autoremove (apt autoremove)' },
+                      { value: 'patch', label: 'Patch (system package upgrade)' },
+                      { value: 'autoremove', label: 'Autoremove (package cleanup)' },
                       { value: 'update_agent', label: 'Update Agent' },
                       { value: 'reboot', label: 'Reboot' },
                     ]}

@@ -32,7 +32,7 @@ export function AboutPage() {
           letterSpacing: '0.1em',
           marginBottom: '28px',
         }}>
-          Self-hosted patch management for Debian/Ubuntu VMs
+          Self-hosted patch management for Linux VMs
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>

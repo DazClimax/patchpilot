@@ -1,11 +1,16 @@
 #!/bin/bash
 # PatchPilot Agent Installer
-# Usage: curl -fsSL <server>/agent/install.sh | sudo PATCHPILOT_SERVER=<url> PATCHPILOT_REGISTER_KEY=<key> bash
+# Usage: sudo PATCHPILOT_SERVER=<url> PATCHPILOT_REGISTER_KEY=<key> bash install.sh
+# For HTTPS with a self-signed certificate, provide PATCHPILOT_CA_PEM_B64.
+# Set PATCHPILOT_INSECURE_BOOTSTRAP=1 only if you explicitly accept an
+# unauthenticated first-cert bootstrap on a trusted network.
 set -e
 
 AGENT_ID="${PATCHPILOT_AGENT_ID:-$(hostname)}"
 SERVER_URL="${PATCHPILOT_SERVER}"
 REGISTER_KEY="${PATCHPILOT_REGISTER_KEY}"
+CA_PEM_B64="${PATCHPILOT_CA_PEM_B64}"
+INSECURE_BOOTSTRAP="${PATCHPILOT_INSECURE_BOOTSTRAP:-0}"
 AGENT_DIR="/opt/patchpilot/agent"
 CONFIG_DIR="/etc/patchpilot"
 MISSING_PKGS=()
@@ -36,8 +41,14 @@ if command -v apt-get &>/dev/null; then
 elif command -v apt &>/dev/null; then
   PKG_INSTALL="apt install -y -qq"
   PKG_UPDATE="apt update -qq"
+elif command -v dnf &>/dev/null; then
+  PKG_INSTALL="dnf install -y -q"
+  PKG_UPDATE="dnf makecache -q"
+elif command -v yum &>/dev/null; then
+  PKG_INSTALL="yum install -y -q"
+  PKG_UPDATE="yum makecache -q"
 else
-  echo "ERROR: No supported package manager found (requires apt/apt-get)" >&2
+  echo "ERROR: No supported package manager found (requires apt, dnf, or yum)" >&2
   exit 1
 fi
 
@@ -82,21 +93,31 @@ mkdir -p "$AGENT_DIR" "$CONFIG_DIR"
 CURL_OPTS=""
 WGET_OPTS=""
 if echo "$SERVER_URL" | grep -qi '^https://'; then
-  echo "[patchpilot] HTTPS server detected — fetching CA certificate..."
-  # Bootstrap trust: first download with -k (insecure) to get the CA cert
-  if command -v curl &>/dev/null; then
-    curl -fsSLk "$SERVER_URL/agent/ca.pem" -o "$CONFIG_DIR/ca.pem" 2>/dev/null || true
-  else
-    wget --no-check-certificate -qO "$CONFIG_DIR/ca.pem" "$SERVER_URL/agent/ca.pem" 2>/dev/null || true
-  fi
-  if [ -s "$CONFIG_DIR/ca.pem" ]; then
-    echo "[patchpilot] CA certificate installed at $CONFIG_DIR/ca.pem"
+  if [ -n "$CA_PEM_B64" ]; then
+    echo "[patchpilot] HTTPS server detected — installing embedded CA certificate..."
+    printf '%s' "$CA_PEM_B64" | base64 -d > "$CONFIG_DIR/ca.pem"
+    chmod 644 "$CONFIG_DIR/ca.pem"
     CURL_OPTS="--cacert $CONFIG_DIR/ca.pem"
     WGET_OPTS="--ca-certificate=$CONFIG_DIR/ca.pem"
+  elif [ "$INSECURE_BOOTSTRAP" = "1" ]; then
+    echo "[patchpilot] WARNING: using insecure HTTPS bootstrap because PATCHPILOT_INSECURE_BOOTSTRAP=1"
+    if command -v curl &>/dev/null; then
+      curl -fsSLk "$SERVER_URL/agent/ca.pem" -o "$CONFIG_DIR/ca.pem" 2>/dev/null || true
+    else
+      wget --no-check-certificate -qO "$CONFIG_DIR/ca.pem" "$SERVER_URL/agent/ca.pem" 2>/dev/null || true
+    fi
+    if [ -s "$CONFIG_DIR/ca.pem" ]; then
+      echo "[patchpilot] CA certificate installed at $CONFIG_DIR/ca.pem"
+      CURL_OPTS="--cacert $CONFIG_DIR/ca.pem"
+      WGET_OPTS="--ca-certificate=$CONFIG_DIR/ca.pem"
+    else
+      echo "ERROR: Could not bootstrap CA certificate." >&2
+      exit 1
+    fi
   else
-    echo "[patchpilot] WARNING: Could not fetch CA cert — falling back to insecure mode"
-    CURL_OPTS="-k"
-    WGET_OPTS="--no-check-certificate"
+    echo "ERROR: HTTPS bootstrap requires PATCHPILOT_CA_PEM_B64." >&2
+    echo "  Use the secure installer generated in the Deploy page, or set PATCHPILOT_INSECURE_BOOTSTRAP=1 to opt into insecure bootstrap." >&2
+    exit 1
   fi
 fi
 
