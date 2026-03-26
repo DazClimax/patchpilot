@@ -4,16 +4,6 @@ Self-hosted patch management for Linux VMs, built for homelabs and small Linux f
 
 PatchPilot uses a pull-based agent model: every VM polls the server for work, so you do not need SSH fan-out, inbound access to guests, or extra Python dependencies on the agent side.
 
-![PatchPilot](patchpilot-telegram-avatar.png)
-
-## Preview
-
-![PatchPilot Dashboard](docs/screenshots/dashboard.png)
-
-![PatchPilot Deploy](docs/screenshots/deploy.png)
-
-![PatchPilot Settings](docs/screenshots/settings-notifications.png)
-
 ## Why PatchPilot
 
 - **No SSH orchestration required**: agents initiate every connection
@@ -191,6 +181,20 @@ In the current local environment, `pytest` is not installed, so the suite could 
 - [Security Notes](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
+
+## Screenshots
+
+### Dashboard
+
+![PatchPilot Dashboard](docs/screenshots/dashboard.png)
+
+### Deploy Flow
+
+![PatchPilot Deploy](docs/screenshots/deploy.png)
+
+### Settings
+
+![PatchPilot Settings](docs/screenshots/settings-notifications.png)
 
 ## Project Status
 
