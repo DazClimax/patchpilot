@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.4
+
+- Switched HAOS IP discovery to also read Supervisor `/network/info` interface data.
+- Added support for nested Supervisor IPv4 fields like `ipv4.ip_address`.
+- Improved HAOS uptime reporting using the official host boot timestamp when available.
+
 ## 0.2.3
 
 - Improved Home Assistant OS IP detection to handle additional Supervisor interface formats.

@@ -98,6 +98,10 @@ def get_host_info() -> dict:
     return supervisor_json("GET", "/host/info").get("data", {})
 
 
+def get_network_info() -> dict:
+    return supervisor_json("GET", "/network/info").get("data", {})
+
+
 def get_addons_info() -> list[dict]:
     return supervisor_json("GET", "/addons").get("data", {}).get("addons", [])
 
@@ -149,6 +153,23 @@ def _iter_interface_values(interfaces) -> list[dict]:
     return []
 
 
+def _add_interface_candidates(iface: dict, add_candidate) -> None:
+    for key in ("ipv4", "ipv4_addresses"):
+        values = iface.get(key)
+        if isinstance(values, list):
+            for value in values:
+                add_candidate(value)
+        elif isinstance(values, dict):
+            for nested_key in ("ip_address", "address"):
+                nested_value = values.get(nested_key)
+                if isinstance(nested_value, str):
+                    add_candidate(nested_value)
+    for key in ("ipv4_address", "ip_address", "address"):
+        value = iface.get(key)
+        if isinstance(value, str):
+            add_candidate(value)
+
+
 def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: str = "") -> str | None:
     override = _normalize_ip(advertise_ip)
     if override:
@@ -164,16 +185,14 @@ def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: st
 
     interfaces = host_info.get("interfaces")
     for iface in _iter_interface_values(interfaces):
-        for key in ("ipv4", "ipv4_addresses"):
-            values = iface.get(key)
-            if not isinstance(values, list):
-                continue
-            for value in values:
-                add_candidate(value)
-        for key in ("ipv4_address", "address"):
-            value = iface.get(key)
-            if isinstance(value, str):
-                add_candidate(value)
+        _add_interface_candidates(iface, add_candidate)
+
+    try:
+        network_info = get_network_info()
+        for iface in _iter_interface_values(network_info.get("interfaces")):
+            _add_interface_candidates(iface, add_candidate)
+    except Exception:
+        pass
 
     try:
         parsed = urlparse(server)
@@ -201,6 +220,16 @@ def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: st
 
 def get_uptime_seconds(host_info: dict | None = None) -> int | None:
     host_info = host_info or {}
+    boot_timestamp = host_info.get("boot_timestamp")
+    try:
+        if boot_timestamp is not None:
+            boot_seconds = float(boot_timestamp) / 1_000_000
+            uptime = int(time.time() - boot_seconds)
+            if uptime >= 0:
+                return uptime
+    except (TypeError, ValueError):
+        pass
+
     for key in ("uptime", "uptime_seconds"):
         value = host_info.get(key)
         try:
