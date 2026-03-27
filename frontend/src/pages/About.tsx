@@ -16,6 +16,24 @@ export function AboutPage() {
 
       <Card style={{ padding: '28px 32px' }}>
         <div style={{
+          marginBottom: '28px',
+          border: `1px solid ${colors.border}`,
+          background: glassBg(0.35),
+          overflow: 'hidden',
+          boxShadow: `0 0 24px ${colors.primary}22`,
+        }}>
+          <img
+            src="/docs/assets/patchpilot-hero.png"
+            alt="PatchPilot hero artwork"
+            style={{
+              display: 'block',
+              width: '100%',
+              height: 'auto',
+            }}
+          />
+        </div>
+
+        <div style={{
           fontFamily: "'Orbitron', sans-serif",
           fontSize: '24px',
           letterSpacing: '0.15em',

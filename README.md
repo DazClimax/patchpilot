@@ -2,6 +2,8 @@
 
 Self-hosted patch management for Linux VMs, built for homelabs and small Linux fleets.
 
+![PatchPilot Hero](docs/assets/patchpilot-hero.png)
+
 PatchPilot uses a pull-based agent model: every VM polls the server for work, so you do not need SSH fan-out, inbound access to guests, or extra Python dependencies on the agent side.
 
 ## Why PatchPilot
