@@ -31,6 +31,7 @@ The add-on lives in this repository under:
    - `patchpilot_server`
    - `register_key`
    - optional `agent_id`
+   - optional `advertise_ip`
    - optional `ca_pem`
 5. Start the add-on.
 

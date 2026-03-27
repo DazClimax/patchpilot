@@ -253,11 +253,12 @@ function decodePemFromBase64(value: string): string {
   }
 }
 
-function buildHaAddonConfig(serverUrl: string, agentId: string, registerKey: string, caPemB64: string): string {
+function buildHaAddonConfig(serverUrl: string, agentId: string, registerKey: string, caPemB64: string, advertiseIp: string): string {
   const lines = [
     `patchpilot_server: ${JSON.stringify(serverUrl)}`,
     `register_key: ${JSON.stringify(registerKey || '<REGISTER_KEY>')}`,
     `agent_id: ${JSON.stringify(agentId || 'homeassistant')}`,
+    `advertise_ip: ${JSON.stringify(advertiseIp || '')}`,
     'poll_interval: 30',
   ]
   const pem = decodePemFromBase64(caPemB64).trim()
@@ -474,6 +475,7 @@ export function DeployPage() {
   const [pageReady, setPageReady] = useState(false)
   const [serverUrl, setServerUrl] = useState('')
   const [agentId, setAgentId] = useState('')
+  const [haAdvertiseIp, setHaAdvertiseIp] = useState('')
   const [registerKey, setRegisterKey] = useState('')
   const [expiresIn, setExpiresIn] = useState(0)
   const [caPemB64, setCaPemB64] = useState('')
@@ -541,7 +543,7 @@ export function DeployPage() {
     ? buildScript(effectiveUrl, safeAgentId, registerKey, caPemB64)
     : ''
   const oneliner = urlValid && keyUsable ? buildOneLiner(effectiveUrl, safeAgentId, registerKey, caPemB64) : ''
-  const haAddonConfig = urlValid && keyUsable ? buildHaAddonConfig(effectiveUrl, safeAgentId, registerKey, caPemB64) : ''
+  const haAddonConfig = urlValid && keyUsable ? buildHaAddonConfig(effectiveUrl, safeAgentId, registerKey, caPemB64, haAdvertiseIp.trim()) : ''
   const haRepoUrl = 'https://github.com/DazClimax/patchpilot'
 
   const downloadScript = () => {
@@ -646,6 +648,41 @@ export function DeployPage() {
               }}
             />
           </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap', marginTop: '12px' }}>
+            <div style={{
+              fontSize: '11px', color: colors.textMuted,
+              fontFamily: "'Orbitron', sans-serif",
+              letterSpacing: '0.18em', textTransform: 'uppercase',
+              flexShrink: 0, minWidth: '100px',
+            }}>
+              HA LAN IP
+            </div>
+            <input
+              value={haAdvertiseIp}
+              onChange={e => setHaAdvertiseIp(e.target.value.trim())}
+              placeholder="optional — e.g. 192.168.111.12"
+              style={{
+                flex: 1,
+                minWidth: 'min(260px, 100%)',
+                background: `${colors.bg}cc`,
+                border: `1px solid ${colors.border}`,
+                color: colors.text,
+                padding: '8px 14px',
+                fontSize: '13px',
+                fontFamily: 'monospace',
+                outline: 'none',
+                transition: 'border-color 0.15s, box-shadow 0.15s',
+              }}
+              onFocus={e => {
+                e.currentTarget.style.borderColor = colors.primary
+                e.currentTarget.style.boxShadow = `0 0 0 1px ${colors.primary}44, inset 0 0 12px ${colors.primary}08`
+              }}
+              onBlur={e => {
+                e.currentTarget.style.borderColor = colors.border
+                e.currentTarget.style.boxShadow = 'none'
+              }}
+            />
+          </div>
           {agentIdError && (
             <div style={{ marginTop: '8px', fontSize: '11px', color: colors.danger, fontFamily: 'monospace' }}>
               ✕ {agentIdError}
@@ -654,6 +691,7 @@ export function DeployPage() {
           <div style={{ marginTop: '8px', fontSize: '10px', color: colors.textMuted, fontFamily: 'monospace' }}>
             The server URL is what agents use to connect. If you access PatchPilot through a reverse proxy,
             enter the <strong>internal</strong> IP:port here (e.g. http://192.168.1.20:8050).
+            For Home Assistant OS, you can optionally set a fixed LAN IP above if the add-on reports a Docker/internal address.
           </div>
         </Card>
       </div>

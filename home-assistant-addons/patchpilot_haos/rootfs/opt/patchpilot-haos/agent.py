@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import hashlib
+import ipaddress
 import json
 import os
 import platform
@@ -100,8 +101,46 @@ def get_addons_info() -> list[dict]:
     return supervisor_json("GET", "/addons").get("data", {}).get("addons", [])
 
 
-def detect_local_ip(server: str, host_info: dict | None = None) -> str | None:
+def _normalize_ip(value: str) -> str | None:
+    ip = (value or "").split("/")[0].strip()
+    if not ip or ip in {"127.0.0.1", "0.0.0.0"}:
+        return None
+    try:
+        parsed = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if parsed.version != 4:
+        return None
+    return str(parsed)
+
+
+def _score_ip(ip: str) -> int:
+    parsed = ipaddress.ip_address(ip)
+    if parsed.is_loopback or parsed.is_link_local:
+        return -1
+    if parsed in ipaddress.ip_network("192.168.0.0/16"):
+        return 400
+    if parsed in ipaddress.ip_network("10.0.0.0/8"):
+        return 300
+    if parsed in ipaddress.ip_network("172.16.0.0/12"):
+        return 200
+    if parsed.is_private:
+        return 100
+    return 0
+
+
+def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: str = "") -> str | None:
+    override = _normalize_ip(advertise_ip)
+    if override:
+        return override
+
     host_info = host_info or {}
+    candidates: list[str] = []
+
+    def add_candidate(value: str):
+        ip = _normalize_ip(value)
+        if ip and ip not in candidates:
+            candidates.append(ip)
 
     interfaces = host_info.get("interfaces")
     if isinstance(interfaces, list):
@@ -111,9 +150,7 @@ def detect_local_ip(server: str, host_info: dict | None = None) -> str | None:
                 if not isinstance(values, list):
                     continue
                 for value in values:
-                    ip = (value or "").split("/")[0].strip()
-                    if ip and ip not in {"127.0.0.1", "0.0.0.0"}:
-                        return ip
+                    add_candidate(value)
 
     try:
         parsed = urlparse(server)
@@ -122,9 +159,7 @@ def detect_local_ip(server: str, host_info: dict | None = None) -> str | None:
         if target_host:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
                 sock.connect((target_host, target_port))
-                ip = sock.getsockname()[0]
-                if ip and ip not in {"127.0.0.1", "0.0.0.0"}:
-                    return ip
+                add_candidate(sock.getsockname()[0])
     except Exception:
         pass
 
@@ -132,13 +167,13 @@ def detect_local_ip(server: str, host_info: dict | None = None) -> str | None:
         hostname = socket.gethostname()
         infos = socket.getaddrinfo(hostname, None, family=socket.AF_INET, type=socket.SOCK_DGRAM)
         for info in infos:
-            ip = info[4][0]
-            if ip and ip not in {"127.0.0.1", "0.0.0.0"}:
-                return ip
+            add_candidate(info[4][0])
     except Exception:
         pass
 
-    return None
+    if not candidates:
+        return None
+    return max(candidates, key=_score_ip)
 
 
 def get_pending_updates() -> list[dict]:
@@ -180,12 +215,12 @@ def get_pending_updates() -> list[dict]:
     return updates
 
 
-def register(server: str, register_key: str, agent_id: str, ssl_ctx):
+def register(server: str, register_key: str, agent_id: str, advertise_ip: str, ssl_ctx):
     host = get_host_info()
     payload = {
         "id": agent_id or socket.gethostname(),
         "hostname": host.get("hostname") or socket.gethostname(),
-        "ip": detect_local_ip(server, host),
+        "ip": detect_local_ip(server, host, advertise_ip),
         "os_pretty": "Home Assistant OS",
         "kernel": host.get("kernel") or platform.release(),
         "arch": platform.machine(),
@@ -198,12 +233,12 @@ def register(server: str, register_key: str, agent_id: str, ssl_ctx):
     return data["agent_id"], data["token"]
 
 
-def heartbeat(server: str, agent_id: str, token: str, ssl_ctx):
+def heartbeat(server: str, agent_id: str, token: str, advertise_ip: str, ssl_ctx):
     core = get_core_info()
     host = get_host_info()
     payload = {
         "hostname": host.get("hostname") or socket.gethostname(),
-        "ip": detect_local_ip(server, host),
+        "ip": detect_local_ip(server, host, advertise_ip),
         "os_pretty": "Home Assistant OS",
         "kernel": host.get("kernel") or platform.release(),
         "arch": platform.machine(),
@@ -313,6 +348,7 @@ def main():
     server = opts.get("patchpilot_server", "").rstrip("/")
     register_key = opts.get("register_key", "")
     agent_id = opts.get("agent_id", "").strip()
+    advertise_ip = opts.get("advertise_ip", "").strip()
     poll_interval = int(opts.get("poll_interval", 30) or 30)
     ca_pem = opts.get("ca_pem", "").strip()
     if not server:
@@ -325,7 +361,7 @@ def main():
     if not token:
         if not register_key:
             raise RuntimeError("register_key is required for first registration")
-        agent_id, token = register(server, register_key, agent_id, ssl_ctx)
+        agent_id, token = register(server, register_key, agent_id, advertise_ip, ssl_ctx)
         state.update({"agent_id": agent_id, "token": token})
         save_state(state)
 
@@ -333,13 +369,13 @@ def main():
     while True:
         try:
             if last_heartbeat <= 0:
-                heartbeat(server, agent_id, token, ssl_ctx)
+                heartbeat(server, agent_id, token, advertise_ip, ssl_ctx)
                 last_heartbeat = poll_interval
             jobs = poll_jobs(server, agent_id, token, ssl_ctx)
             for job in jobs:
                 status, output = run_job(job)
                 report_result(server, agent_id, token, job["id"], status, output, ssl_ctx)
-                heartbeat(server, agent_id, token, ssl_ctx)
+                heartbeat(server, agent_id, token, advertise_ip, ssl_ctx)
         except urllib.error.HTTPError as err:
             print(f"[patchpilot-haos] HTTP {err.code}: {err.read().decode(errors='ignore')}", file=sys.stderr)
         except Exception as err:

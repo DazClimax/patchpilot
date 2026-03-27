@@ -13,6 +13,7 @@ This add-on:
 - `patchpilot_server`: URL to the PatchPilot agent port
 - `register_key`: current register key from PatchPilot
 - `agent_id`: optional fixed name
+- `advertise_ip`: optional fixed LAN IP override if Home Assistant reports the wrong address
 - `poll_interval`: polling interval in seconds
 - `ca_pem`: optional PEM content for self-signed TLS servers
 
