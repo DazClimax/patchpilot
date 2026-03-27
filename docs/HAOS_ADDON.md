@@ -1,37 +1,37 @@
 # Home Assistant OS Add-on
 
-Der erste PatchPilot-Pfad fuer Home Assistant OS laeuft als eigenes Add-on.
+The first PatchPilot path for Home Assistant OS runs as a dedicated add-on.
 
-## Was diese erste Version kann
+## What This First Version Can Do
 
-- Home Assistant OS als `haos`-Agent bei PatchPilot registrieren
-- ein verfuegbares Core-Update als Pending Update anzeigen
-- folgende Jobs aus PatchPilot ausfuehren:
+- register Home Assistant OS as a `haos` agent in PatchPilot
+- show an available Core update as a pending update
+- run the following jobs from PatchPilot:
   - `HA Backup`
   - `HA Core Update`
   - `HA Backup + Update`
 
 ## Add-on Repository
 
-Im Repo liegt das Add-on unter:
+The add-on lives in this repository under:
 
 - `home-assistant-addons/repository.yaml`
 - `home-assistant-addons/patchpilot_haos/`
 
 ## Installation in Home Assistant
 
-1. Im Add-on Store `Repositories` oeffnen.
-2. Das PatchPilot-GitHub-Repo als Add-on-Repository hinzufuegen.
+1. Open `Repositories` in the Add-on Store.
+2. Add the PatchPilot GitHub repository as an add-on repository.
 3. `PatchPilot HAOS Agent` installieren.
-4. Optionen setzen:
+4. Set the options:
    - `patchpilot_server`
    - `register_key`
    - optional `agent_id`
    - optional `ca_pem`
-5. Add-on starten.
+5. Start the add-on.
 
-## Hinweise
+## Notes
 
-- Fuer `ha_backup_update` wird die offizielle Supervisor-API mit `backup=true` genutzt.
-- Diese erste Version deckt nur Home Assistant Core auf HA OS ab.
-- Supervisor-, OS- und Add-on-Updates folgen spaeter.
+- `ha_backup_update` uses the official Supervisor API with `backup=true`.
+- This first version only covers Home Assistant Core on HA OS.
+- Supervisor, OS, and add-on updates will follow later.

@@ -1,21 +1,21 @@
 # PatchPilot HAOS Agent
 
-Erste Home-Assistant-OS-Integration fuer PatchPilot.
+First Home Assistant OS integration for PatchPilot.
 
-Dieses Add-on:
+This add-on:
 
-- registriert eine Home Assistant OS Instanz als eigenen PatchPilot-Agent
-- meldet ein verfuegbares Core-Update als Pending Update
-- unterstuetzt die Jobtypen `ha_backup`, `ha_core_update` und `ha_backup_update`
+- registers a Home Assistant OS instance as its own PatchPilot agent
+- reports an available Core update as a pending update
+- supports the job types `ha_backup`, `ha_core_update`, and `ha_backup_update`
 
-## Konfiguration
+## Configuration
 
-- `patchpilot_server`: URL zum PatchPilot-Agent-Port
-- `register_key`: aktueller Register-Key aus PatchPilot
-- `agent_id`: optionaler fester Name
-- `poll_interval`: Poll-Intervall in Sekunden
-- `ca_pem`: optionaler PEM-Inhalt fuer selbstsignierte TLS-Server
+- `patchpilot_server`: URL to the PatchPilot agent port
+- `register_key`: current register key from PatchPilot
+- `agent_id`: optional fixed name
+- `poll_interval`: polling interval in seconds
+- `ca_pem`: optional PEM content for self-signed TLS servers
 
 ## Status
 
-Dies ist die erste Implementierungsstufe. Supervisor- und OS-Updates folgen spaeter.
+This is the first implementation stage. Supervisor and OS updates will follow later.

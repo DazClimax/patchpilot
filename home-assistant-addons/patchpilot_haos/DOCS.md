@@ -1,21 +1,21 @@
 # PatchPilot HAOS Agent
 
-Dieses Add-on verbindet Home Assistant OS mit PatchPilot.
+This add-on connects Home Assistant OS to PatchPilot.
 
-## Optionen
+## Options
 
-- `patchpilot_server`: URL zum PatchPilot-Agent-Port, z. B. `https://192.168.111.20:8050`
-- `register_key`: Register-Key aus der PatchPilot-Deploy-Seite
-- `agent_id`: optionaler Name fuer diese Home-Assistant-Instanz
-- `poll_interval`: Poll-Intervall in Sekunden
-- `ca_pem`: optionaler PEM-Inhalt fuer selbstsignierte TLS-Zertifikate
+- `patchpilot_server`: URL to the PatchPilot agent port, for example `https://192.168.111.20:8050`
+- `register_key`: register key from the PatchPilot deploy page
+- `agent_id`: optional name for this Home Assistant instance
+- `poll_interval`: polling interval in seconds
+- `ca_pem`: optional PEM content for self-signed TLS certificates
 
-## Erste Version
+## First Version
 
-Unterstuetzt:
+Supports:
 
 - `HA Backup`
 - `HA Core Update`
 - `HA Backup + Update`
 
-Zeigt ein verfuegbares Core-Update als Pending Update in PatchPilot an.
+Shows an available Core update as a pending update in PatchPilot.
