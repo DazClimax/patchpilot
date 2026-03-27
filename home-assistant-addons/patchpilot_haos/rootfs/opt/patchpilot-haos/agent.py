@@ -9,6 +9,7 @@ import sys
 import time
 import urllib.error
 import urllib.request as urlreq
+from urllib.parse import urlparse
 from pathlib import Path
 
 OPTIONS_FILE = Path("/data/options.json")
@@ -87,6 +88,47 @@ def get_host_info() -> dict:
     return supervisor_json("GET", "/host/info").get("data", {})
 
 
+def detect_local_ip(server: str, host_info: dict | None = None) -> str | None:
+    host_info = host_info or {}
+
+    interfaces = host_info.get("interfaces")
+    if isinstance(interfaces, list):
+        for iface in interfaces:
+            for key in ("ipv4", "ipv4_addresses"):
+                values = iface.get(key)
+                if not isinstance(values, list):
+                    continue
+                for value in values:
+                    ip = (value or "").split("/")[0].strip()
+                    if ip and ip not in {"127.0.0.1", "0.0.0.0"}:
+                        return ip
+
+    try:
+        parsed = urlparse(server)
+        target_host = parsed.hostname
+        target_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if target_host:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.connect((target_host, target_port))
+                ip = sock.getsockname()[0]
+                if ip and ip not in {"127.0.0.1", "0.0.0.0"}:
+                    return ip
+    except Exception:
+        pass
+
+    try:
+        hostname = socket.gethostname()
+        infos = socket.getaddrinfo(hostname, None, family=socket.AF_INET, type=socket.SOCK_DGRAM)
+        for info in infos:
+            ip = info[4][0]
+            if ip and ip not in {"127.0.0.1", "0.0.0.0"}:
+                return ip
+    except Exception:
+        pass
+
+    return None
+
+
 def get_pending_updates() -> list[dict]:
     core = get_core_info()
     if not core.get("update_available"):
@@ -99,12 +141,13 @@ def get_pending_updates() -> list[dict]:
 
 
 def register(server: str, register_key: str, agent_id: str, ssl_ctx):
+    host = get_host_info()
     payload = {
         "id": agent_id or socket.gethostname(),
-        "hostname": socket.gethostname(),
-        "ip": "homeassistant.local",
+        "hostname": host.get("hostname") or socket.gethostname(),
+        "ip": detect_local_ip(server, host),
         "os_pretty": "Home Assistant OS",
-        "kernel": platform.release(),
+        "kernel": host.get("kernel") or platform.release(),
         "arch": platform.machine(),
         "package_manager": "haos",
         "agent_type": "haos",
@@ -120,7 +163,7 @@ def heartbeat(server: str, agent_id: str, token: str, ssl_ctx):
     host = get_host_info()
     payload = {
         "hostname": host.get("hostname") or socket.gethostname(),
-        "ip": host.get("hostname") or "homeassistant.local",
+        "ip": detect_local_ip(server, host),
         "os_pretty": "Home Assistant OS",
         "kernel": host.get("kernel") or platform.release(),
         "arch": platform.machine(),
