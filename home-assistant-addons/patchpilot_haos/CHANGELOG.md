@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.9
+
+- Fixed HAOS LAN IP detection for Supervisor network data where `ipv4.address` is returned as a list.
+
 ## 0.2.8
 
 - Excluded Docker, bridge, and other virtual interfaces from HAOS LAN IP detection.

@@ -185,10 +185,16 @@ def _add_interface_candidates(iface: dict, add_candidate) -> None:
                 nested_value = values.get(nested_key)
                 if isinstance(nested_value, str):
                     add_candidate(nested_value)
+                elif isinstance(nested_value, list):
+                    for item in nested_value:
+                        add_candidate(item)
     for key in ("ipv4_address", "ip_address", "address"):
         value = iface.get(key)
         if isinstance(value, str):
             add_candidate(value)
+        elif isinstance(value, list):
+            for item in value:
+                add_candidate(item)
 
 
 def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: str = "") -> str | None:
