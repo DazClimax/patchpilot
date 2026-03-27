@@ -4,6 +4,8 @@ This add-on connects Home Assistant OS to PatchPilot.
 
 ## Options
 
+Home Assistant renders these fields as a normal add-on form in the UI.
+
 - `patchpilot_server`: URL to the PatchPilot agent port, for example `https://192.168.111.20:8050`
 - `register_key`: register key from the PatchPilot deploy page
 - `agent_id`: optional name for this Home Assistant instance

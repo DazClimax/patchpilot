@@ -1,0 +1,16 @@
+configuration:
+  patchpilot_server:
+    name: PatchPilot Server
+    description: URL of the PatchPilot agent endpoint, for example https://192.168.111.20:8050
+  register_key:
+    name: Register Key
+    description: Temporary registration key generated from the PatchPilot Deploy page
+  agent_id:
+    name: Agent ID
+    description: Optional custom name for this Home Assistant instance inside PatchPilot
+  poll_interval:
+    name: Poll Interval
+    description: Number of seconds between PatchPilot polls
+  ca_pem:
+    name: CA Certificate (PEM)
+    description: Optional PEM certificate content for self-signed TLS servers
