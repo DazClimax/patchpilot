@@ -28,6 +28,9 @@ function jobTypeColor(t: string) {
     force_patch: colors.warn,
     refresh_updates: colors.primaryDim,
     reboot: colors.danger,
+    ha_backup: colors.primary,
+    ha_core_update: colors.warn,
+    ha_backup_update: colors.warn,
   }
   return map[t] ?? colors.textDim
 }
@@ -292,6 +295,10 @@ export function VmDetail() {
 
   const online = (agent?.seconds_ago ?? 9999) < 120
   const isRpmSystem = ['dnf', 'yum'].includes(agent?.package_manager ?? '')
+  const isHaos = agent?.agent_type === 'haos'
+  const capabilityList = (agent?.capabilities ?? '').split(',').map(item => item.trim()).filter(Boolean)
+  const hasHaBackup = capabilityList.includes('ha_backup')
+  const hasHaCoreUpdate = capabilityList.includes('ha_core_update')
   const refreshLabel = agent?.package_manager === 'apt'
     ? '↻ Apt Update'
     : agent?.package_manager === 'dnf'
@@ -356,6 +363,48 @@ export function VmDetail() {
                 </Button>
               )}
             </>
+          )}
+          {isHaos && hasHaBackup && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setConfirm({
+                title: 'Home Assistant Backup',
+                message: `Create a Home Assistant backup on "${agent.hostname}"?`,
+                onConfirm: () => { setConfirm(null); triggerJob('ha_backup') },
+              })}
+              disabled={busy}
+            >
+              ⬒ HA Backup
+            </Button>
+          )}
+          {isHaos && hasHaCoreUpdate && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setConfirm({
+                title: 'Home Assistant Core Update',
+                message: `Update Home Assistant Core on "${agent.hostname}" without creating a backup first?`,
+                onConfirm: () => { setConfirm(null); triggerJob('ha_core_update') },
+              })}
+              disabled={busy}
+              style={{ color: colors.warn }}
+            >
+              ⇪ HA Core
+            </Button>
+          )}
+          {isHaos && hasHaBackup && hasHaCoreUpdate && (
+            <Button
+              size="sm"
+              onClick={() => setConfirm({
+                title: 'Home Assistant Backup + Update',
+                message: `Create a backup and then update Home Assistant Core on "${agent.hostname}"?`,
+                onConfirm: () => { setConfirm(null); triggerJob('ha_backup_update') },
+              })}
+              disabled={busy}
+            >
+              ⟳ HA Backup + Update
+            </Button>
           )}
           <Button
             variant="ghost"
@@ -482,6 +531,7 @@ export function VmDetail() {
         {[
           { label: 'IP Address', value: agent.ip ?? '—', accent: colors.primary },
           { label: 'OS',         value: agent.os_pretty ?? '—', accent: colors.primaryDim },
+          { label: 'Agent Type', value: agent.agent_type ?? 'linux', accent: isHaos ? colors.warn : colors.primaryDim },
           { label: 'Pkg Manager', value: agent.package_manager ?? '—', accent: colors.primaryDim },
           { label: 'Kernel',     value: agent.kernel ?? '—', accent: colors.primaryDim },
           { label: 'Arch',       value: agent.arch ?? '—', accent: colors.primaryDim },
@@ -562,6 +612,28 @@ export function VmDetail() {
           </Card>
         )
       })()}
+
+      {capabilityList.length > 0 ? (
+        <Card accent={isHaos ? colors.warn : colors.primaryDim} style={{ padding: '14px 16px', marginBottom: '12px', animationDelay: '0.22s' }}>
+          <div style={{
+            fontSize: '10px',
+            color: colors.textMuted,
+            letterSpacing: '0.22em',
+            textTransform: 'uppercase',
+            marginBottom: '10px',
+            fontFamily: "'Orbitron', sans-serif",
+          }}>
+            Capabilities
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            {capabilityList.map(capability => (
+              <Badge key={capability} color={isHaos ? colors.warn : colors.primaryDim} style={{ fontSize: '10px', padding: '2px 9px' }}>
+                {capability}
+              </Badge>
+            ))}
+          </div>
+        </Card>
+      ) : null}
 
       {/* bottom margin before reboot warning / updates */}
       <div style={{ marginBottom: '12px' }} />

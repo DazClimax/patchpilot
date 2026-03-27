@@ -421,7 +421,11 @@ function AgentRow({
               color: colors.textMuted,
               fontFamily: "'Electrolize', monospace",
             }}>
-              {agent.package_manager ? `${agent.package_manager} packages` : 'Package manager unknown'}
+              {agent.agent_type === 'haos'
+                ? 'Home Assistant OS'
+                : agent.package_manager
+                  ? `${agent.package_manager} packages`
+                  : 'Package manager unknown'}
             </span>
           </div>
         </div>

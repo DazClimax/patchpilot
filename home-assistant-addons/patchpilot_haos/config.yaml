@@ -1,0 +1,27 @@
+name: PatchPilot HAOS Agent
+slug: patchpilot_haos
+description: Registers Home Assistant OS with PatchPilot and enables backup/update jobs.
+version: "0.1.0"
+url: https://github.com/DazClimax/patchpilot
+arch:
+  - aarch64
+  - amd64
+  - armv7
+startup: services
+boot: auto
+init: false
+hassio_api: true
+hassio_role: manager
+panel_icon: mdi:update
+options:
+  patchpilot_server: ""
+  register_key: ""
+  agent_id: ""
+  poll_interval: 30
+  ca_pem: ""
+schema:
+  patchpilot_server: str
+  register_key: password
+  agent_id: str?
+  poll_interval: int(10,300)?
+  ca_pem: str?

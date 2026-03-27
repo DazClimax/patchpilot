@@ -777,6 +777,8 @@ async def register_agent(request: Request):
     # SEC M-3: Single transaction to avoid TOCTOU race on agent existence check
     fields = _sanitize_agent_fields(data)   # MED-6: cap free-form fields
     fields["package_manager"] = _infer_package_manager(fields)
+    fields["agent_type"] = _infer_agent_type(fields)
+    fields["capabilities"] = _normalize_capabilities(fields)
     token = secrets.token_hex(32)
     with get_db_ctx() as conn:
         existing = conn.execute("SELECT token FROM agents WHERE id=?", (agent_id,)).fetchone()
@@ -799,8 +801,8 @@ async def register_agent(request: Request):
             reg_key = request.headers.get("x-register-key", "") or data.get("register_key", "")
             _verify_register_key(reg_key)
         conn.execute(
-            """INSERT INTO agents (id, hostname, ip, os_pretty, kernel, arch, package_manager, token)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO agents (id, hostname, ip, os_pretty, kernel, arch, package_manager, agent_type, capabilities, token)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    hostname = excluded.hostname,
                    ip       = excluded.ip,
@@ -808,6 +810,8 @@ async def register_agent(request: Request):
                    kernel   = excluded.kernel,
                    arch     = excluded.arch,
                    package_manager = excluded.package_manager,
+                   agent_type = excluded.agent_type,
+                   capabilities = excluded.capabilities,
                    token    = excluded.token""",
             (
                 agent_id,
@@ -817,6 +821,8 @@ async def register_agent(request: Request):
                 fields["kernel"],
                 fields["arch"],
                 fields["package_manager"],
+                fields["agent_type"],
+                fields["capabilities"],
                 _hash_token(token),   # CRIT-5: store hash, return plaintext once
             ),
         )
@@ -858,6 +864,8 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
         packages = packages[:2000]
     fields = _sanitize_agent_fields(data)   # MED-6: cap free-form fields
     fields["package_manager"] = _infer_package_manager(fields)
+    fields["agent_type"] = _infer_agent_type(fields)
+    fields["capabilities"] = _normalize_capabilities(fields)
     # MEDIUM-6: Validate uptime_seconds type and range
     raw_uptime = data.get("uptime_seconds")
     uptime_seconds = None
@@ -876,7 +884,7 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
     with get_db_ctx() as conn:
         conn.execute(
             """UPDATE agents SET
-                hostname=?, ip=?, os_pretty=?, kernel=?, arch=?, package_manager=?,
+                hostname=?, ip=?, os_pretty=?, kernel=?, arch=?, package_manager=?, agent_type=?, capabilities=?,
                 reboot_required=?, pending_count=?, last_seen=?, uptime_seconds=?,
                 protocol=?, config_review_required=?, config_review_note=?
                WHERE id=?""",
@@ -887,6 +895,8 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
                 fields["kernel"],
                 fields["arch"],
                 fields["package_manager"],
+                fields["agent_type"],
+                fields["capabilities"],
                 1 if data.get("reboot_required") else 0,
                 len(packages),
                 now,
@@ -1186,9 +1196,20 @@ async def create_job(agent_id: str, request: Request):
         raise HTTPException(status_code=422, detail=f"Invalid job type. Allowed: {sorted(ALLOWED_JOB_TYPES)}")
     params = data.get("params", {})
     with get_db_ctx() as conn:
-        agent = conn.execute("SELECT id FROM agents WHERE id=?", (agent_id,)).fetchone()
+        agent = conn.execute("SELECT id, agent_type, capabilities FROM agents WHERE id=?", (agent_id,)).fetchone()
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found")
+        capabilities = set(filter(None, str(agent["capabilities"] or "").split(",")))
+        if job_type.startswith("ha_"):
+            if agent["agent_type"] != "haos":
+                raise HTTPException(status_code=422, detail="HA jobs are only available for Home Assistant OS agents")
+            required = {
+                "ha_backup": "ha_backup",
+                "ha_core_update": "ha_core_update",
+                "ha_backup_update": "ha_backup",
+            }.get(job_type)
+            if required and required not in capabilities:
+                raise HTTPException(status_code=422, detail=f"Agent does not support {job_type}")
         conn.execute(
             "INSERT INTO jobs (agent_id, type, params) VALUES (?, ?, ?)",
             (agent_id, job_type, json.dumps(params)),

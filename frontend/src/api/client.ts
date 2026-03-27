@@ -66,6 +66,8 @@ export interface Agent {
   kernel: string | null
   arch: string | null
   package_manager: string | null
+  agent_type: string | null
+  capabilities: string | null
   reboot_required: number
   pending_count: number
   last_seen: string | null
