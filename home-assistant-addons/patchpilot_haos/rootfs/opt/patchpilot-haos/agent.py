@@ -197,14 +197,14 @@ def main():
     ca_pem = opts.get("ca_pem", "").strip()
     if not server:
         raise RuntimeError("patchpilot_server is required")
-    if not register_key:
-        raise RuntimeError("register_key is required")
 
     ssl_ctx = make_ssl_context(ca_pem)
     state = load_state()
     agent_id = state.get("agent_id") or agent_id or socket.gethostname()
     token = state.get("token", "")
     if not token:
+        if not register_key:
+            raise RuntimeError("register_key is required for first registration")
         agent_id, token = register(server, register_key, agent_id, ssl_ctx)
         state.update({"agent_id": agent_id, "token": token})
         save_state(state)

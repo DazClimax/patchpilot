@@ -244,6 +244,34 @@ function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`
 }
 
+function decodePemFromBase64(value: string): string {
+  if (!value) return ''
+  try {
+    return atob(value)
+  } catch {
+    return ''
+  }
+}
+
+function buildHaAddonConfig(serverUrl: string, agentId: string, registerKey: string, caPemB64: string): string {
+  const lines = [
+    `patchpilot_server: ${JSON.stringify(serverUrl)}`,
+    `register_key: ${JSON.stringify(registerKey || '<REGISTER_KEY>')}`,
+    `agent_id: ${JSON.stringify(agentId || 'homeassistant')}`,
+    'poll_interval: 30',
+  ]
+  const pem = decodePemFromBase64(caPemB64).trim()
+  if (pem) {
+    lines.push('ca_pem: |')
+    for (const line of pem.split('\n')) {
+      lines.push(`  ${line}`)
+    }
+  } else {
+    lines.push('ca_pem: ""')
+  }
+  return lines.join('\n')
+}
+
 function buildOneLiner(serverUrl: string, agentId: string, registerKey: string, caPemB64: string): string {
   const effectiveRegisterKey = registerKey || '<KEY>'
   const envParts = [
@@ -513,6 +541,8 @@ export function DeployPage() {
     ? buildScript(effectiveUrl, safeAgentId, registerKey, caPemB64)
     : ''
   const oneliner = urlValid && keyUsable ? buildOneLiner(effectiveUrl, safeAgentId, registerKey, caPemB64) : ''
+  const haAddonConfig = urlValid && keyUsable ? buildHaAddonConfig(effectiveUrl, safeAgentId, registerKey, caPemB64) : ''
+  const haRepoUrl = 'https://github.com/DazClimax/patchpilot'
 
   const downloadScript = () => {
     if (!script) return
@@ -767,15 +797,137 @@ export function DeployPage() {
         </div>
       )}
 
+      <div style={{ marginBottom: '28px' }}>
+        <SectionHeader right={haAddonConfig ? <CopyButton text={haAddonConfig} label="Copy Add-on Config" /> : undefined}>
+          {script ? '5' : '4'}. Home Assistant OS Add-on
+        </SectionHeader>
+        <Card style={{ padding: '20px 22px' }}>
+          <div style={{
+            fontSize: '12px',
+            color: colors.text,
+            fontFamily: "'Electrolize', monospace",
+            letterSpacing: '0.05em',
+            lineHeight: 1.7,
+            marginBottom: '16px',
+          }}>
+            Use this if you run Home Assistant OS on a Raspberry Pi or appliance install. PatchPilot now provides the
+            repository URL and the complete add-on configuration, including the decoded PEM certificate for self-signed TLS.
+          </div>
+
+          <div style={{ display: 'grid', gap: '14px' }}>
+            <div>
+              <div style={{
+                fontSize: '10px',
+                color: colors.textMuted,
+                fontFamily: "'Orbitron', sans-serif",
+                letterSpacing: '0.18em',
+                textTransform: 'uppercase',
+                marginBottom: '8px',
+              }}>
+                Add-on Repository
+              </div>
+              <div style={{
+                background: 'rgba(1,8,10,0.95)',
+                border: `1px solid ${colors.border}`,
+                padding: '14px 16px',
+                display: 'flex',
+                gap: '10px',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+              }}>
+                <code style={{
+                  flex: 1,
+                  minWidth: '220px',
+                  fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                  fontSize: '12px',
+                  color: colors.primary,
+                  textShadow: glowText(colors.primary, 3),
+                  overflowWrap: 'anywhere',
+                }}>
+                  {haRepoUrl}
+                </code>
+                <CopyButton text={haRepoUrl} label="Copy URL" />
+              </div>
+            </div>
+
+            <div>
+              <div style={{
+                fontSize: '10px',
+                color: colors.textMuted,
+                fontFamily: "'Orbitron', sans-serif",
+                letterSpacing: '0.18em',
+                textTransform: 'uppercase',
+                marginBottom: '8px',
+              }}>
+                Add-on Configuration
+              </div>
+              {haAddonConfig ? (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '8px' }}>
+                    <CopyButton text={haAddonConfig} label="Copy Add-on Config" />
+                  </div>
+                  <div style={{
+                    background: 'rgba(1,8,10,0.95)',
+                    border: `1px solid ${colors.border}`,
+                    position: 'relative',
+                    maxHeight: '360px',
+                    overflow: 'auto',
+                  }}>
+                    <div style={{
+                      position: 'absolute', top: 0, left: 0, right: 0, height: '1px',
+                      background: `linear-gradient(90deg, transparent, ${colors.primary}55, transparent)`,
+                    }} />
+                    <pre style={{
+                      margin: 0,
+                      padding: '16px 20px',
+                      fontFamily: "'Courier New', Courier, monospace",
+                      fontSize: '12px',
+                      color: colors.textDim,
+                      lineHeight: 1.7,
+                      whiteSpace: 'pre-wrap',
+                      overflowWrap: 'anywhere',
+                    }}>
+                      {haAddonConfig}
+                    </pre>
+                  </div>
+                  <div style={{
+                    fontSize: '11px',
+                    color: colors.textMuted,
+                    fontFamily: 'monospace',
+                    marginTop: '6px',
+                    letterSpacing: '0.04em',
+                  }}>
+                    Paste this into the add-on configuration in Home Assistant. The certificate is already decoded to PEM format.
+                  </div>
+                </>
+              ) : (
+                <div style={{
+                  padding: '20px',
+                  border: `1px dashed ${colors.border}`,
+                  background: glassBg(0.3),
+                  textAlign: 'center',
+                  color: colors.textMuted,
+                  fontSize: '12px',
+                  fontFamily: 'monospace',
+                }}>
+                  Generate a registration key above to unlock the ready-to-paste Home Assistant add-on configuration.
+                </div>
+              )}
+            </div>
+          </div>
+        </Card>
+      </div>
+
       {/* Manual instructions */}
       <div>
-        <SectionHeader>{script ? '5' : '4'}. Manual Steps</SectionHeader>
+        <SectionHeader>{script ? '6' : '5'}. Manual Steps</SectionHeader>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {[
             { n: '1', text: 'Generate a registration key above (valid 5 min)' },
             { n: '2', text: 'Set the server URL to the internal address your VMs can reach' },
             { n: '3', text: 'Copy the one-liner or download the script and run as root on the target VM' },
-            { n: '4', text: 'The VM appears in the dashboard within ~30 seconds' },
+            { n: '4', text: 'For Home Assistant OS, add the GitHub repository in the Add-on Store and paste the generated add-on config' },
+            { n: '5', text: 'The VM or Home Assistant instance appears in the dashboard within ~30 seconds' },
           ].map(({ n, text }) => (
             <div key={n} style={{
               display: 'flex',

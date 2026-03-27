@@ -22,7 +22,7 @@ The add-on lives in this repository under:
 
 1. Open `Repositories` in the Add-on Store.
 2. Add the PatchPilot GitHub repository as an add-on repository.
-3. `PatchPilot HAOS Agent` installieren.
+3. Install `PatchPilot HAOS Agent`.
 4. Set the options:
    - `patchpilot_server`
    - `register_key`
