@@ -154,6 +154,26 @@ def _iter_interface_values(interfaces) -> list[dict]:
     return []
 
 
+def _is_virtual_interface(iface: dict) -> bool:
+    name = str(iface.get("name") or "").lower()
+    iface_id = str(iface.get("id") or "").lower()
+    iface_type = str(iface.get("type") or "").lower()
+    text = " ".join(filter(None, [name, iface_id, iface_type]))
+    virtual_markers = (
+        "docker",
+        "hassio",
+        "veth",
+        "virbr",
+        "br-",
+        "cni",
+        "podman",
+        "loopback",
+    )
+    if name == "lo":
+        return True
+    return any(marker in text for marker in virtual_markers)
+
+
 def _add_interface_candidates(iface: dict, add_candidate) -> None:
     for key in ("ipv4", "ipv4_addresses"):
         values = iface.get(key)
@@ -194,11 +214,13 @@ def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: st
     try:
         network_info = get_network_info()
         network_ifaces = _iter_interface_values(network_info.get("interfaces"))
-        primary_ifaces = [iface for iface in network_ifaces if iface.get("primary") is True]
+        primary_ifaces = [iface for iface in network_ifaces if iface.get("primary") is True and not _is_virtual_interface(iface)]
         for iface in primary_ifaces:
             _add_interface_candidates(iface, lambda value: add_candidate(value, primary=True))
+        if primary_candidates:
+            return max(primary_candidates, key=_score_ip)
         for iface in network_ifaces:
-            if iface not in primary_ifaces:
+            if iface not in primary_ifaces and not _is_virtual_interface(iface):
                 _add_interface_candidates(iface, add_candidate)
     except Exception:
         pass
@@ -215,10 +237,10 @@ def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: st
         pass
 
     try:
-        hostname = socket.gethostname()
-        infos = socket.getaddrinfo(hostname, None, family=socket.AF_INET, type=socket.SOCK_DGRAM)
-        for info in infos:
-            add_candidate(info[4][0])
+        interfaces = host_info.get("interfaces")
+        for iface in _iter_interface_values(interfaces):
+            if not _is_virtual_interface(iface):
+                _add_interface_candidates(iface, add_candidate)
     except Exception:
         pass
 

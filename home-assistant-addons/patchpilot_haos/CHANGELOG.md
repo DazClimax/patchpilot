@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.8
+
+- Excluded Docker, bridge, and other virtual interfaces from HAOS LAN IP detection.
+- Prefer the primary non-virtual Home Assistant network interface before any fallback candidate.
+
 ## 0.2.7
 
 - Refreshed add-on branding assets to force Home Assistant to reload the new PatchPilot icon and logo.
