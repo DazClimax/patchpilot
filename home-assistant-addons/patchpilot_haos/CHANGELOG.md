@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.7
+
+- Refreshed add-on branding assets to force Home Assistant to reload the new PatchPilot icon and logo.
+
 ## 0.2.6
 
 - Made HAOS uptime detection robust across second, millisecond, microsecond, and nanosecond boot timestamp formats.
