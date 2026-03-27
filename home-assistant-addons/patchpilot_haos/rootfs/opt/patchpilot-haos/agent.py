@@ -10,6 +10,7 @@ import sys
 import time
 import urllib.error
 import urllib.request as urlreq
+from datetime import datetime
 from urllib.parse import urlparse
 from pathlib import Path
 
@@ -177,11 +178,14 @@ def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: st
 
     host_info = host_info or {}
     candidates: list[str] = []
+    primary_candidates: list[str] = []
 
-    def add_candidate(value: str):
+    def add_candidate(value: str, *, primary: bool = False):
         ip = _normalize_ip(value)
         if ip and ip not in candidates:
             candidates.append(ip)
+        if primary and ip and ip not in primary_candidates:
+            primary_candidates.append(ip)
 
     interfaces = host_info.get("interfaces")
     for iface in _iter_interface_values(interfaces):
@@ -192,7 +196,7 @@ def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: st
         network_ifaces = _iter_interface_values(network_info.get("interfaces"))
         primary_ifaces = [iface for iface in network_ifaces if iface.get("primary") is True]
         for iface in primary_ifaces:
-            _add_interface_candidates(iface, add_candidate)
+            _add_interface_candidates(iface, lambda value: add_candidate(value, primary=True))
         for iface in network_ifaces:
             if iface not in primary_ifaces:
                 _add_interface_candidates(iface, add_candidate)
@@ -218,18 +222,39 @@ def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: st
     except Exception:
         pass
 
+    if primary_candidates:
+        return max(primary_candidates, key=_score_ip)
     if not candidates:
         return None
     return max(candidates, key=_score_ip)
 
 
+def _boot_timestamp_to_seconds(value) -> float | None:
+    try:
+        ts = float(value)
+    except (TypeError, ValueError):
+        return None
+    if ts <= 0:
+        return None
+    if ts > 1e17:   # nanoseconds
+        return ts / 1_000_000_000
+    if ts > 1e14:   # microseconds
+        return ts / 1_000_000
+    if ts > 1e11:   # milliseconds
+        return ts / 1_000
+    return ts       # seconds
+
+
 def get_uptime_seconds(host_info: dict | None = None) -> int | None:
     host_info = host_info or {}
-    boot_timestamp = host_info.get("boot_timestamp")
+    boot_timestamp = _boot_timestamp_to_seconds(host_info.get("boot_timestamp"))
     try:
         if boot_timestamp is not None:
-            boot_seconds = float(boot_timestamp) / 1_000_000
-            uptime = int(time.time() - boot_seconds)
+            now_utc = host_info.get("dt_utc")
+            now_seconds = time.time()
+            if isinstance(now_utc, str) and now_utc:
+                now_seconds = datetime.fromisoformat(now_utc).timestamp()
+            uptime = int(now_seconds - boot_timestamp)
             if uptime >= 0:
                 return uptime
     except (TypeError, ValueError):

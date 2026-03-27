@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.6
+
+- Made HAOS uptime detection robust across second, millisecond, microsecond, and nanosecond boot timestamp formats.
+- Prefer the primary Home Assistant network interface even more aggressively when detecting the reported LAN IP.
+
 ## 0.2.5
 
 - Prefer the primary Home Assistant network interface when auto-detecting the LAN IP.
