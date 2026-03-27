@@ -135,6 +135,20 @@ def _score_ip(ip: str) -> int:
     return 0
 
 
+def _iter_interface_values(interfaces) -> list[dict]:
+    if isinstance(interfaces, list):
+        return [iface for iface in interfaces if isinstance(iface, dict)]
+    if isinstance(interfaces, dict):
+        values: list[dict] = []
+        for name, iface in interfaces.items():
+            if isinstance(iface, dict):
+                entry = dict(iface)
+                entry.setdefault("name", name)
+                values.append(entry)
+        return values
+    return []
+
+
 def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: str = "") -> str | None:
     override = _normalize_ip(advertise_ip)
     if override:
@@ -149,14 +163,17 @@ def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: st
             candidates.append(ip)
 
     interfaces = host_info.get("interfaces")
-    if isinstance(interfaces, list):
-        for iface in interfaces:
-            for key in ("ipv4", "ipv4_addresses"):
-                values = iface.get(key)
-                if not isinstance(values, list):
-                    continue
-                for value in values:
-                    add_candidate(value)
+    for iface in _iter_interface_values(interfaces):
+        for key in ("ipv4", "ipv4_addresses"):
+            values = iface.get(key)
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                add_candidate(value)
+        for key in ("ipv4_address", "address"):
+            value = iface.get(key)
+            if isinstance(value, str):
+                add_candidate(value)
 
     try:
         parsed = urlparse(server)
@@ -180,6 +197,29 @@ def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: st
     if not candidates:
         return None
     return max(candidates, key=_score_ip)
+
+
+def get_uptime_seconds(host_info: dict | None = None) -> int | None:
+    host_info = host_info or {}
+    for key in ("uptime", "uptime_seconds"):
+        value = host_info.get(key)
+        try:
+            if value is not None:
+                uptime = int(float(value))
+                if uptime >= 0:
+                    return uptime
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        raw = Path("/proc/uptime").read_text().split()[0]
+        uptime = int(float(raw))
+        if uptime >= 0:
+            return uptime
+    except Exception:
+        pass
+
+    return None
 
 
 def get_pending_updates() -> list[dict]:
@@ -255,7 +295,7 @@ def heartbeat(server: str, agent_id: str, token: str, advertise_ip: str, ssl_ctx
         "capabilities": "ha_backup,ha_core_update,ha_supervisor_update,ha_os_update,ha_addon_update,ha_addons_update",
         "packages": get_pending_updates(),
         "reboot_required": 0,
-        "uptime_seconds": None,
+        "uptime_seconds": get_uptime_seconds(host),
     }
     return request_json(
         "POST",

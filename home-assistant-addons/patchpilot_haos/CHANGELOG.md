@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.3
+
+- Improved Home Assistant OS IP detection to handle additional Supervisor interface formats.
+- Added uptime reporting for the HAOS agent.
+
 ## 0.2.2
 
 - Excluded the PatchPilot HAOS add-on from add-on update detection.
