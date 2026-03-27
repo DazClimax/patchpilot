@@ -1,7 +1,9 @@
-ARG BUILD_FROM=ghcr.io/home-assistant/aarch64-base-python:3.13-alpine3.21
+ARG BUILD_FROM
 FROM ${BUILD_FROM}
 
 ENV LANG=C.UTF-8
+
+RUN apk add --no-cache python3
 
 COPY rootfs /
 RUN chmod +x /run.sh
