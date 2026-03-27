@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- Excluded the PatchPilot HAOS add-on from add-on update detection.
+- Prevented `HA Add-ons` and single add-on updates from trying to update the running PatchPilot add-on itself.
+
 ## 0.2.1
 
 - Added `advertise_ip` to override the IP address reported to PatchPilot.

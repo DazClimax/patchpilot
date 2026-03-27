@@ -18,6 +18,7 @@ STATE_FILE = Path("/data/patchpilot_state.json")
 CA_FILE = Path("/data/patchpilot_ca.pem")
 SUPERVISOR_URL = "http://supervisor"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
+SELF_ADDON_HINT = "patchpilot_haos"
 
 
 def load_options() -> dict:
@@ -99,6 +100,11 @@ def get_host_info() -> dict:
 
 def get_addons_info() -> list[dict]:
     return supervisor_json("GET", "/addons").get("data", {}).get("addons", [])
+
+
+def is_self_addon(slug: str) -> bool:
+    normalized = (slug or "").strip().lower()
+    return normalized.endswith(SELF_ADDON_HINT)
 
 
 def _normalize_ip(value: str) -> str | None:
@@ -206,6 +212,8 @@ def get_pending_updates() -> list[dict]:
     for addon in get_addons_info():
         if addon.get("update_available"):
             slug = addon.get("slug") or addon.get("name") or "unknown-addon"
+            if is_self_addon(slug):
+                continue
             updates.append({
                 "name": f"addon:{slug}",
                 "current": addon.get("version"),
@@ -321,6 +329,8 @@ def run_job(job: dict) -> tuple[str, str]:
         slug = str(params.get("slug") or "").strip()
         if not slug:
             return "failed", "Missing add-on slug for ha_addon_update"
+        if is_self_addon(slug):
+            return "done", "Skipped self-update for PatchPilot HAOS Agent. Update the add-on from Home Assistant instead."
         result = supervisor_json("POST", f"/addons/{slug}/update", {})
         data = result.get("data", {})
         return "done", f"Home Assistant add-on update started for {slug}. Response: {json.dumps(data)}"
@@ -330,6 +340,9 @@ def run_job(job: dict) -> tuple[str, str]:
         for addon in get_addons_info():
             slug = addon.get("slug")
             if not slug:
+                continue
+            if is_self_addon(slug):
+                skipped.append(slug)
                 continue
             if not addon.get("update_available"):
                 skipped.append(slug)
