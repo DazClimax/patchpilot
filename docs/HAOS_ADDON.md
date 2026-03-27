@@ -10,6 +10,10 @@ The first PatchPilot path for Home Assistant OS runs as a dedicated add-on.
   - `HA Backup`
   - `HA Core Update`
   - `HA Backup + Update`
+  - `HA Supervisor Update`
+  - `HA OS Update`
+  - `HA Add-on Update`
+  - `HA Add-ons Update`
 
 ## Add-on Repository
 
@@ -33,5 +37,5 @@ The add-on lives in this repository under:
 ## Notes
 
 - `ha_backup_update` uses the official Supervisor API with `backup=true`.
-- This first version only covers Home Assistant Core on HA OS.
-- Supervisor, OS, and add-on updates will follow later.
+- The supported scope is Home Assistant OS.
+- Deprecated Home Assistant installation methods are intentionally not covered.

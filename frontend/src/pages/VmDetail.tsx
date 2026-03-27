@@ -31,6 +31,10 @@ function jobTypeColor(t: string) {
     ha_backup: colors.primary,
     ha_core_update: colors.warn,
     ha_backup_update: colors.warn,
+    ha_supervisor_update: colors.warn,
+    ha_os_update: colors.warn,
+    ha_addon_update: colors.warn,
+    ha_addons_update: colors.warn,
   }
   return map[t] ?? colors.textDim
 }
@@ -299,12 +303,18 @@ export function VmDetail() {
   const capabilityList = (agent?.capabilities ?? '').split(',').map(item => item.trim()).filter(Boolean)
   const hasHaBackup = capabilityList.includes('ha_backup')
   const hasHaCoreUpdate = capabilityList.includes('ha_core_update')
+  const hasHaSupervisorUpdate = capabilityList.includes('ha_supervisor_update')
+  const hasHaOsUpdate = capabilityList.includes('ha_os_update')
+  const hasHaAddonUpdate = capabilityList.includes('ha_addon_update')
+  const hasHaAddonsUpdate = capabilityList.includes('ha_addons_update')
   const refreshLabel = agent?.package_manager === 'apt'
     ? '↻ Apt Update'
     : agent?.package_manager === 'dnf'
       ? '↻ Dnf Refresh'
       : agent?.package_manager === 'yum'
         ? '↻ Yum Refresh'
+        : isHaos
+          ? '↻ Refresh Status'
         : '↻ Refresh'
 
   if (loading) return <LoadingSkeleton />
@@ -345,7 +355,7 @@ export function VmDetail() {
           >
             ⟳ Reboot
           </Button>
-          {packages.length > 0 && (
+          {packages.length > 0 && !isHaos && (
             <>
               <Button size="sm" onClick={() => triggerJob('patch')} loading={busy} disabled={busy}>
                 ↑ Patch All
@@ -393,6 +403,36 @@ export function VmDetail() {
               ⇪ HA Core
             </Button>
           )}
+          {isHaos && hasHaSupervisorUpdate && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setConfirm({
+                title: 'Home Assistant Supervisor Update',
+                message: `Update the Home Assistant Supervisor on "${agent.hostname}"?`,
+                onConfirm: () => { setConfirm(null); triggerJob('ha_supervisor_update') },
+              })}
+              disabled={busy}
+              style={{ color: colors.warn }}
+            >
+              ⇪ HA Supervisor
+            </Button>
+          )}
+          {isHaos && hasHaOsUpdate && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setConfirm({
+                title: 'Home Assistant OS Update',
+                message: `Update Home Assistant OS on "${agent.hostname}"?`,
+                onConfirm: () => { setConfirm(null); triggerJob('ha_os_update') },
+              })}
+              disabled={busy}
+              style={{ color: colors.warn }}
+            >
+              ⇪ HA OS
+            </Button>
+          )}
           {isHaos && hasHaBackup && hasHaCoreUpdate && (
             <Button
               size="sm"
@@ -406,6 +446,19 @@ export function VmDetail() {
               ⟳ HA Backup + Update
             </Button>
           )}
+          {isHaos && hasHaAddonsUpdate && (
+            <Button
+              size="sm"
+              onClick={() => setConfirm({
+                title: 'Home Assistant Add-ons Update',
+                message: `Update all installed Home Assistant add-ons with available updates on "${agent.hostname}"?`,
+                onConfirm: () => { setConfirm(null); triggerJob('ha_addons_update') },
+              })}
+              disabled={busy}
+            >
+              ⟳ HA Add-ons
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -415,29 +468,33 @@ export function VmDetail() {
           >
             {refreshLabel}
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={confirmDistUpgrade}
-            disabled={busy}
-            title="Run a full distribution upgrade"
-            style={{ color: colors.warn }}
-          >
-            ⇪ Dist Upgrade
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setConfirm({
-              title: 'Autoremove',
-              message: `Run package cleanup on "${agent?.hostname}" to remove unused dependencies?`,
-              onConfirm: () => { setConfirm(null); triggerJob('autoremove') },
-            })}
-            disabled={busy}
-            title="Remove unused packages"
-          >
-            🧹 Clean
-          </Button>
+          {!isHaos && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={confirmDistUpgrade}
+              disabled={busy}
+              title="Run a full distribution upgrade"
+              style={{ color: colors.warn }}
+            >
+              ⇪ Dist Upgrade
+            </Button>
+          )}
+          {!isHaos && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirm({
+                title: 'Autoremove',
+                message: `Run package cleanup on "${agent?.hostname}" to remove unused dependencies?`,
+                onConfirm: () => { setConfirm(null); triggerJob('autoremove') },
+              })}
+              disabled={busy}
+              title="Remove unused packages"
+            >
+              🧹 Clean
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -776,8 +833,24 @@ export function VmDetail() {
                     key={pkg.id}
                     pkg={pkg}
                     index={i}
-                    onPatch={() => triggerJob('patch', { packages: [pkg.name] })}
-                    onForcePatch={isRpmSystem ? () => setConfirm({
+                    onPatch={() => {
+                      if (isHaos) {
+                        if (pkg.name === 'home-assistant-core') {
+                          return triggerJob('ha_core_update')
+                        }
+                        if (pkg.name === 'home-assistant-supervisor') {
+                          return triggerJob('ha_supervisor_update')
+                        }
+                        if (pkg.name === 'home-assistant-os') {
+                          return triggerJob('ha_os_update')
+                        }
+                        if (pkg.name.startsWith('addon:') && hasHaAddonUpdate) {
+                          return triggerJob('ha_addon_update', { slug: pkg.name.slice('addon:'.length) })
+                        }
+                      }
+                      return triggerJob('patch', { packages: [pkg.name] })
+                    }}
+                    onForcePatch={!isHaos && isRpmSystem ? () => setConfirm({
                       title: 'Force Update',
                       message: `Run a forced RPM update for "${pkg.name}" on "${agent.hostname}"? This uses a transient systemd service as a Fedora compatibility fallback.`,
                       onConfirm: () => {

@@ -5,8 +5,8 @@ First Home Assistant OS integration for PatchPilot.
 This add-on:
 
 - registers a Home Assistant OS instance as its own PatchPilot agent
-- reports an available Core update as a pending update
-- supports the job types `ha_backup`, `ha_core_update`, and `ha_backup_update`
+- reports available Core, Supervisor, OS, and Add-on updates as pending updates
+- supports the job types `ha_backup`, `ha_core_update`, `ha_backup_update`, `ha_supervisor_update`, `ha_os_update`, `ha_addon_update`, and `ha_addons_update`
 
 ## Configuration
 
@@ -18,4 +18,4 @@ This add-on:
 
 ## Status
 
-This is the first implementation stage. Supervisor and OS updates will follow later.
+Home Assistant OS is the supported scope for this add-on. Deprecated installation methods are intentionally not covered here.

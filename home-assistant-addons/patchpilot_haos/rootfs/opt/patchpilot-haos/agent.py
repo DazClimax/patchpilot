@@ -84,8 +84,20 @@ def get_core_info() -> dict:
     return supervisor_json("GET", "/core/info").get("data", {})
 
 
+def get_supervisor_info() -> dict:
+    return supervisor_json("GET", "/supervisor/info").get("data", {})
+
+
+def get_os_info() -> dict:
+    return supervisor_json("GET", "/os/info").get("data", {})
+
+
 def get_host_info() -> dict:
     return supervisor_json("GET", "/host/info").get("data", {})
+
+
+def get_addons_info() -> list[dict]:
+    return supervisor_json("GET", "/addons").get("data", {}).get("addons", [])
 
 
 def detect_local_ip(server: str, host_info: dict | None = None) -> str | None:
@@ -130,14 +142,42 @@ def detect_local_ip(server: str, host_info: dict | None = None) -> str | None:
 
 
 def get_pending_updates() -> list[dict]:
+    updates: list[dict] = []
+
     core = get_core_info()
-    if not core.get("update_available"):
-        return []
-    return [{
-        "name": "home-assistant-core",
-        "current": core.get("version"),
-        "new": core.get("version_latest"),
-    }]
+    if core.get("update_available"):
+        updates.append({
+            "name": "home-assistant-core",
+            "current": core.get("version"),
+            "new": core.get("version_latest"),
+        })
+
+    supervisor = get_supervisor_info()
+    if supervisor.get("update_available"):
+        updates.append({
+            "name": "home-assistant-supervisor",
+            "current": supervisor.get("version"),
+            "new": supervisor.get("version_latest"),
+        })
+
+    os_info = get_os_info()
+    if os_info.get("update_available"):
+        updates.append({
+            "name": "home-assistant-os",
+            "current": os_info.get("version"),
+            "new": os_info.get("version_latest"),
+        })
+
+    for addon in get_addons_info():
+        if addon.get("update_available"):
+            slug = addon.get("slug") or addon.get("name") or "unknown-addon"
+            updates.append({
+                "name": f"addon:{slug}",
+                "current": addon.get("version"),
+                "new": addon.get("version_latest"),
+            })
+
+    return updates
 
 
 def register(server: str, register_key: str, agent_id: str, ssl_ctx):
@@ -151,7 +191,7 @@ def register(server: str, register_key: str, agent_id: str, ssl_ctx):
         "arch": platform.machine(),
         "package_manager": "haos",
         "agent_type": "haos",
-        "capabilities": "ha_backup,ha_core_update",
+        "capabilities": "ha_backup,ha_core_update,ha_supervisor_update,ha_os_update,ha_addon_update,ha_addons_update",
         "register_key": register_key,
     }
     data = request_json("POST", f"{server}/api/agents/register", data=payload, ssl_ctx=ssl_ctx)
@@ -169,7 +209,7 @@ def heartbeat(server: str, agent_id: str, token: str, ssl_ctx):
         "arch": platform.machine(),
         "package_manager": "haos",
         "agent_type": "haos",
-        "capabilities": "ha_backup,ha_core_update",
+        "capabilities": "ha_backup,ha_core_update,ha_supervisor_update,ha_os_update,ha_addon_update,ha_addons_update",
         "packages": get_pending_updates(),
         "reboot_required": 0,
         "uptime_seconds": None,
@@ -205,6 +245,8 @@ def report_result(server: str, agent_id: str, token: str, job_id: int, status: s
 def run_job(job: dict) -> tuple[str, str]:
     jtype = job["type"]
     params = job.get("params") or {}
+    if jtype == "refresh_updates":
+        return "done", "Home Assistant update status refreshed."
     if jtype == "ha_backup":
         result = supervisor_json("POST", "/backups/new/full", {
             "name": f"PatchPilot backup {time.strftime('%Y-%m-%d %H:%M:%S')}",
@@ -228,6 +270,41 @@ def run_job(job: dict) -> tuple[str, str]:
         result = supervisor_json("POST", "/core/update", payload)
         data = result.get("data", {})
         return "done", f"Home Assistant Core backup+update started{f' -> {version}' if version else ''}. Response: {json.dumps(data)}"
+    if jtype == "ha_supervisor_update":
+        result = supervisor_json("POST", "/supervisor/update", {})
+        data = result.get("data", {})
+        return "done", f"Home Assistant Supervisor update started. Response: {json.dumps(data)}"
+    if jtype == "ha_os_update":
+        version = params.get("version")
+        payload = {}
+        if version:
+            payload["version"] = version
+        result = supervisor_json("POST", "/os/update", payload)
+        data = result.get("data", {})
+        return "done", f"Home Assistant OS update started{f' -> {version}' if version else ''}. Response: {json.dumps(data)}"
+    if jtype == "ha_addon_update":
+        slug = str(params.get("slug") or "").strip()
+        if not slug:
+            return "failed", "Missing add-on slug for ha_addon_update"
+        result = supervisor_json("POST", f"/addons/{slug}/update", {})
+        data = result.get("data", {})
+        return "done", f"Home Assistant add-on update started for {slug}. Response: {json.dumps(data)}"
+    if jtype == "ha_addons_update":
+        updated: list[str] = []
+        skipped: list[str] = []
+        for addon in get_addons_info():
+            slug = addon.get("slug")
+            if not slug:
+                continue
+            if not addon.get("update_available"):
+                skipped.append(slug)
+                continue
+            supervisor_json("POST", f"/addons/{slug}/update", {})
+            updated.append(slug)
+        return "done", json.dumps({
+            "updated_addons": updated,
+            "skipped_addons": skipped,
+        })
     return "failed", f"Unknown job type: {jtype}"
 
 

@@ -19,5 +19,9 @@ Supports:
 - `HA Backup`
 - `HA Core Update`
 - `HA Backup + Update`
+- `HA Supervisor Update`
+- `HA OS Update`
+- `HA Add-on Update`
+- `HA Add-ons Update`
 
-Shows an available Core update as a pending update in PatchPilot.
+Shows available Core, Supervisor, OS, and Add-on updates as pending updates in PatchPilot.

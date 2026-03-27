@@ -202,7 +202,7 @@ STATIC_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 # ---------------------------------------------------------------------------
 _AGENT_ID_RE = re.compile(r'^[a-zA-Z0-9._-]{1,64}$')
 _TG_TOKEN_RE  = re.compile(r'^\d+:[A-Za-z0-9_-]{35,}$')
-ALLOWED_JOB_TYPES = {"patch", "dist_upgrade", "force_patch", "refresh_updates", "reboot", "update_agent", "autoremove", "deploy_ssl", "ack_config_review", "ha_backup", "ha_core_update", "ha_backup_update"}
+ALLOWED_JOB_TYPES = {"patch", "dist_upgrade", "force_patch", "refresh_updates", "reboot", "update_agent", "autoremove", "deploy_ssl", "ack_config_review", "ha_backup", "ha_core_update", "ha_backup_update", "ha_supervisor_update", "ha_os_update", "ha_addon_update", "ha_addons_update"}
 
 def _validate_agent_id(agent_id: str):
     if not _AGENT_ID_RE.match(agent_id):
@@ -1206,8 +1206,13 @@ async def create_job(agent_id: str, request: Request):
             required = {
                 "ha_backup": "ha_backup",
                 "ha_core_update": "ha_core_update",
-                "ha_backup_update": "ha_backup",
+                "ha_supervisor_update": "ha_supervisor_update",
+                "ha_os_update": "ha_os_update",
+                "ha_addon_update": "ha_addon_update",
+                "ha_addons_update": "ha_addons_update",
             }.get(job_type)
+            if job_type == "ha_backup_update" and not {"ha_backup", "ha_core_update"}.issubset(capabilities):
+                raise HTTPException(status_code=422, detail="Agent does not support ha_backup_update")
             if required and required not in capabilities:
                 raise HTTPException(status_code=422, detail=f"Agent does not support {job_type}")
         conn.execute(
