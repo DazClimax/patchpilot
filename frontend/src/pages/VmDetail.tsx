@@ -75,12 +75,14 @@ function PackageRow({
   pkg,
   onPatch,
   onForcePatch,
+  patchLabel = 'Update',
   busy,
   index,
 }: {
   pkg: Package
-  onPatch: () => void
+  onPatch?: () => void
   onForcePatch?: () => void
+  patchLabel?: string
   busy: boolean
   index: number
 }) {
@@ -112,7 +114,7 @@ function PackageRow({
       </td>
       <td style={{ padding: '10px 16px', textAlign: 'right' }}>
         <div style={{ display: 'inline-flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <Button size="sm" onClick={onPatch} disabled={busy}>Update</Button>
+          {onPatch && <Button size="sm" onClick={onPatch} disabled={busy}>{patchLabel}</Button>}
           {onForcePatch && (
             <Button size="sm" variant="ghost" onClick={onForcePatch} disabled={busy} style={{ color: colors.warn }}>
               Force
@@ -670,28 +672,6 @@ export function VmDetail() {
         )
       })()}
 
-      {capabilityList.length > 0 ? (
-        <Card accent={isHaos ? colors.warn : colors.primaryDim} style={{ padding: '14px 16px', marginBottom: '12px', animationDelay: '0.22s' }}>
-          <div style={{
-            fontSize: '10px',
-            color: colors.textMuted,
-            letterSpacing: '0.22em',
-            textTransform: 'uppercase',
-            marginBottom: '10px',
-            fontFamily: "'Orbitron', sans-serif",
-          }}>
-            Capabilities
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-            {capabilityList.map(capability => (
-              <Badge key={capability} color={isHaos ? colors.warn : colors.primaryDim} style={{ fontSize: '10px', padding: '2px 9px' }}>
-                {capability}
-              </Badge>
-            ))}
-          </div>
-        </Card>
-      ) : null}
-
       {/* bottom margin before reboot warning / updates */}
       <div style={{ marginBottom: '12px' }} />
 
@@ -833,7 +813,7 @@ export function VmDetail() {
                     key={pkg.id}
                     pkg={pkg}
                     index={i}
-                    onPatch={() => {
+                    onPatch={pkg.name === 'home-assistant-addon-patchpilot' ? undefined : () => {
                       if (isHaos) {
                         if (pkg.name === 'home-assistant-core') {
                           return triggerJob('ha_core_update')
@@ -850,6 +830,7 @@ export function VmDetail() {
                       }
                       return triggerJob('patch', { packages: [pkg.name] })
                     }}
+                    patchLabel={pkg.name === 'home-assistant-addon-patchpilot' ? 'Update in HA' : 'Update'}
                     onForcePatch={!isHaos && isRpmSystem ? () => setConfirm({
                       title: 'Force Update',
                       message: `Run a forced RPM update for "${pkg.name}" on "${agent.hostname}"? This uses a transient systemd service as a Fedora compatibility fallback.`,

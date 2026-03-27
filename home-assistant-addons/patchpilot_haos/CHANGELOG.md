@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.5
+
+- Prefer the primary Home Assistant network interface when auto-detecting the LAN IP.
+- Show PatchPilot HAOS add-on updates again as a visible pending item, without trying to self-update through `HA Add-ons`.
+
 ## 0.2.4
 
 - Switched HAOS IP discovery to also read Supervisor `/network/info` interface data.

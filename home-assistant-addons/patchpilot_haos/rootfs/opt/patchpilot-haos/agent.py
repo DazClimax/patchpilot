@@ -189,8 +189,13 @@ def detect_local_ip(server: str, host_info: dict | None = None, advertise_ip: st
 
     try:
         network_info = get_network_info()
-        for iface in _iter_interface_values(network_info.get("interfaces")):
+        network_ifaces = _iter_interface_values(network_info.get("interfaces"))
+        primary_ifaces = [iface for iface in network_ifaces if iface.get("primary") is True]
+        for iface in primary_ifaces:
             _add_interface_candidates(iface, add_candidate)
+        for iface in network_ifaces:
+            if iface not in primary_ifaces:
+                _add_interface_candidates(iface, add_candidate)
     except Exception:
         pass
 
@@ -282,6 +287,11 @@ def get_pending_updates() -> list[dict]:
         if addon.get("update_available"):
             slug = addon.get("slug") or addon.get("name") or "unknown-addon"
             if is_self_addon(slug):
+                updates.append({
+                    "name": "home-assistant-addon-patchpilot",
+                    "current": addon.get("version"),
+                    "new": addon.get("version_latest"),
+                })
                 continue
             updates.append({
                 "name": f"addon:{slug}",
