@@ -114,6 +114,8 @@ By default, the UI and agent API run on separate ports. If both are configured t
 | Notifications | Telegram Bot API, SMTP |
 | Deployment | systemd, rsync, shell scripts |
 
+PatchPilot's sci-fi interface is built with [Arwes](https://arwes.dev).
+
 ## Security At A Glance
 
 - session-based auth with PBKDF2-SHA256 password hashing

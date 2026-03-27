@@ -10,7 +10,7 @@ interface LoginPageProps {
 
 export function LoginPage({ onLogin }: LoginPageProps) {
   const bleeps = useBleeps()
-  const { loginAnimationEnabled } = useUiEffects()
+  const { loginAnimationEnabled, loginBackgroundAnimationEnabled, loginBackgroundOpacity } = useUiEffects()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -132,7 +132,8 @@ export function LoginPage({ onLogin }: LoginPageProps) {
       <AnimatorGeneralProvider duration={{ enter: 0.4, exit: 0.3 }}>
         <Animator active>
           <div style={{
-            height: '100vh',
+            minHeight: '100vh',
+            height: '100dvh',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -155,7 +156,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
                   left: '50%',
                   top: '50%',
                   width: '100vw',
-                  height: '100vh',
+                  height: '100dvh',
                   transform: 'translate(-50%, -50%)',
                   border: `1px solid ${colors.primary}28`,
                   background: `linear-gradient(180deg, ${colors.bg}f0 0%, ${colors.bg}dc 100%)`,
@@ -250,12 +251,22 @@ export function LoginPage({ onLogin }: LoginPageProps) {
               </div>
             )}
             {/* Ambient background */}
-            <div style={{ position: 'absolute', inset: 0, opacity: 0.12, pointerEvents: 'none' }}>
+            <div style={{ position: 'absolute', inset: 0, opacity: loginBackgroundAnimationEnabled ? 0.08 : 0.12, pointerEvents: 'none' }}>
               <Dots color={colors.primary} size={1} distance={30} />
             </div>
-            <div style={{ position: 'absolute', inset: 0, opacity: 0.05, pointerEvents: 'none' }}>
-              <MovingLines lineColor={colors.primary} lineWidth={1} sets={2} />
-            </div>
+            {loginBackgroundAnimationEnabled && (
+              <div
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  opacity: loginBackgroundOpacity / 100,
+                  pointerEvents: 'none',
+                  background: `radial-gradient(circle at top, ${colors.primary}10 0%, transparent 58%, ${colors.bg} 100%)`,
+                }}
+              >
+                <MovingLines lineColor={colors.primary} lineWidth={1} sets={4} />
+              </div>
+            )}
 
             {/* Login card */}
             {!loginFxActive && <div style={{

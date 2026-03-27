@@ -1,4 +1,5 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Animator, FrameCorners } from '@arwes/react'
 import { colors, glow, glowText, glassBg } from '../theme'
 import { Job } from '../api/client'
@@ -23,6 +24,7 @@ const statusIcon = (s: string) => ({
 export function LogModal({ job, onClose }: LogModalProps) {
   const logRef = useRef<HTMLDivElement>(null)
   const modalRef = useRef<HTMLDivElement>(null)
+  const [copied, setCopied] = useState(false)
 
   // Close on Escape + focus trap
   useEffect(() => {
@@ -59,7 +61,30 @@ export function LogModal({ job, onClose }: LogModalProps) {
   const si = statusIcon(job.status)
   const lines = (job.output ?? '(no output)').split('\n')
 
-  return (
+  const copyLog = async () => {
+    const text = (job.output ?? '(no output)').replace(/\r\n/g, '\n')
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+      } else {
+        const textarea = document.createElement('textarea')
+        textarea.value = text
+        textarea.setAttribute('readonly', '')
+        textarea.style.position = 'absolute'
+        textarea.style.left = '-9999px'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1400)
+    } catch {
+      // non-fatal
+    }
+  }
+
+  return createPortal(
     <>
       {/* Backdrop — centers modal via flex */}
       <div
@@ -73,6 +98,9 @@ export function LogModal({ job, onClose }: LogModalProps) {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
+          padding: '24px',
+          boxSizing: 'border-box',
+          overflowY: 'auto',
         }}
       >
 
@@ -88,7 +116,7 @@ export function LogModal({ job, onClose }: LogModalProps) {
           style={{
             position: 'relative',
             width: 'min(900px, 94vw)',
-            maxHeight: '84vh',
+            maxHeight: 'calc(100dvh - 48px)',
             display: 'flex',
             flexDirection: 'column',
             background: glassBg(0.97),
@@ -179,36 +207,71 @@ export function LogModal({ job, onClose }: LogModalProps) {
               )}
             </div>
 
-            {/* Close button */}
-            <button
-              onClick={onClose}
-              style={{
-                background: 'none',
-                border: `1px solid ${colors.border}`,
-                color: colors.textDim,
-                cursor: 'pointer',
-                padding: '4px 12px',
-                fontSize: '13px',
-                fontFamily: 'monospace',
-                lineHeight: 1,
-                transition: 'all 0.15s',
-                clipPath: 'polygon(4px 0%, 100% 0%, calc(100% - 4px) 100%, 0% 100%)',
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.borderColor = colors.danger
-                e.currentTarget.style.color = colors.danger
-                e.currentTarget.style.background = `${colors.danger}10`
-                e.currentTarget.style.boxShadow = `0 0 8px ${colors.danger}44`
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.borderColor = colors.border
-                e.currentTarget.style.color = colors.textDim
-                e.currentTarget.style.background = 'none'
-                e.currentTarget.style.boxShadow = 'none'
-              }}
-            >
-              ✕
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                onClick={copyLog}
+                style={{
+                  background: copied ? `${colors.primary}12` : 'none',
+                  border: `1px solid ${copied ? colors.primary : colors.border}`,
+                  color: copied ? colors.primary : colors.textDim,
+                  cursor: 'pointer',
+                  padding: '4px 12px',
+                  fontSize: '11px',
+                  fontFamily: "'Orbitron', sans-serif",
+                  lineHeight: 1,
+                  letterSpacing: '0.14em',
+                  textTransform: 'uppercase',
+                  transition: 'all 0.15s',
+                  clipPath: 'polygon(4px 0%, 100% 0%, calc(100% - 4px) 100%, 0% 100%)',
+                  boxShadow: copied ? `0 0 10px ${colors.primary}33` : 'none',
+                }}
+                onMouseEnter={e => {
+                  if (copied) return
+                  e.currentTarget.style.borderColor = colors.primary
+                  e.currentTarget.style.color = colors.primary
+                  e.currentTarget.style.background = `${colors.primary}10`
+                  e.currentTarget.style.boxShadow = `0 0 8px ${colors.primary}33`
+                }}
+                onMouseLeave={e => {
+                  if (copied) return
+                  e.currentTarget.style.borderColor = colors.border
+                  e.currentTarget.style.color = colors.textDim
+                  e.currentTarget.style.background = 'none'
+                  e.currentTarget.style.boxShadow = 'none'
+                }}
+              >
+                {copied ? 'Copied' : 'Copy Log'}
+              </button>
+              <button
+                onClick={onClose}
+                style={{
+                  background: 'none',
+                  border: `1px solid ${colors.border}`,
+                  color: colors.textDim,
+                  cursor: 'pointer',
+                  padding: '4px 12px',
+                  fontSize: '13px',
+                  fontFamily: 'monospace',
+                  lineHeight: 1,
+                  transition: 'all 0.15s',
+                  clipPath: 'polygon(4px 0%, 100% 0%, calc(100% - 4px) 100%, 0% 100%)',
+                }}
+                onMouseEnter={e => {
+                  e.currentTarget.style.borderColor = colors.danger
+                  e.currentTarget.style.color = colors.danger
+                  e.currentTarget.style.background = `${colors.danger}10`
+                  e.currentTarget.style.boxShadow = `0 0 8px ${colors.danger}44`
+                }}
+                onMouseLeave={e => {
+                  e.currentTarget.style.borderColor = colors.border
+                  e.currentTarget.style.color = colors.textDim
+                  e.currentTarget.style.background = 'none'
+                  e.currentTarget.style.boxShadow = 'none'
+                }}
+              >
+                ✕
+              </button>
+            </div>
           </div>
 
           {/* Log output */}
@@ -320,6 +383,7 @@ export function LogModal({ job, onClose }: LogModalProps) {
         </div>
       </Animator>
       </div>
-    </>
+    </>,
+    document.body,
   )
 }

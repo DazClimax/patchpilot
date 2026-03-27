@@ -28,6 +28,18 @@ import metrics as metrics_module
 
 app = FastAPI(title="PatchPilot API")
 
+_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-eval'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "font-src 'self' data:; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'"
+)
+
 # ---------------------------------------------------------------------------
 # CORS — restrict to specific origins in production.
 # Read PATCHPILOT_ALLOWED_ORIGINS from env (comma-separated) or
@@ -81,6 +93,19 @@ async def _port_routing(request: Request, call_next):
                 # Block raw file downloads on UI port
                 return JSONResponse(status_code=404, content={"detail": "Not available on UI port"})
     return await call_next(request)
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Content-Security-Policy", _CONTENT_SECURITY_POLICY)
+    if request.url.scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 # ---------------------------------------------------------------------------
 # Admin-Key — protects all Web-UI endpoints (Dashboard, Jobs, Schedules …).
@@ -177,7 +202,7 @@ STATIC_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 # ---------------------------------------------------------------------------
 _AGENT_ID_RE = re.compile(r'^[a-zA-Z0-9._-]{1,64}$')
 _TG_TOKEN_RE  = re.compile(r'^\d+:[A-Za-z0-9_-]{35,}$')
-ALLOWED_JOB_TYPES = {"patch", "reboot", "update_agent", "autoremove", "deploy_ssl", "ack_config_review"}
+ALLOWED_JOB_TYPES = {"patch", "dist_upgrade", "force_patch", "refresh_updates", "reboot", "update_agent", "autoremove", "deploy_ssl", "ack_config_review", "ha_backup", "ha_core_update", "ha_backup_update"}
 
 def _validate_agent_id(agent_id: str):
     if not _AGENT_ID_RE.match(agent_id):
@@ -191,6 +216,8 @@ _FIELD_LIMITS = {
     "kernel":    64,
     "arch":      16,
     "package_manager": 16,
+    "agent_type": 16,
+    "capabilities": 512,
 }
 
 def _sanitize_agent_fields(data: dict) -> dict:
@@ -208,7 +235,35 @@ def _infer_package_manager(fields: dict) -> str | None:
         return "apt"
     if any(name in os_pretty for name in ("fedora", "rhel", "red hat", "redhat", "rocky", "alma", "centos", "nobara")):
         return "dnf"
+    if "home assistant os" in os_pretty:
+        return "haos"
     return None
+
+
+def _infer_agent_type(fields: dict) -> str:
+    agent_type = (fields.get("agent_type") or "").strip().lower()
+    if agent_type in {"linux", "haos"}:
+        return agent_type
+    os_pretty = (fields.get("os_pretty") or "").lower()
+    if "home assistant os" in os_pretty:
+        return "haos"
+    return "linux"
+
+
+def _normalize_capabilities(fields: dict) -> str:
+    raw = str(fields.get("capabilities") or "").strip()
+    if not raw:
+        return ""
+    parts = []
+    for item in raw.split(","):
+        name = item.strip().lower()
+        if name and re.fullmatch(r"[a-z0-9_.-]{1,64}", name):
+            parts.append(name)
+    deduped = []
+    for item in parts:
+        if item not in deduped:
+            deduped.append(item)
+    return ",".join(deduped)[:512]
 
 def _validate_cron(cron: str):
     """MED-8: Validate cron expression using APScheduler before DB insert."""
@@ -275,7 +330,7 @@ def _hash_register_key(key: str) -> str:
 def _generate_register_key() -> tuple[str, float]:
     """Generate a fresh register key (DB-backed, shared across processes).
     Stores SHA-256 hash in DB, returns plaintext only in API response."""
-    key = secrets.token_hex(6)  # 12 chars, easy to copy
+    key = secrets.token_hex(16)  # 32 chars / 128 bits
     key_hash = _hash_register_key(key)
     expires = str(int(time.time() + _REGISTER_KEY_TTL))
     with get_db_ctx() as conn:
@@ -1374,7 +1429,7 @@ _SETTINGS_ALLOWED_KEYS = {
     "smtp_host", "smtp_port", "smtp_security", "smtp_user", "smtp_password", "smtp_to",
     "notify_offline", "notify_offline_minutes", "notify_patches", "notify_failures",
     "server_port", "agent_port", "agent_ssl",
-    "ui_audio_enabled", "ui_audio_volume", "ui_login_animation_enabled",
+    "ui_audio_enabled", "ui_audio_volume", "ui_login_animation_enabled", "ui_login_background_animation_enabled", "ui_login_background_opacity",
 }
 
 _SSL_DIR = Path(__file__).parent.parent / "ssl"
@@ -1445,6 +1500,14 @@ async def api_save_settings(request: Request):
                 raise ValueError
         except (ValueError, TypeError):
             raise HTTPException(status_code=422, detail="ui_audio_volume must be an integer between 0 and 100")
+    login_background_opacity = data.get("ui_login_background_opacity")
+    if login_background_opacity is not None and str(login_background_opacity) != "***":
+        try:
+            val = int(login_background_opacity)
+            if not (0 <= val <= 100):
+                raise ValueError
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="ui_login_background_opacity must be an integer between 0 and 100")
     # Validate server_port as integer in [1, 65535]
     server_port_val = data.get("server_port")
     if server_port_val is not None and str(server_port_val) != "***":
@@ -1897,6 +1960,53 @@ async def api_deploy_ssl_to_agents(request: Request):
     return {"status": "deployed", "agent_count": count, "batch_id": batch_id}
 
 
+@app.post("/api/agents/update-batch", dependencies=[Depends(require_role("admin"))])
+async def api_update_agents_batch(request: Request):
+    """Create update_agent jobs for all agents and return a trackable batch id."""
+    import uuid as _uuid
+    batch_id = _uuid.uuid4().hex[:12]
+
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        pass
+    retry_batch = re.sub(r'[^a-fA-F0-9]', '', data.get("retry_batch", ""))
+
+    with get_db_ctx() as conn:
+        if retry_batch:
+            batch_filter = f'%"batch": "{retry_batch}"%'
+            agents = conn.execute("""
+                SELECT DISTINCT j.agent_id, a.hostname FROM jobs j
+                JOIN agents a ON a.id = j.agent_id
+                WHERE j.type = 'update_agent' AND j.status = 'failed' AND j.params LIKE ?
+                  AND a.last_seen IS NOT NULL
+                  AND (julianday('now','localtime') - julianday(a.last_seen)) * 86400 < 120
+            """, (batch_filter,)).fetchall()
+        else:
+            agents = conn.execute("""
+                SELECT id AS agent_id, hostname
+                FROM agents
+                WHERE last_seen IS NOT NULL
+                  AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120
+            """).fetchall()
+
+        if not agents:
+            raise HTTPException(status_code=422, detail="No agents to update")
+
+        count = 0
+        for a in agents:
+            aid = a["agent_id"] if "agent_id" in a.keys() else a["id"]
+            params = json.dumps({"batch": batch_id})
+            conn.execute(
+                "INSERT INTO jobs (agent_id, type, params) VALUES (?, 'update_agent', ?)",
+                (aid, params),
+            )
+            count += 1
+    _cache_invalidate("dashboard")
+    return {"status": "queued", "agent_count": count, "batch_id": batch_id}
+
+
 @app.get("/api/settings/deploy-ssl/status", dependencies=[Depends(require_role("admin"))])
 def api_deploy_ssl_status(batch: str = ""):
     """Return progress of SSL deployment for a specific batch.
@@ -1965,6 +2075,49 @@ def api_deploy_ssl_status(batch: str = ""):
     done = sum(1 for a in agents if a["status"] in ("done", "failed"))
     # Consider deployment "complete" when all online agents are done
     # Offline agents will pick up jobs when they reconnect
+    return {"agents": agents, "total": total, "total_online": total_online, "completed": done}
+
+
+@app.get("/api/agents/update-batch/status", dependencies=[Depends(require_role("admin"))])
+def api_update_agents_batch_status(batch: str = ""):
+    """Return progress of an update_agent batch."""
+    batch = re.sub(r'[^a-fA-F0-9]', '', batch or '')
+    if not batch:
+        return {"agents": [], "total": 0, "completed": 0}
+
+    batch_filter = f'%"batch": "{batch}"%'
+    with get_db_ctx() as conn:
+        rows = conn.execute("""
+            SELECT j.agent_id, a.hostname, j.status, j.output, j.finished
+            FROM jobs j JOIN agents a ON a.id = j.agent_id
+            WHERE j.type = 'update_agent' AND j.params LIKE ?
+        """, (batch_filter,)).fetchall()
+
+        online_rows = conn.execute("""
+            SELECT id, (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120 AS is_online
+            FROM agents WHERE last_seen IS NOT NULL
+        """).fetchall()
+        online_map = {r["id"]: bool(r["is_online"]) for r in online_rows}
+
+    agents = []
+    for r in rows:
+        phase = "updating" if r["status"] in ("pending", "running") else (
+            "failed" if r["status"] == "failed" else "done"
+        )
+        agents.append({
+            "agent_id": r["agent_id"],
+            "hostname": r["hostname"],
+            "status": r["status"],
+            "phase": phase,
+            "output": r["output"] or "",
+            "finished": r["finished"],
+            "online": online_map.get(r["agent_id"], False),
+        })
+
+    agents.sort(key=lambda a: (not a["online"], a["hostname"]))
+    total_online = sum(1 for a in agents if a["online"])
+    total = len(agents)
+    done = sum(1 for a in agents if a["status"] in ("done", "failed"))
     return {"agents": agents, "total": total, "total_online": total_online, "completed": done}
 
 

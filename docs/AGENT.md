@@ -150,7 +150,7 @@ The agent reads config from two sources (later overrides earlier):
 ### Registration Key
 
 - Generated on-demand from the Deploy page (not always active)
-- 12-character hex key, SHA-256 hashed in the database, valid for 5 minutes
+- 32-character hex key, SHA-256 hashed in the database, valid for 5 minutes
 - Required for first-time agent registration
 - Re-registration of existing IDs uses the agent token instead
 

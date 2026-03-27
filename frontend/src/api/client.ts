@@ -140,6 +140,8 @@ export interface Settings {
   ui_audio_enabled: string
   ui_audio_volume: string
   ui_login_animation_enabled: string
+  ui_login_background_animation_enabled: string
+  ui_login_background_opacity: string
 }
 
 export interface User {
@@ -246,6 +248,12 @@ export const api = {
 
   deploySslStatus: (batchId: string) =>
     req<{ agents: Array<{ agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null; online: boolean }>; total: number; total_online: number; completed: number }>('GET', `/settings/deploy-ssl/status?batch=${batchId}`),
+
+  updateAgentsBatch: (retryBatch?: string) =>
+    req<{ status: string; agent_count: number; batch_id: string }>('POST', '/agents/update-batch', retryBatch ? { retry_batch: retryBatch } : undefined),
+
+  updateAgentsBatchStatus: (batchId: string) =>
+    req<{ agents: Array<{ agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null; online: boolean }>; total: number; total_online: number; completed: number }>('GET', `/agents/update-batch/status?batch=${batchId}`),
 
   setTags: (id: string, tags: string) =>
     req<{ status: string; tags: string }>('PATCH', `/agents/${id}/tags`, { tags }),

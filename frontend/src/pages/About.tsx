@@ -42,6 +42,16 @@ export function AboutPage() {
               github.com/DazClimax/patchpilot
             </a>
           } />
+          <Row label="UI FRAMEWORK" value={
+            <a href="https://arwes.dev" target="_blank" rel="noopener noreferrer" style={linkStyle}>
+              Arwes
+            </a>
+          } />
+          <Row label="DISTRO ICONS" value={
+            <a href="https://github.com/lukas-w/font-logos" target="_blank" rel="noopener noreferrer" style={linkStyle}>
+              font-logos
+            </a>
+          } />
           <Row label="LICENSE" value={
             <span style={{ color: colors.text }}>
               GNU General Public License v3.0 (GPLv3)
@@ -71,6 +81,14 @@ export function AboutPage() {
             GNU General Public License
           </a>{' '}
           for more details.
+          <br /><br />
+          PatchPilot's sci-fi interface is built with{' '}
+          <a href="https://arwes.dev" target="_blank" rel="noopener noreferrer" style={linkStyle}>
+            Arwes
+          </a>, and distro icons from{' '}
+          <a href="https://github.com/lukas-w/font-logos" target="_blank" rel="noopener noreferrer" style={linkStyle}>
+            font-logos
+          </a>.
         </div>
       </Card>
     </div>

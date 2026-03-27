@@ -23,7 +23,10 @@ function jobStatus(s: string): [string, string] {
 
 function jobTypeColor(t: string) {
   const map: Record<string, string> = {
-    patch:  colors.primary,
+    patch: colors.primary,
+    dist_upgrade: colors.warn,
+    force_patch: colors.warn,
+    refresh_updates: colors.primaryDim,
     reboot: colors.danger,
   }
   return map[t] ?? colors.textDim
@@ -61,7 +64,19 @@ function LoadingSkeleton() {
 
 // ─── Package row ──────────────────────────────────────────────────────────────
 
-function PackageRow({ pkg, onPatch, busy, index }: { pkg: Package; onPatch: () => void; busy: boolean; index: number }) {
+function PackageRow({
+  pkg,
+  onPatch,
+  onForcePatch,
+  busy,
+  index,
+}: {
+  pkg: Package
+  onPatch: () => void
+  onForcePatch?: () => void
+  busy: boolean
+  index: number
+}) {
   const [hover, setHover] = useState(false)
   return (
     <tr
@@ -89,7 +104,14 @@ function PackageRow({ pkg, onPatch, busy, index }: { pkg: Package; onPatch: () =
         </span>
       </td>
       <td style={{ padding: '10px 16px', textAlign: 'right' }}>
-        <Button size="sm" onClick={onPatch} disabled={busy}>Update</Button>
+        <div style={{ display: 'inline-flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <Button size="sm" onClick={onPatch} disabled={busy}>Update</Button>
+          {onForcePatch && (
+            <Button size="sm" variant="ghost" onClick={onForcePatch} disabled={busy} style={{ color: colors.warn }}>
+              Force
+            </Button>
+          )}
+        </div>
       </td>
     </tr>
   )
@@ -110,6 +132,7 @@ export function VmDetail() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [logJob, setLogJob] = useState<Job | null>(null)
+  const [copiedField, setCopiedField] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null)
 
   const load = useCallback(async () => {
@@ -181,9 +204,70 @@ export function VmDetail() {
     })
   }
 
+  const confirmDistUpgrade = () => {
+    if (!agent) return
+    setConfirm({
+      title: 'Dist Upgrade',
+      message: `Run a full distribution upgrade on "${agent.hostname}"? This may install replacements, remove conflicting packages and can require a reboot afterwards.`,
+      onConfirm: () => {
+        setConfirm(null)
+        triggerJob('dist_upgrade')
+      },
+    })
+  }
+
+  const confirmRefreshUpdates = () => {
+    if (!agent) return
+    const manager = (agent.package_manager || 'package manager').toUpperCase()
+    setConfirm({
+      title: 'Refresh Updates',
+      message: `Refresh package metadata on "${agent.hostname}" using ${manager}? This updates the available package list without installing anything.`,
+      onConfirm: () => {
+        setConfirm(null)
+        triggerJob('refresh_updates')
+      },
+    })
+  }
+
+  const confirmForceAll = () => {
+    if (!agent) return
+    setConfirm({
+      title: 'Force All Updates',
+      message: `Run a forced update for all pending packages on "${agent.hostname}"? This uses a transient systemd service as an RPM compatibility fallback.`,
+      onConfirm: () => {
+        setConfirm(null)
+        triggerJob('force_patch')
+      },
+    })
+  }
+
   const [renaming, setRenaming] = useState(false)
   const [newId, setNewId] = useState('')
   const [renameError, setRenameError] = useState('')
+
+  const copyIpAddress = async () => {
+    const ip = agent?.ip?.trim()
+    if (!ip || ip === '—') return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(ip)
+      } else {
+        const textarea = document.createElement('textarea')
+        textarea.value = ip
+        textarea.setAttribute('readonly', '')
+        textarea.style.position = 'absolute'
+        textarea.style.left = '-9999px'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
+      setCopiedField('ip')
+      window.setTimeout(() => setCopiedField(current => (current === 'ip' ? null : current)), 1600)
+    } catch {
+      // non-fatal, user can still copy manually
+    }
+  }
 
   const startRename = () => {
     setNewId(id || '')
@@ -207,6 +291,14 @@ export function VmDetail() {
   }
 
   const online = (agent?.seconds_ago ?? 9999) < 120
+  const isRpmSystem = ['dnf', 'yum'].includes(agent?.package_manager ?? '')
+  const refreshLabel = agent?.package_manager === 'apt'
+    ? '↻ Apt Update'
+    : agent?.package_manager === 'dnf'
+      ? '↻ Dnf Refresh'
+      : agent?.package_manager === 'yum'
+        ? '↻ Yum Refresh'
+        : '↻ Refresh'
 
   if (loading) return <LoadingSkeleton />
   if (!agent) return null
@@ -237,22 +329,53 @@ export function VmDetail() {
               animation: 'pp-spin 0.8s linear infinite',
             }} />
           )}
-          {agent.reboot_required ? (
-            <Button
-              variant="danger"
-              size="sm"
-              loading={busy}
-              onClick={confirmReboot}
-              disabled={busy}
-            >
-              ⟳ Reboot
-            </Button>
-          ) : null}
+          <Button
+            variant="danger"
+            size="sm"
+            loading={busy}
+            onClick={confirmReboot}
+            disabled={busy}
+          >
+            ⟳ Reboot
+          </Button>
           {packages.length > 0 && (
-            <Button size="sm" onClick={() => triggerJob('patch')} loading={busy} disabled={busy}>
-              ↑ Patch All
-            </Button>
+            <>
+              <Button size="sm" onClick={() => triggerJob('patch')} loading={busy} disabled={busy}>
+                ↑ Patch All
+              </Button>
+              {isRpmSystem && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={confirmForceAll}
+                  disabled={busy}
+                  style={{ color: colors.warn }}
+                  title="Run all pending package updates via transient systemd service"
+                >
+                  ⇪ Force All
+                </Button>
+              )}
+            </>
           )}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={confirmRefreshUpdates}
+            disabled={busy}
+            title="Refresh package metadata and update the pending package list"
+          >
+            {refreshLabel}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={confirmDistUpgrade}
+            disabled={busy}
+            title="Run a full distribution upgrade"
+            style={{ color: colors.warn }}
+          >
+            ⇪ Dist Upgrade
+          </Button>
           <Button
             variant="ghost"
             size="sm"
@@ -359,13 +482,34 @@ export function VmDetail() {
         {[
           { label: 'IP Address', value: agent.ip ?? '—', accent: colors.primary },
           { label: 'OS',         value: agent.os_pretty ?? '—', accent: colors.primaryDim },
-          { label: 'Package Manager', value: agent.package_manager ?? '—', accent: colors.primaryDim },
+          { label: 'Pkg Manager', value: agent.package_manager ?? '—', accent: colors.primaryDim },
           { label: 'Kernel',     value: agent.kernel ?? '—', accent: colors.primaryDim },
           { label: 'Arch',       value: agent.arch ?? '—', accent: colors.primaryDim },
           { label: 'Uptime',     value: fmtUptime(agent.uptime_seconds), accent: colors.primaryDim },
           { label: 'Last Seen',  value: fmtAgo(agent.seconds_ago), accent: colors.primaryDim },
-        ].map(({ label, value, accent }, i) => (
-          <Card key={label} accent={accent} style={{ padding: '14px 16px', animationDelay: `${i * 0.05}s` }}>
+        ].map(({ label, value, accent }, i) => {
+          const isIp = label === 'IP Address' && value !== '—'
+          return (
+          <div
+            key={label}
+            onClick={isIp ? copyIpAddress : undefined}
+            title={isIp ? 'Copy IP address' : undefined}
+            style={{
+              cursor: isIp ? 'copy' : 'default',
+            }}
+          >
+          <Card
+            accent={accent}
+            style={{
+              padding: '14px 16px',
+              animationDelay: `${i * 0.05}s`,
+              boxShadow: isIp && copiedField === 'ip'
+                ? `0 0 24px ${colors.primary}22, inset 0 0 0 1px ${colors.primary}88`
+                : undefined,
+              transition: 'box-shadow 0.16s ease, transform 0.16s ease',
+              transform: isIp && copiedField === 'ip' ? 'translateY(-1px)' : 'none',
+            }}
+          >
             <div style={{
               fontSize: '10px',
               color: colors.textMuted,
@@ -383,11 +527,13 @@ export function VmDetail() {
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
+              userSelect: 'none',
             }}>
               {value}
             </div>
           </Card>
-        ))}
+          </div>
+        )})}
       </div>
 
       {/* Tags row — only rendered when the agent has at least one tag */}
@@ -559,6 +705,14 @@ export function VmDetail() {
                     pkg={pkg}
                     index={i}
                     onPatch={() => triggerJob('patch', { packages: [pkg.name] })}
+                    onForcePatch={isRpmSystem ? () => setConfirm({
+                      title: 'Force Update',
+                      message: `Run a forced RPM update for "${pkg.name}" on "${agent.hostname}"? This uses a transient systemd service as a Fedora compatibility fallback.`,
+                      onConfirm: () => {
+                        setConfirm(null)
+                        triggerJob('force_patch', { packages: [pkg.name] })
+                      },
+                    }) : undefined}
                     busy={busy}
                   />
                 ))}
@@ -599,11 +753,11 @@ export function VmDetail() {
           WebkitBackdropFilter: 'blur(8px)',
           overflowX: 'auto',
         }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', tableLayout: 'fixed' }}>
+          <table style={{ width: '100%', minWidth: '760px', borderCollapse: 'collapse', fontSize: '12px', tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: '50px' }} />
-              <col style={{ width: '110px' }} />
-              <col style={{ width: '90px' }} />
+              <col style={{ width: '170px' }} />
+              <col style={{ width: '120px' }} />
               <col style={{ width: '150px' }} />
               <col />
               <col style={{ width: '110px' }} />
@@ -653,10 +807,10 @@ export function VmDetail() {
                     <td style={{ padding: '10px 16px', color: colors.textMuted, fontFamily: 'monospace', fontSize: '11px' }}>
                       #{job.id}
                     </td>
-                    <td style={{ padding: '10px 16px' }}>
+                    <td style={{ padding: '10px 16px', whiteSpace: 'nowrap' }}>
                       <Badge color={typeColor}>{job.type.toUpperCase()}</Badge>
                     </td>
-                    <td style={{ padding: '10px 16px' }}>
+                    <td style={{ padding: '10px 16px', whiteSpace: 'nowrap' }}>
                       <span style={{
                         color: statusColor,
                         textShadow: glow(statusColor, 2),

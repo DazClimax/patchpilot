@@ -351,6 +351,7 @@ def _pkg_backend() -> dict:
             "refresh": ["apt-get", "update", "-qq"],
             "list_updates": ["apt-get", "--just-print", "upgrade"],
             "patch_all": ["apt-get", "upgrade", "-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"],
+            "dist_upgrade_all": ["apt-get", "dist-upgrade", "-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold"],
             "patch_selected_prefix": ["apt-get", "install", "-y", "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold", "--only-upgrade"],
             "autoremove": ["apt-get", "autoremove", "-y"],
             "env": {**os.environ, "DEBIAN_FRONTEND": "noninteractive"},
@@ -362,6 +363,7 @@ def _pkg_backend() -> dict:
             "refresh": ["dnf", "-q", "makecache"],
             "list_updates": ["dnf", "-q", "check-update"],
             "patch_all": ["dnf", "-y", "upgrade", "--refresh"],
+            "dist_upgrade_all": ["dnf", "-y", "distro-sync", "--refresh"],
             "patch_selected_prefix": ["dnf", "-y", "upgrade", "--refresh"],
             "autoremove": ["dnf", "-y", "autoremove"],
             "env": dict(os.environ),
@@ -373,6 +375,7 @@ def _pkg_backend() -> dict:
             "refresh": ["yum", "-q", "makecache"],
             "list_updates": ["yum", "-q", "check-update"],
             "patch_all": ["yum", "-y", "update"],
+            "dist_upgrade_all": ["yum", "-y", "update"],
             "patch_selected_prefix": ["yum", "-y", "update"],
             "autoremove": None,
             "env": dict(os.environ),
@@ -529,13 +532,66 @@ def _validate_package_names(pkg_list: list) -> list:
     return safe
 
 
+def _run_package_command(cmd: list[str], env: dict, timeout: int) -> tuple[str, str]:
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+        return ("done" if result.returncode == 0 else "failed"), (result.stdout + result.stderr)
+    except subprocess.TimeoutExpired:
+        return "failed", f"Timeout after {timeout}s"
+    except Exception as e:
+        return "failed", str(e)
+
+
+def _run_force_patch(backend: dict, pkg_list: list[str]) -> tuple[str, str]:
+    if backend["name"] not in {"dnf", "yum"}:
+        cmd = backend["patch_selected_prefix"] + pkg_list if pkg_list else backend["patch_all"]
+        return _run_package_command(cmd, backend["env"], 900)
+
+    if not shutil.which("systemd-run"):
+        return "failed", "Force update requires systemd-run on RPM systems"
+
+    base_cmd = backend["patch_selected_prefix"] + pkg_list if pkg_list else backend["patch_all"]
+    unit_name = f"patchpilot-force-update-{int(time.time())}"
+    cmd = [
+        "systemd-run",
+        "--wait",
+        "--collect",
+        "--quiet",
+        f"--unit={unit_name}",
+        "--service-type=exec",
+        "--property=StandardOutput=journal",
+        "--property=StandardError=journal",
+        *base_cmd,
+    ]
+    status, output = _run_package_command(cmd, backend["env"], 1200)
+    if shutil.which("journalctl"):
+        journal_status, journal_output = _run_package_command(
+            ["journalctl", "--no-pager", "-o", "cat", "-u", unit_name],
+            backend["env"],
+            60,
+        )
+        if journal_output.strip():
+            output = journal_output
+        elif journal_status == "failed" and output.strip():
+            output += "\n\n[journalctl]\n" + journal_output
+    if status == "done":
+        output = (output.rstrip() + "\n\n" if output.strip() else "") + "Force update executed via transient systemd service."
+    return status, output
+
+
 def execute_job(job: dict) -> tuple:
     if "type" not in job or "id" not in job:
         return "failed", f"Malformed job dict: missing 'type' or 'id' key"
     jtype = job["type"]
     params = job.get("params", {})
 
-    if jtype == "patch":
+    if jtype in {"patch", "dist_upgrade", "force_patch"}:
         raw_pkg_list = params.get("packages", [])
         # SECURITY: Validate every package name before passing it to
         # the package manager.  This prevents a compromised server (or MITM) from
@@ -544,20 +600,23 @@ def execute_job(job: dict) -> tuple:
         # blocked, but name validation adds defence-in-depth.
         pkg_list = _validate_package_names(raw_pkg_list) if raw_pkg_list else []
         backend = _pkg_backend()
-        if pkg_list:
+        if jtype == "dist_upgrade":
+            cmd = backend.get("dist_upgrade_all") or backend["patch_all"]
+        elif jtype == "force_patch":
+            status, output = _run_force_patch(backend, pkg_list)
+            review_note = _extract_config_review_note(output, backend["name"])
+            if review_note:
+                _set_config_review(True, review_note)
+                output += "\n\nCONFIG REVIEW REQUIRED:\n" + review_note + "\n\nReview the changed config files and acknowledge the warning in PatchPilot once everything looks good."
+            elif status == "done":
+                _set_config_review(False)
+            return status, output
+        elif pkg_list:
             cmd = backend["patch_selected_prefix"] + pkg_list
         else:
             cmd = backend["patch_all"]
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=600,
-                env=backend["env"],
-            )
-            output = result.stdout + result.stderr
-            status = "done" if result.returncode == 0 else "failed"
+            status, output = _run_package_command(cmd, backend["env"], 600)
             review_note = _extract_config_review_note(output, backend["name"])
             if review_note:
                 _set_config_review(True, review_note)
@@ -576,9 +635,6 @@ def execute_job(job: dict) -> tuple:
                         output += "\n--- autoremove ---\n" + ar.stdout
                 except Exception:
                     pass  # best-effort, don't fail the patch job
-        except subprocess.TimeoutExpired:
-            output = "Timeout after 600s"
-            status = "failed"
         except Exception as e:
             output = str(e)
             status = "failed"
@@ -590,6 +646,29 @@ def execute_job(job: dict) -> tuple:
             return "done", "Reboot scheduled in 1 minute"
         except Exception as e:
             return "failed", str(e)
+
+    elif jtype == "refresh_updates":
+        backend = _pkg_backend()
+        try:
+            result = subprocess.run(
+                backend["refresh"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                env=backend["env"],
+            )
+            output = result.stdout + result.stderr
+            status = "done" if result.returncode == 0 else "failed"
+            if status == "done":
+                packages = get_pending_updates()
+                output = (output.rstrip() + "\n\n" if output.strip() else "") + f"Package metadata refreshed. Pending updates: {len(packages)}"
+        except subprocess.TimeoutExpired:
+            output = "Timeout after 300s"
+            status = "failed"
+        except Exception as e:
+            output = str(e)
+            status = "failed"
+        return status, output
 
     elif jtype == "autoremove":
         backend = _pkg_backend()
@@ -997,8 +1076,8 @@ def main():
                 report_result(server, agent_id, token, job["id"], status, output)
                 print(f"[agent] Job #{job['id']} finished: {status}")
 
-                # Refresh heartbeat after patching
-                if job["type"] == "patch":
+                # Refresh heartbeat after package metadata or upgrade jobs
+                if job["type"] in {"patch", "dist_upgrade", "refresh_updates", "force_patch"}:
                     packages = get_pending_updates()
                     send_heartbeat(server, agent_id, token, packages)
 

@@ -5,6 +5,37 @@ import { Card } from '../components/Card'
 import { Button } from '../components/Button'
 import { api } from '../api/client'
 
+const REGISTER_KEY_STORAGE_KEY = 'pp_deploy_register_key'
+const REGISTER_KEY_EXPIRY_STORAGE_KEY = 'pp_deploy_register_key_expires_at'
+
+function persistRegisterKeyState(key: string, expiresIn: number) {
+  if (typeof window === 'undefined') return
+  if (!key || expiresIn <= 0) {
+    window.sessionStorage.removeItem(REGISTER_KEY_STORAGE_KEY)
+    window.sessionStorage.removeItem(REGISTER_KEY_EXPIRY_STORAGE_KEY)
+    return
+  }
+  window.sessionStorage.setItem(REGISTER_KEY_STORAGE_KEY, key)
+  window.sessionStorage.setItem(REGISTER_KEY_EXPIRY_STORAGE_KEY, String(Date.now() + expiresIn * 1000))
+}
+
+function clearRegisterKeyState() {
+  persistRegisterKeyState('', 0)
+}
+
+function readRegisterKeyState(): { key: string; expiresIn: number } {
+  if (typeof window === 'undefined') return { key: '', expiresIn: 0 }
+  const key = window.sessionStorage.getItem(REGISTER_KEY_STORAGE_KEY) ?? ''
+  const expiresAtRaw = window.sessionStorage.getItem(REGISTER_KEY_EXPIRY_STORAGE_KEY)
+  const expiresAt = expiresAtRaw ? Number(expiresAtRaw) : 0
+  const expiresIn = expiresAt ? Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)) : 0
+  if (!key || expiresIn <= 0) {
+    clearRegisterKeyState()
+    return { key: '', expiresIn: 0 }
+  }
+  return { key, expiresIn }
+}
+
 function copyToClipboard(text: string): boolean {
   if (navigator.clipboard?.writeText) {
     navigator.clipboard.writeText(text).catch(() => {})
@@ -21,24 +52,26 @@ function copyToClipboard(text: string): boolean {
   return ok
 }
 
-function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
+function CopyButton({ text, label = 'Copy', disabled = false }: { text: string; label?: string; disabled?: boolean }) {
   const [copied, setCopied] = useState(false)
 
   const copy = () => {
+    if (disabled || !text) return
     copyToClipboard(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const c = copied ? colors.success : colors.primary
+  const c = disabled ? colors.textMuted : copied ? colors.success : colors.primary
   return (
     <button
       onClick={copy}
+      disabled={disabled}
       style={{
         background: `${c}12`,
         border: `1px solid ${c}66`,
         color: c,
-        cursor: 'pointer',
+        cursor: disabled ? 'not-allowed' : 'pointer',
         padding: '6px 16px',
         fontSize: '11px',
         fontFamily: "'Electrolize', monospace",
@@ -48,6 +81,7 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
         transition: 'all 0.2s',
         clipPath: 'polygon(4px 0%, 100% 0%, calc(100% - 4px) 100%, 0% 100%)',
         whiteSpace: 'nowrap',
+        opacity: disabled ? 0.45 : 1,
       }}
     >
       {copied ? '✓ Copied' : label}
@@ -68,18 +102,28 @@ function RegisterKeyWidget({ registerKey, setRegisterKey, expiresIn, setExpiresI
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
-    if (!registerKey) return
+    if (!registerKey || expiresIn <= 0) return
+    if (timerRef.current) clearInterval(timerRef.current)
     timerRef.current = setInterval(() => {
-      setExpiresIn(prev => {
-        if (prev <= 1) {
+      const state = readRegisterKeyState()
+      setExpiresIn(state.expiresIn)
+      if (state.expiresIn <= 0) {
+        setRegisterKey('')
+        clearRegisterKeyState()
+        if (timerRef.current) {
           setRegisterKey('')
-          return 0
+          clearInterval(timerRef.current)
+          timerRef.current = null
         }
-        return prev - 1
-      })
+      }
     }, 1000)
-    return () => { if (timerRef.current) clearInterval(timerRef.current) }
-  }, [registerKey, setRegisterKey, setExpiresIn])
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current)
+        timerRef.current = null
+      }
+    }
+  }, [registerKey, expiresIn, setRegisterKey, setExpiresIn])
 
   const generate = async () => {
     setGenerating(true)
@@ -87,6 +131,7 @@ function RegisterKeyWidget({ registerKey, setRegisterKey, expiresIn, setExpiresI
       const r = await api.generateRegisterKey()
       setRegisterKey(r.key)
       setExpiresIn(r.expires_in)
+      persistRegisterKeyState(r.key, r.expires_in)
     } catch (e) {
       console.error(e)
     } finally {
@@ -95,9 +140,10 @@ function RegisterKeyWidget({ registerKey, setRegisterKey, expiresIn, setExpiresI
   }
 
   const key = registerKey
+  const keyUsable = !!key && expiresIn > 0
 
   const copyKey = () => {
-    if (key) {
+    if (keyUsable) {
       copyToClipboard(key)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
@@ -105,7 +151,7 @@ function RegisterKeyWidget({ registerKey, setRegisterKey, expiresIn, setExpiresI
   }
 
   const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-  const pct = key ? (expiresIn / 300) * 100 : 0
+  const pct = keyUsable ? (expiresIn / 300) * 100 : 0
 
   return (
     <Card style={{ padding: '18px 22px' }}>
@@ -119,7 +165,7 @@ function RegisterKeyWidget({ registerKey, setRegisterKey, expiresIn, setExpiresI
           Registration Key
         </div>
 
-        {key ? (
+        {keyUsable ? (
           <>
             <code
               onClick={copyKey}
@@ -406,6 +452,11 @@ export function DeployPage() {
 
   // Load settings + active key in parallel on mount
   useEffect(() => {
+    const cached = readRegisterKeyState()
+    if (cached.key && cached.expiresIn > 0) {
+      setRegisterKey(cached.key)
+      setExpiresIn(cached.expiresIn)
+    }
     Promise.all([
       api.settings().then((s: any) => {
         // Prefer agent_url (HTTP, agent port) over internal_url (UI port, may be HTTPS)
@@ -413,13 +464,24 @@ export function DeployPage() {
         else if (s.internal_url) setInternalUrl(s.internal_url)
       }).catch(() => {}),
       api.registerKeyStatus().then(r => {
-        if (r.active && r.key) {
+        const state = readRegisterKeyState()
+        if (r.active && state.key && state.expiresIn > 0) {
+          setRegisterKey(state.key)
+          setExpiresIn(state.expiresIn)
+        } else if (r.active && r.key) {
           setRegisterKey(r.key)
           setExpiresIn(r.expires_in)
+          persistRegisterKeyState(r.key, r.expires_in)
         } else if (r.active) {
-          // Key is hashed in DB — plaintext no longer available
+          // Server still has an active key, but plaintext is unavailable after reload
+          // unless this browser cached it locally.
+          setRegisterKey(state.key)
+          setExpiresIn(state.expiresIn)
+          if (!state.key) clearRegisterKeyState()
+        } else {
           setRegisterKey('')
-          setExpiresIn(r.expires_in)
+          setExpiresIn(0)
+          clearRegisterKeyState()
         }
       }).catch(() => {}),
       api.deployBootstrap().then(r => {
@@ -428,9 +490,18 @@ export function DeployPage() {
     ]).finally(() => setPageReady(true))
   }, [])
 
+  useEffect(() => {
+    if (!registerKey || expiresIn <= 0) {
+      clearRegisterKeyState()
+      return
+    }
+    persistRegisterKeyState(registerKey, expiresIn)
+  }, [registerKey, expiresIn])
+
   // Default: server-detected internal IP:port. User can override.
   const effectiveUrl = serverUrl || internalUrl
 
+  const keyUsable = !!registerKey && expiresIn > 0
 
   const agentIdError = agentId.length > 0 && !AGENT_ID_RE.test(agentId)
     ? 'Only letters, numbers, dots, hyphens and underscores allowed (max 64)'
@@ -438,10 +509,10 @@ export function DeployPage() {
   const safeAgentId = AGENT_ID_RE.test(agentId) ? agentId : ''
 
   const urlValid = SERVER_URL_RE.test(effectiveUrl)
-  const script = urlValid
+  const script = urlValid && keyUsable
     ? buildScript(effectiveUrl, safeAgentId, registerKey, caPemB64)
     : ''
-  const oneliner = urlValid ? buildOneLiner(effectiveUrl, safeAgentId, registerKey, caPemB64) : ''
+  const oneliner = urlValid && keyUsable ? buildOneLiner(effectiveUrl, safeAgentId, registerKey, caPemB64) : ''
 
   const downloadScript = () => {
     if (!script) return
@@ -559,7 +630,7 @@ export function DeployPage() {
 
       {/* Step 3 — One-liner */}
       <div style={{ marginBottom: '28px' }}>
-        <SectionHeader right={oneliner ? <CopyButton text={oneliner} label="Copy Command" /> : undefined}>
+        <SectionHeader right={urlValid && keyUsable ? <CopyButton text={oneliner} label="Copy Command" /> : undefined}>
           3. Quick Install (One-Liner)
         </SectionHeader>
         {oneliner ? (
@@ -603,7 +674,11 @@ export function DeployPage() {
             fontSize: '12px',
             fontFamily: 'monospace',
           }}>
-            {!urlValid ? 'Enter a valid server URL above' : 'Generate a registration key in Step 1 to see the install command'}
+            {!urlValid
+              ? 'Enter a valid server URL above'
+              : expiresIn > 0
+                ? 'This browser no longer has the plaintext key. Generate a new key to refresh the installer.'
+                : 'Generate a registration key in Step 1 to see the install command'}
           </div>
         )}
       </div>

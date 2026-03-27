@@ -160,6 +160,9 @@ export function Layout({ children }: { children: ReactNode }) {
             .pp-sidebar .pp-edge-glow-top,
             .pp-sidebar .pp-edge-glow-bottom,
             .pp-sidebar .pp-corner-accent { display: none !important; }
+            .pp-sidebar .pp-mobile-signout {
+              display: flex !important;
+            }
             .pp-sidebar nav {
               flex-direction: row !important;
               justify-content: space-around !important;
@@ -180,14 +183,41 @@ export function Layout({ children }: { children: ReactNode }) {
               align-items: center !important;
               min-height: 56px !important;
             }
+            .pp-sidebar .pp-mobile-signout {
+              flex-direction: column !important;
+              padding: 10px 8px !important;
+              gap: 4px !important;
+              font-size: 9px !important;
+              flex: 1 !important;
+              text-align: center !important;
+              justify-content: center !important;
+              align-items: center !important;
+              min-height: 56px !important;
+              border: none !important;
+              border-left: none !important;
+              margin: 0 !important;
+              width: auto !important;
+              background: transparent !important;
+            }
             .pp-sidebar nav a .pp-active-dot { display: none !important; }
             .pp-main-content {
-              padding-bottom: 64px !important;
+              padding-bottom: 124px !important;
+            }
+            .pp-content-footer {
+              display: none !important;
+            }
+            input, select, textarea {
+              font-size: 16px !important;
+            }
+          }
+          @media (min-width: 641px) {
+            .pp-mobile-signout {
+              display: none !important;
             }
           }
         `}</style>
 
-        <div className="pp-layout-root" style={{ display: 'flex', height: '100vh', overflow: 'hidden', position: 'relative' }}>
+        <div className="pp-layout-root" style={{ display: 'flex', minHeight: '100vh', height: '100dvh', overflow: 'hidden', position: 'relative' }}>
 
           {/* Ambient dot grid */}
           <div style={{ position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none', opacity: 0.12 }}>
@@ -320,6 +350,30 @@ export function Layout({ children }: { children: ReactNode }) {
               gap: '2px',
             }}>
               {filteredNav.map(n => <NavItem key={n.to} {...n} />)}
+              <button
+                className="pp-mobile-signout"
+                onClick={() => { auth.clear(); window.location.href = '/login' }}
+                aria-label="Sign out"
+                style={{
+                  display: 'none',
+                  color: colors.danger,
+                  cursor: 'pointer',
+                  fontFamily: "'Electrolize', monospace",
+                  letterSpacing: '0.12em',
+                  textTransform: 'uppercase',
+                  position: 'relative',
+                }}
+              >
+                <span style={{
+                  fontSize: '15px',
+                  opacity: 0.9,
+                  textShadow: glow(colors.danger, 6),
+                  transition: 'all 0.18s ease',
+                }}>
+                  ↩
+                </span>
+                <span className="pp-nav-label">Logout</span>
+              </button>
             </nav>
 
             {/* System status indicator */}
@@ -426,7 +480,7 @@ export function Layout({ children }: { children: ReactNode }) {
             </div>
 
             {/* Content footer — fixed at bottom, same height as sidebar version */}
-            <footer style={{
+            <footer className="pp-content-footer" style={{
               padding: '10px 20px',
               borderTop: `1px solid ${colors.border}`,
               fontSize: '10px',

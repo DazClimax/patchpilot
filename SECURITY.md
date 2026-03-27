@@ -29,6 +29,7 @@ This follow-up review focused on the current live hardening state after the rece
 - SMTP delivery validates the destination again at send time to reduce DNS rebinding risk
 - Agent token hashes are no longer exposed back to the dashboard API
 - RPM agent support now reports its detected package manager for clearer operations visibility
+- Registration keys now use 128 bits of entropy instead of the earlier 48-bit format
 
 ### Result
 

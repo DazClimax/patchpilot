@@ -7,6 +7,7 @@ import { StatCard, SkeletonCard } from '../components/Card'
 import { OnlineDot, Badge } from '../components/Badge'
 import { Button } from '../components/Button'
 import { ConfirmModal } from '../components/ConfirmModal'
+import { SslDeployModal, type DeployStatus } from '../components/SslDeployModal'
 import { PageHeader } from '../components/SectionHeader'
 import { fmtAgoShort as fmtAgo, fmtUptime } from '../utils/format'
 import { UserContext } from '../App'
@@ -568,6 +569,7 @@ export function Dashboard() {
   const navigate = useNavigate()
   const { role } = useContext(UserContext)
   const canAct = role === 'admin' || role === 'user'
+  const isAdmin = role === 'admin'
   const [data, setData] = useState<Awaited<ReturnType<typeof api.dashboard>> | null>(null)
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState(false)
@@ -576,6 +578,12 @@ export function Dashboard() {
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [confirm, setConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null)
   const [bulkBusy, setBulkBusy] = useState(false)
+  const [agentUpdateBusy, setAgentUpdateBusy] = useState(false)
+  const [agentUpdateModal, setAgentUpdateModal] = useState(false)
+  const [agentUpdateStatus, setAgentUpdateStatus] = useState<DeployStatus | null>(null)
+  const agentUpdatePollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const agentUpdateBatchRef = useRef('')
+  const agentUpdateStartRef = useRef(0)
 
   const load = useCallback(async () => {
     try {
@@ -596,6 +604,19 @@ export function Dashboard() {
     const t = setInterval(load, 30_000)
     return () => clearInterval(t)
   }, [load])
+
+  useEffect(() => {
+    return () => {
+      if (agentUpdatePollRef.current) clearInterval(agentUpdatePollRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!agentUpdateModal) return
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [agentUpdateModal])
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -637,8 +658,57 @@ export function Dashboard() {
     }
   }
 
+  const pollAgentUpdateStatus = useCallback(async () => {
+    if (!agentUpdateBatchRef.current) return
+    try {
+      const res = await api.updateAgentsBatchStatus(agentUpdateBatchRef.current)
+      setAgentUpdateStatus(res)
+      const onlineCount = res.total_online ?? res.total
+      const elapsed = Date.now() - agentUpdateStartRef.current
+      const timedOut = elapsed > 180_000
+      if ((onlineCount > 0 && res.completed >= onlineCount) || timedOut) {
+        if (agentUpdatePollRef.current) {
+          clearInterval(agentUpdatePollRef.current)
+          agentUpdatePollRef.current = null
+        }
+        setAgentUpdateBusy(false)
+        load()
+      }
+    } catch (e) {
+      console.error(e)
+    }
+  }, [load])
+
+  const updateAllAgents = useCallback(async (retryBatch?: string) => {
+    setAgentUpdateBusy(true)
+    setAgentUpdateStatus(null)
+    agentUpdateBatchRef.current = ''
+    agentUpdateStartRef.current = Date.now()
+    setAgentUpdateModal(true)
+    try {
+      const res = await api.updateAgentsBatch(retryBatch)
+      agentUpdateBatchRef.current = res.batch_id
+      pollAgentUpdateStatus()
+      agentUpdatePollRef.current = setInterval(pollAgentUpdateStatus, 3000)
+    } catch (e) {
+      console.error(e)
+      setAgentUpdateBusy(false)
+      setAgentUpdateModal(false)
+    }
+  }, [pollAgentUpdateStatus])
+
+  const closeAgentUpdateModal = useCallback(() => {
+    if (agentUpdatePollRef.current) {
+      clearInterval(agentUpdatePollRef.current)
+      agentUpdatePollRef.current = null
+    }
+    setAgentUpdateModal(false)
+    setAgentUpdateBusy(false)
+  }, [])
+
   const stats = data?.stats
   const agents = data?.agents ?? []
+  const onlineAgents = agents.filter(a => (a.seconds_ago ?? 9999) < 120)
 
   // Offline VMs (seconds_ago > 120)
   const offlineAgents = agents.filter(a => (a.seconds_ago ?? 9999) > 120)
@@ -651,8 +721,41 @@ export function Dashboard() {
 
   return (
     <div style={{ padding: 'clamp(16px, 4vw, 32px)', maxWidth: '1400px', animation: 'pp-fadein 0.4s ease both' }}>
+      {agentUpdateModal && (
+        <SslDeployModal
+          deployStatus={agentUpdateStatus}
+          busy={agentUpdateBusy}
+          hideOfflinePending
+          title="Agent Update Deployment"
+          inProgressText="Updating agents..."
+          doneLabel="AGENT UPDATED"
+          activePhaseLabel="UPDATING AGENT..."
+          waitingLabel="PENDING"
+          summaryVerb="updated"
+          onClose={closeAgentUpdateModal}
+          onRetry={() => {
+            const batch = agentUpdateBatchRef.current
+            closeAgentUpdateModal()
+            updateAllAgents(batch)
+          }}
+        />
+      )}
       <PageHeader right={
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {isAdmin && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={agentUpdateBusy || onlineAgents.length === 0}
+              onClick={() => setConfirm({
+                title: 'Update All Agents',
+                message: `Update the PatchPilot agent on ${onlineAgents.length} online VM${onlineAgents.length === 1 ? '' : 's'}? The agents will restart automatically after the update.`,
+                onConfirm: () => { setConfirm(null); updateAllAgents() },
+              })}
+            >
+              {agentUpdateBusy ? '⟳ Updating Agents…' : `⇪ Update Agents (${onlineAgents.length})`}
+            </Button>
+          )}
           {canAct && <Button
             variant={patchableAgents.length > 0 ? 'primary' : 'ghost'}
             size="sm"

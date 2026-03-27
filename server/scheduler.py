@@ -68,7 +68,7 @@ def _check_offline_vms():
         log.warning("_check_offline_vms error: %s", exc)
 
 
-_ALLOWED_JOB_TYPES = {"patch", "reboot"}
+_ALLOWED_JOB_TYPES = {"patch", "dist_upgrade", "refresh_updates", "reboot"}
 
 def _run_scheduled_job(schedule_id: int, action: str, target: str):
     # C-3: Validate action against allowlist before inserting into jobs table

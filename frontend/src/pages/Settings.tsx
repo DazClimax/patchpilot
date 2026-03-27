@@ -1,7 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import { createPortal } from 'react-dom'
 import { api, Settings, auth } from '../api/client'
-import { Animator, FrameCorners } from '@arwes/react'
 import { colors, glow, glowText, glassBg } from '../theme'
 import { Card } from '../components/Card'
 import { ConfirmModal } from '../components/ConfirmModal'
@@ -9,6 +7,7 @@ import { Button } from '../components/Button'
 import { PageHeader, SectionHeader } from '../components/SectionHeader'
 import { Dropdown } from '../components/Dropdown'
 import { useToast } from '../components/Toast'
+import { SslDeployModal, type DeployStatus } from '../components/SslDeployModal'
 import { persistUiEffectsSettings } from '../effects'
 
 // ---------------------------------------------------------------------------
@@ -273,6 +272,8 @@ const EMPTY: Settings = {
   ui_audio_enabled: '1',
   ui_audio_volume: '70',
   ui_login_animation_enabled: '1',
+  ui_login_background_animation_enabled: '1',
+  ui_login_background_opacity: '20',
   agent_url: '',
   ssl_certfile: '',
   ssl_keyfile: '',
@@ -305,6 +306,8 @@ export function SettingsPage() {
         audioEnabled: merged.ui_audio_enabled === '1',
         audioVolume: Number(merged.ui_audio_volume || '70'),
         loginAnimationEnabled: merged.ui_login_animation_enabled !== '0',
+        loginBackgroundAnimationEnabled: merged.ui_login_background_animation_enabled !== '0',
+        loginBackgroundOpacity: Number(merged.ui_login_background_opacity || '20'),
       })
     } catch {
       showToast('Error loading settings', 'error')
@@ -344,6 +347,8 @@ export function SettingsPage() {
         audioEnabled: form.ui_audio_enabled === '1',
         audioVolume: Number(form.ui_audio_volume || '70'),
         loginAnimationEnabled: form.ui_login_animation_enabled !== '0',
+        loginBackgroundAnimationEnabled: form.ui_login_background_animation_enabled !== '0',
+        loginBackgroundOpacity: Number(form.ui_login_background_opacity || '20'),
       })
       if (result.restart_pending) {
         setSavedForm({ ...form })
@@ -704,6 +709,61 @@ export function SettingsPage() {
           }}>
             Plays a short sci-fi transition overlay after successful sign-in before the dashboard opens.
           </div>
+
+          <div style={{ margin: '24px 0', borderTop: `1px solid ${colors.border}` }} />
+
+          <div style={{ ...labelStyle, marginBottom: '12px' }}>Login Background</div>
+
+          <Toggle
+            label="Enable Login Background Animation"
+            name="ui_login_background_animation_enabled"
+            value={form.ui_login_background_animation_enabled}
+            onChange={handleChange}
+          />
+
+          <div style={{
+            marginTop: '10px',
+            fontSize: '11px',
+            color: colors.textMuted,
+            fontFamily: "'Electrolize', monospace",
+            letterSpacing: '0.04em',
+            lineHeight: 1.6,
+            opacity: form.ui_login_background_animation_enabled === '1' ? 1 : 0.55,
+          }}>
+            Shows the animated moving line background on the login screen.
+          </div>
+
+          <div style={{
+            marginTop: '16px',
+            opacity: form.ui_login_background_animation_enabled === '1' ? 1 : 0.45,
+            pointerEvents: form.ui_login_background_animation_enabled === '1' ? 'auto' : 'none',
+            transition: 'opacity 0.2s ease',
+          }}>
+            <label style={labelStyle}>Login Background Opacity</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap' }}>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={form.ui_login_background_opacity}
+                onChange={e => handleChange('ui_login_background_opacity', e.target.value)}
+                style={{ flex: '1 1 260px', accentColor: colors.primary }}
+              />
+              <div style={{
+                minWidth: '58px',
+                padding: '6px 10px',
+                border: `1px solid ${colors.border}`,
+                color: colors.primary,
+                fontFamily: "'Electrolize', monospace",
+                fontSize: '12px',
+                textAlign: 'center',
+                background: `${colors.primary}08`,
+              }}>
+                {form.ui_login_background_opacity}%
+              </div>
+            </div>
+          </div>
         </Card>
 
         </>}
@@ -827,279 +887,12 @@ export function SettingsPage() {
 // ---------------------------------------------------------------------------
 // SSL / HTTPS Section
 // ---------------------------------------------------------------------------
-type DeployAgent = { agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null; online: boolean }
-type DeployStatus = { agents: DeployAgent[]; total: number; total_online: number; completed: number }
-
 const CERT_VALIDITY_OPTIONS = [
   { value: '1', label: '1 Year' },
   { value: '3', label: '3 Years' },
   { value: '5', label: '5 Years' },
   { value: '10', label: '10 Years' },
 ]
-
-function DeployModal({
-  deployStatus,
-  ssl,
-  busy,
-  setBusy,
-  onClose,
-  onRetry,
-  onEnableHttps,
-}: {
-  deployStatus: DeployStatus | null
-  ssl: { enabled: boolean; certfile: string; keyfile: string; info: any } | null
-  busy: boolean
-  setBusy: (b: boolean) => void
-  onClose: () => void
-  onRetry: () => void
-  onEnableHttps: () => void
-}) {
-  const panelRef = useRef<HTMLDivElement>(null)
-  // Deployment is "done" when all online agents finished — offline ones will catch up later
-  const onlineTotal = deployStatus ? (deployStatus.total_online ?? deployStatus.total) : 0
-  const allOnlineDone = deployStatus != null && onlineTotal > 0 && deployStatus.completed >= onlineTotal
-  // Also treat as "done" if polling stopped (timeout or all done) — busy=false signals this
-  const isDone = allOnlineDone || (deployStatus != null && !busy)
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isDone) onClose()
-      if (e.key === 'Tab' && panelRef.current) {
-        const focusable = panelRef.current.querySelectorAll<HTMLElement>('button, [tabindex]:not([tabindex="-1"])')
-        if (focusable.length === 0) return
-        const first = focusable[0]
-        const last = focusable[focusable.length - 1]
-        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
-        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
-      }
-    }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
-  }, [isDone, onClose])
-
-  const hasFailed = deployStatus?.agents.some(a => a.status === 'failed') ?? false
-  const barColor = hasFailed ? colors.danger : isDone ? colors.success : colors.primary
-
-  return createPortal(
-    <div
-      onClick={e => { if (e.target === e.currentTarget && isDone) onClose() }}
-      style={{
-        position: 'fixed', inset: 0, zIndex: 10000,
-        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        background: `${colors.bg}ee`,
-        backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
-      }}
-    >
-      <Animator active>
-        <div
-          ref={panelRef}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="ssl-deploy-title"
-          onClick={e => e.stopPropagation()}
-          style={{
-            position: 'relative',
-            width: 'min(520px, 92vw)',
-            background: glassBg(0.97),
-            backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
-            boxShadow: `0 0 60px ${colors.primary}18, 0 0 120px rgba(0,0,0,0.95), inset 0 0 40px ${colors.primary}05`,
-            animation: 'pp-fadein 0.22s ease both',
-          }}
-        >
-          <FrameCorners
-            strokeWidth={1.5}
-            cornerLength={16}
-            styled={false}
-            positioned
-            style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1, color: colors.primary }}
-          />
-          <div style={{
-            position: 'absolute', top: 0, left: 0, right: 0, height: '1px',
-            background: `linear-gradient(90deg, transparent, ${colors.primary}99, transparent)`,
-            zIndex: 2,
-          }} />
-
-          {/* Header */}
-          <div style={{
-            padding: '16px 22px', borderBottom: `1px solid ${colors.border}`,
-            display: 'flex', alignItems: 'center', gap: '10px',
-            position: 'relative', zIndex: 2,
-          }}>
-            <div style={{ width: '2px', height: '14px', flexShrink: 0, background: colors.primary, boxShadow: `0 0 8px ${colors.primary}` }} />
-            <span id="ssl-deploy-title" style={{
-              fontFamily: "'Orbitron', sans-serif", fontSize: '11px',
-              letterSpacing: '0.22em', color: colors.primary,
-              textShadow: glowText(colors.primary, 4), textTransform: 'uppercase',
-            }}>
-              SSL Certificate Deployment
-            </span>
-          </div>
-
-          {/* Body */}
-          <div style={{ padding: '22px 22px 18px', position: 'relative', zIndex: 2 }}>
-            {/* Progress bar */}
-            {deployStatus && deployStatus.total > 0 && (
-              <div style={{ marginBottom: '16px' }}>
-                <div style={{ height: '4px', background: `${colors.border}44`, borderRadius: '2px', overflow: 'hidden' }}>
-                  <div style={{
-                    height: '100%', borderRadius: '2px', transition: 'width 0.5s ease',
-                    width: `${(deployStatus.completed / (onlineTotal || deployStatus.total)) * 100}%`,
-                    background: barColor,
-                    boxShadow: glow(barColor, 4),
-                  }} />
-                </div>
-                <div style={{
-                  fontSize: '10px', color: colors.textMuted, marginTop: '6px',
-                  fontFamily: "'Electrolize', monospace", textAlign: 'right',
-                }}>
-                  {deployStatus.completed} / {onlineTotal} online{deployStatus.total > onlineTotal ? ` (${deployStatus.total - onlineTotal} offline)` : ''}
-                </div>
-              </div>
-            )}
-
-            {/* Agent list */}
-            <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '16px' }}>
-              {!deployStatus ? (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: '10px',
-                  fontSize: '11px', color: colors.textMuted, fontFamily: "'Electrolize', monospace",
-                }}>
-                  <span style={{
-                    width: '14px', height: '14px', borderRadius: '50%',
-                    border: `2px solid ${colors.primary}22`, borderTopColor: colors.primary,
-                    animation: 'pp-spin 0.8s linear infinite',
-                  }} />
-                  Updating agents and deploying certificate...
-                </div>
-              ) : deployStatus.agents.map(a => {
-                const phase = a.phase || a.status
-                const isOffline = !a.online
-                const isPending = a.status === 'pending' || phase === 'pending'
-                const label = a.status === 'done' ? 'CERT INSTALLED'
-                  : a.status === 'failed' ? 'FAILED'
-                  : phase === 'updating' ? 'UPDATING AGENT...'
-                  : phase === 'waiting' ? 'AGENT UPDATED'
-                  : phase === 'deploying' ? 'INSTALLING CERT...'
-                  : isOffline && isPending ? 'OFFLINE — WAITING'
-                  : 'PENDING'
-                const dotColor = a.status === 'done' ? colors.success
-                  : a.status === 'failed' ? colors.danger
-                  : (phase === 'updating' || phase === 'deploying') ? colors.warn
-                  : isOffline ? colors.textMuted
-                  : colors.textMuted
-                const isActive = phase === 'updating' || phase === 'deploying'
-                return (
-                  <div key={a.agent_id} style={{
-                    display: 'flex', alignItems: 'center', gap: '10px',
-                    padding: '6px 0', borderBottom: `1px solid ${colors.border}22`,
-                    fontSize: '11px', fontFamily: "'Electrolize', monospace",
-                    opacity: isOffline && isPending ? 0.5 : 1,
-                  }}>
-                    <span style={{
-                      width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0,
-                      background: dotColor,
-                      boxShadow: isActive ? `0 0 6px ${colors.warn}` : a.status === 'done' ? `0 0 4px ${colors.success}` : 'none',
-                      animation: isActive ? 'pp-pulse 1.5s ease-in-out infinite' : 'none',
-                    }} />
-                    <span style={{ flex: 1, color: isOffline && isPending ? colors.textMuted : colors.text }}>
-                      {a.hostname}
-                      {isOffline && isPending && (
-                        <span style={{ fontSize: '8px', marginLeft: '6px', color: colors.textMuted }}>●  OFFLINE</span>
-                      )}
-                    </span>
-                    <span style={{ fontSize: '9px', letterSpacing: '0.1em', color: dotColor }}>
-                      {label}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Failed output details */}
-            {hasFailed && (
-              <div style={{
-                fontSize: '10px', color: colors.danger, fontFamily: "'Electrolize', monospace",
-                padding: '8px', background: `${colors.danger}0a`, border: `1px solid ${colors.danger}22`,
-                marginBottom: '12px', maxHeight: '80px', overflowY: 'auto',
-              }}>
-                {deployStatus!.agents.filter(a => a.status === 'failed').map(a => (
-                  <div key={a.agent_id}>{a.hostname}: {a.output}</div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Footer */}
-          <div style={{
-            padding: '14px 22px 18px',
-            display: 'flex', justifyContent: 'flex-end', alignItems: 'center',
-            gap: '10px', flexWrap: 'wrap',
-            position: 'relative', zIndex: 2,
-            borderTop: `1px solid ${colors.border}`,
-          }}>
-            {isDone ? (
-              <>
-                {/* Status summary */}
-                {deployStatus && (
-                  <span style={{
-                    fontSize: '10px', fontFamily: "'Electrolize', monospace",
-                    color: hasFailed ? colors.warn : colors.success,
-                    letterSpacing: '0.06em', marginRight: 'auto',
-                  }}>
-                    {deployStatus.agents.filter(a => a.status === 'done').length} installed
-                    {hasFailed ? ` · ${deployStatus.agents.filter(a => a.status === 'failed').length} failed` : ''}
-                  </span>
-                )}
-                {hasFailed && (
-                  <Button variant="ghost" onClick={onRetry}>Retry Failed</Button>
-                )}
-                {!ssl?.enabled && ssl?.certfile && ssl?.keyfile && (
-                  <Button disabled={busy} onClick={onEnableHttps}>Enable HTTPS</Button>
-                )}
-                <Button variant="ghost" onClick={onClose}>Close</Button>
-              </>
-            ) : (
-              <>
-                <span style={{
-                  fontSize: '10px', fontFamily: "'Orbitron', sans-serif",
-                  letterSpacing: '0.08em', color: colors.textMuted, marginRight: 'auto',
-                }}>
-                  Waiting for agents...
-                </span>
-                <Button variant="ghost" onClick={onClose} style={{ color: colors.danger }}>
-                  Cancel
-                </Button>
-              </>
-            )}
-          </div>
-        </div>
-      </Animator>
-
-      {/* Prominent warning outside modal panel */}
-      {!isDone && (
-        <div style={{
-          marginTop: '24px',
-          padding: '10px 24px',
-          background: `${colors.warn}0a`,
-          border: `1px solid ${colors.warn}33`,
-          animation: 'pp-fadein 0.4s ease both',
-          textAlign: 'center',
-        }}>
-          <span style={{
-            fontSize: '11px', fontFamily: "'Orbitron', sans-serif",
-            letterSpacing: '0.18em', textTransform: 'uppercase',
-            color: colors.warn,
-            textShadow: glowText(colors.warn, 4),
-            fontWeight: 600,
-          }}>
-            ⚠ Do not leave this page while deployment is in progress
-          </span>
-        </div>
-      )}
-    </div>,
-    document.body,
-  )
-}
 
 function SslSection() {
   const [ssl, setSsl] = useState<{ enabled: boolean; certfile: string; keyfile: string; info: any } | null>(null)
@@ -1350,11 +1143,11 @@ function SslSection() {
       )}
 
       {deployModal && (
-        <DeployModal
+        <SslDeployModal
           deployStatus={deployStatus}
-          ssl={ssl}
           busy={busy}
-          setBusy={setBusy}
+          sslEnabled={ssl?.enabled}
+          sslAvailable={!!(ssl?.certfile && ssl?.keyfile)}
           onClose={closeDeployModal}
           onRetry={() => { const batch = batchRef.current; closeDeployModal(); handleDeploySsl(batch) }}
           onEnableHttps={handleEnableFromModal}

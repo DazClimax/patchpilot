@@ -54,6 +54,8 @@ def init_db():
                 kernel      TEXT,
                 arch        TEXT,
                 package_manager TEXT,
+                agent_type  TEXT DEFAULT 'linux',
+                capabilities TEXT DEFAULT '',
                 reboot_required INTEGER DEFAULT 0,
                 pending_count   INTEGER DEFAULT 0,
                 last_seen   TEXT,
@@ -161,6 +163,16 @@ def init_db():
         except sqlite3.OperationalError:
             pass  # column already present — nothing to do
 
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN agent_type TEXT DEFAULT 'linux'")
+        except sqlite3.OperationalError:
+            pass  # column already present — nothing to do
+
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN capabilities TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # column already present — nothing to do
+
         # Insert default settings rows (skip if key already exists)
         _defaults = [
             ("telegram_token",   ""),
@@ -182,6 +194,8 @@ def init_db():
             ("ui_audio_enabled",       "1"),
             ("ui_audio_volume",        "70"),
             ("ui_login_animation_enabled", "1"),
+            ("ui_login_background_animation_enabled", "1"),
+            ("ui_login_background_opacity", "20"),
             ("ssl_certfile",           ""),
             ("ssl_keyfile",            ""),
         ]

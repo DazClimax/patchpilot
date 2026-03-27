@@ -51,6 +51,7 @@ export function Button({
     alignItems: 'center',
     justifyContent: 'center',
     gap: '6px',
+    minHeight: size === 'sm' ? '36px' : '42px',
     padding,
     fontSize,
     fontFamily: "'Electrolize', monospace",
