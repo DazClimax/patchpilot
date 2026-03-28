@@ -7,6 +7,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-03-29
+
+### Changed
+- Version bumped to `1.6.1`
+- Server bootstrap docs now use versioned installer URLs consistently instead of `main`
+- README and install docs now explain more clearly that RPM/Fedora support currently applies to managed clients and agents, while the PatchPilot server installer still targets Debian/Ubuntu-style hosts
+
+### Fixed
+- `setup.sh` now clones the configured release ref instead of always pulling the moving `main` branch
+- `setup.sh` and `install-server.sh` now fail early when run without root or on unsupported non-`apt` systems
+- Both server installers now write structured logs and print clearer step-by-step status output for easier debugging
+
 ## [1.6.0] - 2026-03-28
 
 ### Added

@@ -33,19 +33,19 @@ If you want a lightweight, self-hosted alternative to doing everything manually 
 ### 1. Install the server
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh | sudo bash
 ```
 
 Custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
 ```
 
 Inspect before running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```

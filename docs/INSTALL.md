@@ -42,13 +42,13 @@ PatchPilot server installation currently targets Debian/Ubuntu-style hosts and u
 Versioned one-liner:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh | sudo bash
 ```
 
 Inspect before running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```
@@ -56,7 +56,7 @@ sudo bash setup.sh
 With custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
 ```
 
 The bootstrap script will:

@@ -1,21 +1,58 @@
 #!/bin/bash
 # PatchPilot — One-liner server setup
-# Usage: curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh | sudo bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh | sudo bash
 #
 # Or with custom ports:
-#   curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
+#   curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
 
 set -e
 
 REPO="https://github.com/DazClimax/patchpilot.git"
 INSTALL_TMP="/tmp/patchpilot-install"
-PATCHPILOT_REF="${PATCHPILOT_REF:-v1.6.0}"
+PATCHPILOT_REF="${PATCHPILOT_REF:-v1.6.1}"
+LOG_FILE="/var/log/patchpilot-setup.log"
+
+require_root() {
+  if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+    echo "[patchpilot] Please run this installer as root." >&2
+    echo "[patchpilot] Example: curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/${PATCHPILOT_REF}/setup.sh | sudo bash" >&2
+    exit 1
+  fi
+}
+
+require_apt() {
+  if ! command -v apt-get >/dev/null 2>&1; then
+    echo "[patchpilot] This server bootstrap currently supports Debian/Ubuntu-style hosts with apt." >&2
+    echo "[patchpilot] RPM support currently applies to managed clients/agents, not to the PatchPilot server installer." >&2
+    exit 1
+  fi
+}
+
+log_setup() {
+  mkdir -p "$(dirname "$LOG_FILE")"
+  touch "$LOG_FILE"
+  chmod 600 "$LOG_FILE"
+  exec > >(tee -a "$LOG_FILE") 2>&1
+}
+
+step() {
+  echo ""
+  echo "[$1/5] $2"
+}
+
+require_root
+require_apt
+log_setup
 
 echo "=== PatchPilot Setup ==="
 echo ""
+echo "Log file   : $LOG_FILE"
+echo "Release    : $PATCHPILOT_REF"
+echo "Host type  : Debian/Ubuntu-style server bootstrap"
+echo ""
 
 # ── 1. Install system dependencies ──────────────────────────────────────────
-echo "[1/5] Installing dependencies..."
+step 1 "Installing dependencies"
 apt-get update -qq
 apt-get install -y git curl python3 python3-pip python3-venv openssl ca-certificates gnupg
 
@@ -32,24 +69,24 @@ else
 fi
 
 # ── 2. Clone repository ────────────────────────────────────────────────────
-echo "[2/5] Cloning PatchPilot ${PATCHPILOT_REF}..."
+step 2 "Cloning PatchPilot ${PATCHPILOT_REF}"
 rm -rf "$INSTALL_TMP"
 git clone --depth 1 --branch "$PATCHPILOT_REF" "$REPO" "$INSTALL_TMP"
 cd "$INSTALL_TMP"
 
 # ── 3. Build frontend ──────────────────────────────────────────────────────
-echo "[3/5] Building frontend..."
+step 3 "Building frontend"
 cd frontend
 npm install --no-audit --no-fund --loglevel=error
 npm run build
 cd ..
 
 # ── 4. Run installer ───────────────────────────────────────────────────────
-echo "[4/5] Running server installer..."
+step 4 "Running server installer"
 bash install-server.sh
 
 # ── 5. Cleanup ──────────────────────────────────────────────────────────────
-echo "[5/5] Cleaning up..."
+step 5 "Cleaning up"
 rm -rf "$INSTALL_TMP"
 
 IP="$(hostname -I | awk '{print $1}')"
@@ -65,4 +102,5 @@ echo "  Logs    : journalctl -u patchpilot -f"
 echo ""
 echo "  Default login: admin / (check logs)"
 echo "  journalctl -u patchpilot | grep password"
+echo "  Installer log: $LOG_FILE"
 echo ""
