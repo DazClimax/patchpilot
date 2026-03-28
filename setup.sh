@@ -1,14 +1,15 @@
 #!/bin/bash
 # PatchPilot — One-liner server setup
-# Usage: curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/setup.sh | sudo bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh | sudo bash
 #
 # Or with custom ports:
-#   curl -fsSL ... | sudo PORT=443 AGENT_PORT=8050 bash
+#   curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
 
 set -e
 
 REPO="https://github.com/DazClimax/patchpilot.git"
 INSTALL_TMP="/tmp/patchpilot-install"
+PATCHPILOT_REF="${PATCHPILOT_REF:-v1.6.0}"
 
 echo "=== PatchPilot Setup ==="
 echo ""
@@ -31,9 +32,9 @@ else
 fi
 
 # ── 2. Clone repository ────────────────────────────────────────────────────
-echo "[2/5] Cloning PatchPilot..."
+echo "[2/5] Cloning PatchPilot ${PATCHPILOT_REF}..."
 rm -rf "$INSTALL_TMP"
-git clone --depth 1 "$REPO" "$INSTALL_TMP"
+git clone --depth 1 --branch "$PATCHPILOT_REF" "$REPO" "$INSTALL_TMP"
 cd "$INSTALL_TMP"
 
 # ── 3. Build frontend ──────────────────────────────────────────────────────

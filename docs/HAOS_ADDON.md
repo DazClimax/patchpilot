@@ -2,6 +2,8 @@
 
 PatchPilot supports Home Assistant OS through a dedicated add-on.
 
+This is separate from the regular Linux server installer. The current RPM/Fedora work applies to managed client systems and agents, while Home Assistant OS is handled through this dedicated add-on path.
+
 ## What It Supports
 
 - register Home Assistant OS as a `haos` agent in PatchPilot

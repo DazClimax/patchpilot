@@ -21,6 +21,8 @@
 - Network access from managed Linux VMs to the server
 - `sudo` privileges
 
+PatchPilot server installation currently targets Debian/Ubuntu-style hosts and uses `apt` during bootstrap. Fedora/RPM support currently applies to managed client systems and agents, not to the PatchPilot server installer itself.
+
 **Optional** (for frontend build on dev machine):
 - Node.js 18+ and npm
 
@@ -34,6 +36,36 @@
 ---
 
 ## Server Installation
+
+### Quick Install
+
+Versioned one-liner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh | sudo bash
+```
+
+Inspect before running:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh -o setup.sh
+less setup.sh
+sudo bash setup.sh
+```
+
+With custom ports:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
+```
+
+The bootstrap script will:
+
+1. Install required system packages with `apt`
+2. Install Node.js 20 if it is missing or too old
+3. Clone the PatchPilot release to a temporary directory
+4. Build the frontend
+5. Run `install-server.sh`
 
 ### Step 1: Get the Code
 
@@ -237,6 +269,12 @@ bash deploy.sh
 ### Agents
 
 Use the **Update All Agents** button on the dashboard, or trigger `update_agent` jobs via schedules. Agents download the latest code, verify SHA-256, and restart automatically.
+
+### Notes On Platform Scope
+
+- PatchPilot server installation is currently documented and supported on Debian/Ubuntu-style hosts
+- Managed clients can already be Debian/Ubuntu or Fedora/RPM systems, depending on the current agent capabilities
+- Home Assistant OS is handled through the dedicated add-on, not through the regular Linux agent path
 
 ---
 

@@ -6,11 +6,13 @@ Self-hosted patch management for Linux VMs, built for homelabs and small Linux f
 
 PatchPilot uses a pull-based agent model: every VM polls the server for work, so you do not need SSH fan-out, inbound access to guests, or extra Python dependencies on the agent side.
 
+Today, PatchPilot is strongest on Debian/Ubuntu server hosts and Linux clients. RPM support currently applies to managed client systems and agents such as Fedora, while broader server-side RPM installation support is planned for a later release.
+
 ## Why PatchPilot
 
 - **No SSH orchestration required**: agents initiate every connection
 - **Fast to self-host**: one-liner installer for the server, one-liner installer for agents
-- **Best on apt, now expanding to RPM**: Debian and Ubuntu are mature, Fedora support is now available for patching, reboot tracking, and agent self-update
+- **Best on apt, now expanding to RPM**: Debian and Ubuntu are the mature path for the PatchPilot server, while Fedora/RPM support is already available for managed clients, patching, reboot tracking, and agent self-update
 - **Small operational footprint**: SQLite backend, stdlib-only Python agent, systemd deployment
 - **Actually pleasant to use**: responsive Arwes sci-fi UI for desktop and mobile
 
@@ -24,21 +26,39 @@ PatchPilot is aimed at:
 
 It is not trying to replace enterprise endpoint management platforms. It is intentionally lightweight and optimized for small-to-medium Linux estates you control yourself.
 
+If you want a lightweight, self-hosted alternative to doing everything manually or reaching for a much larger management stack, this is the niche PatchPilot is built for.
+
 ## Quick Start
 
 ### 1. Install the server
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh | sudo bash
 ```
 
 Custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
 ```
 
-This installs system dependencies, builds the frontend, generates a 3-year self-signed certificate, and starts PatchPilot with separate UI and agent ports by default.
+Inspect before running:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.0/setup.sh -o setup.sh
+less setup.sh
+sudo bash setup.sh
+```
+
+The server installer currently targets Debian/Ubuntu hosts. It will:
+
+- install system dependencies with `apt`
+- install Node.js 20 when needed for the frontend build
+- build the frontend locally
+- install PatchPilot under `/opt/patchpilot`
+- create a Python venv under `/opt/patchpilot-venv`
+- generate a 3-year self-signed certificate
+- start PatchPilot with separate UI and agent ports by default
 
 ### 2. Sign in to the web UI
 
@@ -74,7 +94,7 @@ The Deploy page installer embeds the current registration key and, for HTTPS dep
 ## What You Get
 
 - **Dashboard**: online state, pending updates, reboot indicators, last jobs, and HTTP/TLS visibility
-- **Patch jobs**: trigger package upgrades per VM or across the fleet (`apt` and first RPM support via `dnf`)
+- **Patch jobs**: trigger package upgrades per VM or across the fleet (`apt` and current RPM client support via `dnf`)
 - **Schedules**: cron-based automation for patching and reboots
 - **Agent self-update**: distribute new agent code with SHA-256 verification
 - **Notifications**: Telegram and SMTP with per-event controls
