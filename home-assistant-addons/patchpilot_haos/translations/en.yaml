@@ -1,7 +1,7 @@
 configuration:
   patchpilot_server:
     name: PatchPilot Server
-    description: URL of the PatchPilot agent endpoint, for example https://192.168.111.20:8050
+    description: URL of the PatchPilot agent endpoint, for example https://X.X.X.X:8050
   register_key:
     name: Register Key
     description: Temporary registration key generated from the PatchPilot Deploy page
