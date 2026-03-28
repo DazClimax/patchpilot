@@ -1,6 +1,6 @@
 # PatchPilot HAOS Agent
 
-First Home Assistant OS integration for PatchPilot.
+Dedicated Home Assistant OS integration for PatchPilot.
 
 This add-on:
 
@@ -20,3 +20,4 @@ This add-on:
 ## Status
 
 Home Assistant OS is the supported scope for this add-on. Deprecated installation methods are intentionally not covered here.
+Update the PatchPilot HAOS add-on itself through the Home Assistant Add-on Store, not through the `HA Add-ons` action in PatchPilot.

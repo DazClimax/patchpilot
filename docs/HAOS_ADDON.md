@@ -1,11 +1,11 @@
 # Home Assistant OS Add-on
 
-The first PatchPilot path for Home Assistant OS runs as a dedicated add-on.
+PatchPilot supports Home Assistant OS through a dedicated add-on.
 
-## What This First Version Can Do
+## What It Supports
 
 - register Home Assistant OS as a `haos` agent in PatchPilot
-- show an available Core update as a pending update
+- show available Core, Supervisor, OS, and Add-on updates as pending updates
 - run the following jobs from PatchPilot:
   - `HA Backup`
   - `HA Core Update`
@@ -34,6 +34,7 @@ The add-on lives in this repository under:
    - optional `advertise_ip`
    - optional `ca_pem`
 5. Start the add-on.
+6. Update the PatchPilot HAOS add-on itself through the Home Assistant Add-on Store, not through `HA Add-ons` inside PatchPilot.
 
 ## Notes
 

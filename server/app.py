@@ -658,6 +658,20 @@ def _schedule_restart(delay: float = 1.5) -> None:
 @app.on_event("startup")
 def startup():
     init_db()
+    with get_db_ctx() as conn:
+        try:
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='jobs'"
+            ).fetchone()
+            sql = (row["sql"] or "") if row else ""
+            if "created     TEXT DEFAULT (datetime('now'))" in sql or "created TEXT DEFAULT (datetime('now'))" in sql:
+                conn.execute(
+                    "UPDATE jobs SET created=datetime(created,'localtime') "
+                    "WHERE created IS NOT NULL AND started IS NULL AND finished IS NULL"
+                )
+                print("[startup] Adjusted pending job timestamps from UTC schema default to localtime")
+        except Exception as exc:
+            print(f"[startup] Warning: jobs timestamp schema check failed: {exc}")
     # Grace period: bump last_seen for recently-active agents so they don't
     # appear offline right after a server restart.  Only touches agents that
     # were seen within the last 5 minutes before the restart.
@@ -668,14 +682,22 @@ def startup():
             "AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 300"
         )
         # Mark stale running jobs as failed (stuck for >15 min)
-        stale = conn.execute(
+        stale_running = conn.execute(
             "UPDATE jobs SET status='failed', output=COALESCE(output,'') || '\n[server] Marked as failed: stuck in running state', "
             "finished=datetime('now','localtime') "
             "WHERE status='running' AND started IS NOT NULL "
             "AND (julianday('now','localtime') - julianday(started)) * 86400 > 900"
         ).rowcount
-        if stale:
-            print(f"[startup] Cleaned up {stale} stale running job(s)")
+        stale_pending = conn.execute(
+            "UPDATE jobs SET status='failed', output=COALESCE(output,'') || '\n[server] Marked as failed: expired in pending state', "
+            "finished=datetime('now','localtime') "
+            "WHERE status='pending' AND created IS NOT NULL "
+            "AND (julianday('now','localtime') - julianday(created)) * 86400 > 1800"
+        ).rowcount
+        if stale_running:
+            print(f"[startup] Cleaned up {stale_running} stale running job(s)")
+        if stale_pending:
+            print(f"[startup] Cleaned up {stale_pending} stale pending job(s)")
     scheduler.start()
     _load_schedules()
     register_system_jobs()
@@ -995,7 +1017,7 @@ async def job_result(
                     if params.get("batch"):
                         chain_params["batch"] = params["batch"]
                     conn.execute(
-                        "INSERT INTO jobs (agent_id, type, params) VALUES (?, ?, ?)",
+                        "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, ?, ?, datetime('now','localtime'))",
                         (agent_id, chain_type, json.dumps(chain_params)),
                     )
             except (json.JSONDecodeError, AttributeError):
@@ -1216,7 +1238,7 @@ async def create_job(agent_id: str, request: Request):
             if required and required not in capabilities:
                 raise HTTPException(status_code=422, detail=f"Agent does not support {job_type}")
         conn.execute(
-            "INSERT INTO jobs (agent_id, type, params) VALUES (?, ?, ?)",
+            "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, ?, ?, datetime('now','localtime'))",
             (agent_id, job_type, json.dumps(params)),
         )
     # PERFORMANCE: Invalidate caches so the new job appears immediately in the UI.
@@ -1235,7 +1257,7 @@ def api_ack_config_review(agent_id: str):
             (agent_id,),
         )
         conn.execute(
-            "INSERT INTO jobs (agent_id, type, params) VALUES (?, ?, ?)",
+            "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, ?, ?, datetime('now','localtime'))",
             (agent_id, "ack_config_review", "{}"),
         )
     _cache_invalidate("dashboard", f"agent:{agent_id}")
@@ -1978,7 +2000,7 @@ async def api_deploy_ssl_to_agents(request: Request):
             aid = a["agent_id"] if "agent_id" in a.keys() else a["id"]
             params = json.dumps({"chain": "deploy_ssl", "batch": batch_id})
             conn.execute(
-                'INSERT INTO jobs (agent_id, type, params) VALUES (?, \'update_agent\', ?)',
+                'INSERT INTO jobs (agent_id, type, params, created) VALUES (?, \'update_agent\', ?, datetime(\'now\',\'localtime\'))',
                 (aid, params),
             )
             count += 1
@@ -2025,7 +2047,7 @@ async def api_update_agents_batch(request: Request):
             aid = a["agent_id"] if "agent_id" in a.keys() else a["id"]
             params = json.dumps({"batch": batch_id})
             conn.execute(
-                "INSERT INTO jobs (agent_id, type, params) VALUES (?, 'update_agent', ?)",
+                "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, 'update_agent', ?, datetime('now','localtime'))",
                 (aid, params),
             )
             count += 1

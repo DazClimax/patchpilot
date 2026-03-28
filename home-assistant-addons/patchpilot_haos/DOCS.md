@@ -26,3 +26,7 @@ Supports:
 - `HA Add-ons Update`
 
 Shows available Core, Supervisor, OS, and Add-on updates as pending updates in PatchPilot.
+
+## Updating The PatchPilot Add-on
+
+PatchPilot can show when the HAOS add-on itself has an update available, but the add-on must be updated from the Home Assistant Add-on Store. It is intentionally skipped by the `HA Add-ons` batch action inside PatchPilot.

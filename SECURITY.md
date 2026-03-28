@@ -1,6 +1,6 @@
 # PatchPilot — Security Audit Report
 
-**Last updated:** 2026-03-27
+**Last updated:** 2026-03-28
 **Scope:** All backend, frontend, agent, and deployment files
 **Context:** Private home network (Raspberry Pi), no external exposure planned
 **Auditors:** Automated security review plus manual follow-up checks
@@ -18,9 +18,9 @@
 
 ---
 
-## Latest Review (2026-03-27)
+## Latest Review (2026-03-28)
 
-This follow-up review focused on the current live hardening state after the recent deploy/bootstrap and agent-auth changes.
+This follow-up review focused on the current live hardening state after the recent deploy/bootstrap, agent-auth, HA OS add-on, and stale-job cleanup changes.
 
 ### Verified in this pass
 
@@ -30,6 +30,8 @@ This follow-up review focused on the current live hardening state after the rece
 - Agent token hashes are no longer exposed back to the dashboard API
 - RPM agent support now reports its detected package manager for clearer operations visibility
 - Registration keys now use 128 bits of entropy instead of the earlier 48-bit format
+- Stale `pending` jobs now expire server-side instead of persisting indefinitely
+- Home Assistant OS support remains isolated to a dedicated add-on path rather than reusing unsupported legacy install modes
 
 ### Result
 

@@ -96,7 +96,7 @@ def _run_scheduled_job(schedule_id: int, action: str, target: str):
 
             for agent_id in agent_ids:
                 conn.execute(
-                    "INSERT INTO jobs (agent_id, type, params) VALUES (?, ?, ?)",
+                    "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, ?, ?, datetime('now','localtime'))",
                     (agent_id, action, "{}"),
                 )
             conn.execute(
@@ -109,19 +109,28 @@ def _run_scheduled_job(schedule_id: int, action: str, target: str):
 
 
 def _cleanup_stale_jobs():
-    """Mark jobs stuck in 'running' for >15 min as failed."""
+    """Mark stale pending/running jobs as failed."""
     try:
         from db import db as get_db_ctx
         with get_db_ctx() as conn:
-            n = conn.execute(
+            running = conn.execute(
                 "UPDATE jobs SET status='failed', "
                 "output=COALESCE(output,'') || '\n[server] Marked as failed: stuck in running state', "
                 "finished=datetime('now','localtime') "
                 "WHERE status='running' AND started IS NOT NULL "
                 "AND (julianday('now','localtime') - julianday(started)) * 86400 > 900"
             ).rowcount
-            if n:
-                log.info("Cleaned up %d stale running job(s)", n)
+            pending = conn.execute(
+                "UPDATE jobs SET status='failed', "
+                "output=COALESCE(output,'') || '\n[server] Marked as failed: expired in pending state', "
+                "finished=datetime('now','localtime') "
+                "WHERE status='pending' AND created IS NOT NULL "
+                "AND (julianday('now','localtime') - julianday(created)) * 86400 > 1800"
+            ).rowcount
+            if running:
+                log.info("Cleaned up %d stale running job(s)", running)
+            if pending:
+                log.info("Cleaned up %d stale pending job(s)", pending)
     except Exception as exc:
         log.error("Stale job cleanup failed: %s", exc)
 

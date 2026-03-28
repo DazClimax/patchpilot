@@ -154,6 +154,7 @@ export function Layout({ children }: { children: ReactNode }) {
             }
             .pp-sidebar .pp-logo-area,
             .pp-sidebar .pp-nav-section-label,
+            .pp-sidebar .pp-sidebar-art,
             .pp-sidebar .pp-system-status,
             .pp-sidebar .pp-signout,
             .pp-sidebar .pp-footer,
@@ -376,6 +377,24 @@ export function Layout({ children }: { children: ReactNode }) {
               </button>
             </nav>
 
+            <div className="pp-sidebar-art" style={{
+              margin: '0 12px 12px',
+              border: `1px solid ${colors.border}`,
+              background: `${colors.bgCard}88`,
+              overflow: 'hidden',
+              boxShadow: `0 0 18px ${colors.primary}18`,
+            }}>
+              <img
+                src="/about-hero.png"
+                alt="PatchPilot artwork"
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  height: 'auto',
+                }}
+              />
+            </div>
+
             {/* System status indicator */}
             <div className="pp-system-status" style={{
               margin: '0 12px 12px',
@@ -451,7 +470,7 @@ export function Layout({ children }: { children: ReactNode }) {
               letterSpacing: '0.1em',
               fontFamily: "'Electrolize', monospace",
             }}>
-              v1.5.0
+              v1.6.0
             </div>
 
             {/* Bottom edge glow line */}

@@ -7,6 +7,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-03-28
+
+### Added
+- Home Assistant OS support as a dedicated add-on, including `HA Backup`, `HA Core`, `HA Supervisor`, `HA OS`, and add-on update workflows
+- Home Assistant add-on onboarding on the Deploy page with repository URL, generated config, decoded CA PEM, and LAN IP override support
+- Home Assistant add-on changelog, branding assets, and sidebar/dashboard visual polish around the latest artwork
+
+### Changed
+- Version bumped to `1.6.0`
+- About page, README, favicon, Telegram avatar, and HA add-on branding now use the current PatchPilot artwork
+- Dashboard/VM detail UI now treats Home Assistant OS as its own management surface rather than a generic Linux VM
+- Home Assistant docs now describe the add-on as the supported path instead of an early preview
+
+### Fixed
+- Pending jobs now expire after 30 minutes instead of lingering forever; running jobs still time out after 15 minutes
+- Job timestamps are written explicitly in local time even on older SQLite schemas that still default `created` to UTC
+- HA add-on update visibility no longer disappears; PatchPilot’s own HA add-on stays visible as pending but is excluded from unsafe self-update flows
+- HAOS uptime reporting is more robust across different `boot_timestamp` formats
+- HAOS IP detection now handles primary interfaces, nested Supervisor network fields, address lists, and filters Docker/bridge-style virtual interfaces
+
+### Security
+- Queue cleanup is stricter, reducing the risk of stale pending jobs being mistaken for live operations
+
 ## [1.5.0] - 2026-03-27
 
 ### Added
