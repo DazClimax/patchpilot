@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.14
+
+- Improved the HAOS add-on documentation with a step-by-step install guide.
+- Added ready-to-copy example YAML for both the normal add-on config and the optional webhook automation.
+
 ## 0.2.13
 
 - Test release to verify the optional Home Assistant webhook-based PatchPilot add-on update flow.
