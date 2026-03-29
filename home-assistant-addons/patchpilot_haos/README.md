@@ -76,6 +76,13 @@ automation:
       - service: update.install
         target:
           entity_id: update.patchpilot_haos_agent_update
+    mode: single
 ```
 
 The update entity name can vary slightly. If needed, search Home Assistant entities for `patchpilot` and replace `update.patchpilot_haos_agent_update` with the entity shown on your system.
+
+Add this to the PatchPilot HAOS add-on configuration as well:
+
+```yaml
+agent_update_webhook_id: "patchpilot-ha-agent-update"
+```
