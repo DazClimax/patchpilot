@@ -38,31 +38,68 @@ Prebuilt image on GitHub Container Registry:
 docker pull ghcr.io/dazclimax/patchpilot:v1.6.2
 ```
 
-With Compose:
-
-```bash
-docker compose up -d --build
-```
-
-Or pin the published image path directly in your compose file:
+Example `docker-compose.yml` with default settings:
 
 ```yaml
 services:
   patchpilot:
     image: ghcr.io/dazclimax/patchpilot:v1.6.2
+    container_name: patchpilot
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "8443:8443"
+      - "8050:8050"
+    environment:
+      PORT: "8443"
+      AGENT_PORT: "8050"
+      AGENT_SSL: "1"
+      # Optional:
+      # PATCHPILOT_ADMIN_PASSWORD: "change-me"
+      # PATCHPILOT_ADMIN_KEY: "set-a-long-random-hex-key"
+      # PATCHPILOT_ALLOWED_ORIGINS: "http://localhost:5173,http://localhost:8000"
+    volumes:
+      - patchpilot_data:/data
+
+volumes:
+  patchpilot_data:
+```
+
+Start it with:
+
+```bash
+docker compose up -d
+```
+
+If you want to build locally from the cloned repository instead of using GHCR:
+
+```yaml
+services:
+  patchpilot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: patchpilot:1.6.2
+```
+
+Then run:
+
+```bash
+docker compose up -d --build
 ```
 
 This starts PatchPilot with persistent data under the `patchpilot_data` volume. The container keeps the SQLite database, generated TLS material, and restartable runtime config under `/data`.
 The container entrypoint starts as root only long enough to prepare the mounted data directory and then drops privileges to the dedicated `patchpilot` user before launching the app processes.
 
-To set a fixed admin password for the first startup, add this to `docker-compose.yml` before you launch the container:
+To set a fixed admin password for the first startup, uncomment this in `docker-compose.yml` before you launch the container:
 
 ```yaml
 environment:
   PATCHPILOT_ADMIN_PASSWORD: "change-me"
 ```
 
-Optional hardening for container installs:
+Optional additional hardening:
 
 ```yaml
 environment:
