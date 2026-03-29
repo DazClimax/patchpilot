@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.11
+
+- Bumped the PatchPilot agent version reported by the Home Assistant OS add-on to `1.1`.
+
 ## 0.2.10
 
 - Added `agent_version` reporting for the Home Assistant OS agent so it appears in the new PatchPilot agent-version overview.
