@@ -77,6 +77,7 @@ CONFIG_FILE = CONFIG_DIR / "agent.conf"
 STATE_FILE = CONFIG_DIR / "state.json"
 
 DEFAULT_INTERVAL = 60
+AGENT_VERSION = "1.0"
 
 
 def load_config():
@@ -464,6 +465,7 @@ def register(server: str, agent_id: str, token: str) -> tuple:
             "kernel": get_kernel(),
             "arch": get_arch(),
             "package_manager": get_package_manager(),
+            "agent_version": AGENT_VERSION,
         },
         headers=hdrs,
     )
@@ -486,6 +488,7 @@ def send_heartbeat(server: str, agent_id: str, token: str, packages: list) -> di
             "kernel": get_kernel(),
             "arch": get_arch(),
             "package_manager": get_package_manager(),
+            "agent_version": AGENT_VERSION,
             "reboot_required": reboot_required(),
             "uptime_seconds": get_uptime_seconds(),
             "config_review_required": config_review_required,

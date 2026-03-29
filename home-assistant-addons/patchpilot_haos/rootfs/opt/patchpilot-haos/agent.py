@@ -20,6 +20,7 @@ CA_FILE = Path("/data/patchpilot_ca.pem")
 SUPERVISOR_URL = "http://supervisor"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 SELF_ADDON_HINT = "patchpilot_haos"
+AGENT_VERSION = "1.0"
 
 
 def load_options() -> dict:
@@ -365,6 +366,7 @@ def register(server: str, register_key: str, agent_id: str, advertise_ip: str, s
         "kernel": host.get("kernel") or platform.release(),
         "arch": platform.machine(),
         "package_manager": "haos",
+        "agent_version": AGENT_VERSION,
         "agent_type": "haos",
         "capabilities": "ha_backup,ha_core_update,ha_supervisor_update,ha_os_update,ha_addon_update,ha_addons_update",
         "register_key": register_key,
@@ -383,6 +385,7 @@ def heartbeat(server: str, agent_id: str, token: str, advertise_ip: str, ssl_ctx
         "kernel": host.get("kernel") or platform.release(),
         "arch": platform.machine(),
         "package_manager": "haos",
+        "agent_version": AGENT_VERSION,
         "agent_type": "haos",
         "capabilities": "ha_backup,ha_core_update,ha_supervisor_update,ha_os_update,ha_addon_update,ha_addons_update",
         "packages": get_pending_updates(),
@@ -422,6 +425,8 @@ def run_job(job: dict) -> tuple[str, str]:
     params = job.get("params") or {}
     if jtype == "refresh_updates":
         return "done", "Home Assistant update status refreshed."
+    if jtype == "update_agent":
+        return "failed", "PatchPilot HAOS Agent updates are installed through the Home Assistant Add-on Store."
     if jtype == "ha_backup":
         result = supervisor_json("POST", "/backups/new/full", {
             "name": f"PatchPilot backup {time.strftime('%Y-%m-%d %H:%M:%S')}",

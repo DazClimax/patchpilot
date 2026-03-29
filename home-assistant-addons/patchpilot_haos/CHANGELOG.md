@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.10
+
+- Added `agent_version` reporting for the Home Assistant OS agent so it appears in the new PatchPilot agent-version overview.
+- Return a clear message when a generic `update_agent` job is sent to HAOS, instead of failing with `Unknown job type`.
+
 ## 0.2.9
 
 - Fixed HAOS LAN IP detection for Supervisor network data where `ipv4.address` is returned as a list.

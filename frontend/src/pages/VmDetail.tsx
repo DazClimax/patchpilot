@@ -11,6 +11,8 @@ import { LogModal } from '../components/LogModal'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { fmtAgo, fmtUptime } from '../utils/format'
 
+const AGENT_VERSION = '1.0'
+
 function jobStatus(s: string): [string, string] {
   const map: Record<string, [string, string]> = {
     done:    ['✓ Done',    colors.success],
@@ -497,19 +499,21 @@ export function VmDetail() {
               🧹 Clean
             </Button>
           )}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setConfirm({
-              title: 'Update Agent',
-              message: `Update the PatchPilot agent on "${agent?.hostname}" to the latest version? The agent will restart automatically.`,
-              onConfirm: () => { setConfirm(null); triggerJob('update_agent') },
-            })}
-            disabled={busy}
-            title="Update agent binary to latest version"
-          >
-            ⟳ Agent
-          </Button>
+          {!isHaos && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirm({
+                title: 'Update Agent',
+                message: `Update the PatchPilot agent on "${agent?.hostname}" to the latest version? The agent will restart automatically.`,
+                onConfirm: () => { setConfirm(null); triggerJob('update_agent') },
+              })}
+              disabled={busy}
+              title="Update agent binary to latest version"
+            >
+              ⟳ Agent
+            </Button>
+          )}
         </div>
       ) : undefined}>
         {/* Back arrow */}
@@ -590,6 +594,7 @@ export function VmDetail() {
         {[
           { label: 'IP Address', value: agent.ip ?? '—', accent: colors.primary },
           { label: 'OS',         value: agent.os_pretty ?? '—', accent: colors.primaryDim },
+          { label: 'Agent Ver',  value: agent.agent_version ?? 'unknown', accent: agent.agent_version === AGENT_VERSION ? colors.success : colors.warn },
           { label: 'Agent Type', value: agent.agent_type ?? 'linux', accent: isHaos ? colors.warn : colors.primaryDim },
           { label: 'Pkg Manager', value: agent.package_manager ?? '—', accent: colors.primaryDim },
           { label: 'Kernel',     value: agent.kernel ?? '—', accent: colors.primaryDim },

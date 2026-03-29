@@ -54,6 +54,7 @@ def init_db():
                 kernel      TEXT,
                 arch        TEXT,
                 package_manager TEXT,
+                agent_version TEXT DEFAULT '',
                 agent_type  TEXT DEFAULT 'linux',
                 capabilities TEXT DEFAULT '',
                 reboot_required INTEGER DEFAULT 0,
@@ -160,6 +161,11 @@ def init_db():
 
         try:
             conn.execute("ALTER TABLE agents ADD COLUMN package_manager TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already present — nothing to do
+
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN agent_version TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass  # column already present — nothing to do
 

@@ -216,6 +216,7 @@ _FIELD_LIMITS = {
     "kernel":    64,
     "arch":      16,
     "package_manager": 16,
+    "agent_version": 32,
     "agent_type": 16,
     "capabilities": 512,
 }
@@ -674,15 +675,7 @@ def startup():
                 print("[startup] Adjusted pending job timestamps from UTC schema default to localtime")
         except Exception as exc:
             print(f"[startup] Warning: jobs timestamp schema check failed: {exc}")
-    # Grace period: bump last_seen for recently-active agents so they don't
-    # appear offline right after a server restart.  Only touches agents that
-    # were seen within the last 5 minutes before the restart.
     with get_db_ctx() as conn:
-        conn.execute(
-            "UPDATE agents SET last_seen = datetime('now','localtime') "
-            "WHERE last_seen IS NOT NULL "
-            "AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 300"
-        )
         # Mark stale running jobs as failed (stuck for >15 min)
         stale_running = conn.execute(
             "UPDATE jobs SET status='failed', output=COALESCE(output,'') || '\n[server] Marked as failed: stuck in running state', "
@@ -825,8 +818,8 @@ async def register_agent(request: Request):
             reg_key = request.headers.get("x-register-key", "") or data.get("register_key", "")
             _verify_register_key(reg_key)
         conn.execute(
-            """INSERT INTO agents (id, hostname, ip, os_pretty, kernel, arch, package_manager, agent_type, capabilities, token)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO agents (id, hostname, ip, os_pretty, kernel, arch, package_manager, agent_version, agent_type, capabilities, token)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    hostname = excluded.hostname,
                    ip       = excluded.ip,
@@ -834,6 +827,7 @@ async def register_agent(request: Request):
                    kernel   = excluded.kernel,
                    arch     = excluded.arch,
                    package_manager = excluded.package_manager,
+                   agent_version = excluded.agent_version,
                    agent_type = excluded.agent_type,
                    capabilities = excluded.capabilities,
                    token    = excluded.token""",
@@ -845,6 +839,7 @@ async def register_agent(request: Request):
                 fields["kernel"],
                 fields["arch"],
                 fields["package_manager"],
+                fields["agent_version"] or "",
                 fields["agent_type"],
                 fields["capabilities"],
                 _hash_token(token),   # CRIT-5: store hash, return plaintext once
@@ -908,7 +903,7 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
     with get_db_ctx() as conn:
         conn.execute(
             """UPDATE agents SET
-                hostname=?, ip=?, os_pretty=?, kernel=?, arch=?, package_manager=?, agent_type=?, capabilities=?,
+                hostname=?, ip=?, os_pretty=?, kernel=?, arch=?, package_manager=?, agent_version=?, agent_type=?, capabilities=?,
                 reboot_required=?, pending_count=?, last_seen=?, uptime_seconds=?,
                 protocol=?, config_review_required=?, config_review_note=?
                WHERE id=?""",
@@ -919,6 +914,7 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
                 fields["kernel"],
                 fields["arch"],
                 fields["package_manager"],
+                fields["agent_version"] or "",
                 fields["agent_type"],
                 fields["capabilities"],
                 1 if data.get("reboot_required") else 0,
@@ -2038,6 +2034,7 @@ async def api_update_agents_batch(request: Request):
                 SELECT id AS agent_id, hostname
                 FROM agents
                 WHERE last_seen IS NOT NULL
+                  AND COALESCE(agent_type, 'linux') != 'haos'
                   AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120
             """).fetchall()
 

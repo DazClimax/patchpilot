@@ -117,6 +117,7 @@ function OfflineBanner({ hostnames, onDismiss }: { hostnames: string[]; onDismis
 // ─── Sort types ────────────────────────────────────────────────────────────────
 
 type SortKey = 'status' | 'conn' | 'hostname' | 'ip' | 'os' | 'updates' | 'reboot' | 'last_job' | 'uptime' | 'last_seen'
+const AGENT_VERSION = '1.0'
 
 /** Map OS name to font-logos CSS class */
 function osIcon(os: string | null): string {
@@ -348,16 +349,27 @@ function AgentRow({
       </td>
       <td style={{ padding: '12px 16px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          <span style={{
-            color: hover ? colors.primary : colors.text,
-            fontFamily: "'Orbitron', sans-serif",
-            fontSize: '13px',
-            textShadow: hover ? glowText(colors.primary, 4) : 'none',
-            transition: 'all 0.15s',
-            letterSpacing: '0.04em',
-          }}>
-            {agent.hostname}
-          </span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={{
+              color: hover ? colors.primary : colors.text,
+              fontFamily: "'Orbitron', sans-serif",
+              fontSize: '13px',
+              textShadow: hover ? glowText(colors.primary, 4) : 'none',
+              transition: 'all 0.15s',
+              letterSpacing: '0.04em',
+            }}>
+              {agent.hostname}
+            </span>
+            <span style={{
+              color: agent.agent_version ? colors.textMuted : colors.warn,
+              fontSize: '10px',
+              fontFamily: "'Electrolize', monospace",
+              letterSpacing: '0.12em',
+              textTransform: 'uppercase',
+            }}>
+              Agent {agent.agent_version || 'unknown'}
+            </span>
+          </div>
           {/* Tag chips + editor — hidden on mobile */}
           {!editingTags && tagList.map(tag => (
             <Badge key={tag} color={colors.primaryDim} className="pp-hide-mobile" style={{ fontSize: '10px', padding: '1px 6px' }}>
@@ -713,6 +725,18 @@ export function Dashboard() {
   const stats = data?.stats
   const agents = data?.agents ?? []
   const onlineAgents = agents.filter(a => (a.seconds_ago ?? 9999) < 120)
+  const updatableOnlineAgents = onlineAgents.filter(a => a.agent_type !== 'haos')
+  const onlineCurrentVersionCount = onlineAgents.filter(a => a.agent_version?.trim() === AGENT_VERSION).length
+  const onlineUnknownVersionCount = onlineAgents.filter(a => !a.agent_version?.trim()).length
+  const versionCardValue = onlineAgents.length === 0 ? '—' : `${onlineCurrentVersionCount}/${onlineAgents.length}`
+  const versionCardSub = `v ${AGENT_VERSION}`
+  const versionCardAccent = onlineAgents.length === 0
+    ? colors.textMuted
+    : onlineCurrentVersionCount === onlineAgents.length
+      ? colors.success
+      : onlineCurrentVersionCount > 0
+        ? colors.warn
+        : colors.danger
 
   // Offline VMs (seconds_ago > 120)
   const offlineAgents = agents.filter(a => (a.seconds_ago ?? 9999) > 120)
@@ -750,14 +774,14 @@ export function Dashboard() {
             <Button
               variant="ghost"
               size="sm"
-              disabled={agentUpdateBusy || onlineAgents.length === 0}
+              disabled={agentUpdateBusy || updatableOnlineAgents.length === 0}
               onClick={() => setConfirm({
                 title: 'Update All Agents',
-                message: `Update the PatchPilot agent on ${onlineAgents.length} online VM${onlineAgents.length === 1 ? '' : 's'}? The agents will restart automatically after the update.`,
+                message: `Update the PatchPilot agent on ${updatableOnlineAgents.length} online VM${updatableOnlineAgents.length === 1 ? '' : 's'}? Home Assistant OS agents are updated separately through Home Assistant.`,
                 onConfirm: () => { setConfirm(null); updateAllAgents() },
               })}
             >
-              {agentUpdateBusy ? '⟳ Updating Agents…' : `⇪ Update Agents (${onlineAgents.length})`}
+              {agentUpdateBusy ? '⟳ Updating Agents…' : `⇪ Update Agents (${updatableOnlineAgents.length})`}
             </Button>
           )}
           {canAct && <Button
@@ -819,6 +843,12 @@ export function Dashboard() {
               label="Reboot Required"
               value={stats?.reboot_needed ?? 0}
               accent={(stats?.reboot_needed ?? 0) > 0 ? colors.danger : colors.success}
+            />
+            <StatCard
+              label="Agent Current"
+              value={versionCardValue}
+              sub={versionCardSub}
+              accent={versionCardAccent}
             />
           </>
         )}
