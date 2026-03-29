@@ -39,12 +39,6 @@ Choose one installation path:
 
 ### Docker Server
 
-Prebuilt image on GitHub Container Registry:
-
-```bash
-docker pull ghcr.io/dazclimax/patchpilot:v1.6.2
-```
-
 1. Download the ready-to-use Compose file:
 
 ```bash
@@ -85,7 +79,7 @@ docker compose up -d
 4. Show only the generated password:
 
 ```bash
-docker compose logs --tail=50 patchpilot | grep -m1 "password:" | sed 's/.*password: /Passwort: /'
+docker compose logs --tail=50 patchpilot | grep -m1 "password:" | sed 's/.*password: /Password: /'
 ```
 
 Docker notes:
@@ -157,7 +151,9 @@ The bare metal installer currently targets Debian/Ubuntu hosts. It will:
 journalctl -u patchpilot | grep "Default admin user created"
 ```
 
-### Open The Web UI
+### Common Next Steps
+
+#### Open The Web UI
 
 Open:
 
@@ -167,7 +163,7 @@ https://<server-ip>:8443
 
 Your browser will warn about the self-signed certificate on first access. That is expected until you replace the certificate or trust your internal CA.
 
-### Add Your First Agent
+#### Add Your First Agent
 
 Generate a registration key in the **Deploy** page, then copy the generated secure installer from the UI and run it on the target VM.
 
