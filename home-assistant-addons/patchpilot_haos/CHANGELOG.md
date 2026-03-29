@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.18
+
+- Enlarged the visible PatchPilot logo inside the Home Assistant add-on icon and logo assets so it appears bigger in the Add-on Store.
+
 ## 0.2.17
 
 - Bumped the HAOS-reported PatchPilot agent version to `1.4` for another webhook auto-update test.
