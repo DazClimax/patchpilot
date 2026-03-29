@@ -14,6 +14,7 @@ PORT="${PORT:-8443}"
 AGENT_PORT="${AGENT_PORT:-8050}"
 AGENT_SSL="${AGENT_SSL:-1}"
 PATCHPILOT_ALLOWED_ORIGINS="${PATCHPILOT_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8000}"
+INITIAL_ADMIN_PASSWORD_PRINTED=0
 
 mkdir -p "$PATCHPILOT_DATA_DIR" "$PATCHPILOT_SSL_DIR"
 touch "$PATCHPILOT_ENV_FILE"
@@ -43,6 +44,14 @@ replace_env_key() {
 
 if ! grep -q '^PATCHPILOT_ADMIN_KEY=' "$PATCHPILOT_ENV_FILE" 2>/dev/null; then
   ensure_env_key "PATCHPILOT_ADMIN_KEY" "$(openssl rand -hex 32)"
+fi
+
+if [ -z "${PATCHPILOT_ADMIN_PASSWORD:-}" ] && ! grep -q '^PATCHPILOT_ADMIN_PASSWORD=' "$PATCHPILOT_ENV_FILE" 2>/dev/null; then
+  GENERATED_ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -d '\n' | tr '/+' '_-')"
+  ensure_env_key "PATCHPILOT_ADMIN_PASSWORD" "$GENERATED_ADMIN_PASSWORD"
+  INITIAL_ADMIN_PASSWORD_PRINTED=1
+else
+  GENERATED_ADMIN_PASSWORD=""
 fi
 
 ensure_env_key "PORT" "$PORT"
@@ -89,5 +98,11 @@ echo "[patchpilot-docker] Env file : $PATCHPILOT_ENV_FILE"
 echo "[patchpilot-docker] SSL dir  : $PATCHPILOT_SSL_DIR"
 echo "[patchpilot-docker] UI port  : ${PORT}"
 echo "[patchpilot-docker] Agent    : ${AGENT_PORT}"
+if [ "$INITIAL_ADMIN_PASSWORD_PRINTED" = "1" ]; then
+  echo "[patchpilot-docker] Initial admin credentials:"
+  echo "[patchpilot-docker]   username: admin"
+  echo "[patchpilot-docker]   password: ${GENERATED_ADMIN_PASSWORD}"
+  echo "[patchpilot-docker] Save this password now. It is only auto-generated on first startup with an empty data volume."
+fi
 
 exec gosu patchpilot /opt/patchpilot/server/start.sh

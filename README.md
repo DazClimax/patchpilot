@@ -119,6 +119,12 @@ security_opt:
 
 If you do not set `PATCHPILOT_ADMIN_PASSWORD`, PatchPilot generates the initial `admin` password and prints it to the container logs on first startup. The password is not baked into the image during `docker build`; it is only created when a fresh container starts with an empty data volume.
 
+If you start the stack in the foreground with `docker compose up`, the generated password is printed directly to the console. With `docker compose up -d`, it still lands in the container logs and can be retrieved with:
+
+```bash
+docker compose logs --tail=50 patchpilot
+```
+
 ### 1. Install the server
 
 ```bash
