@@ -92,20 +92,33 @@ function OfflineBanner({ hostnames, onDismiss }: { hostnames: string[]; onDismis
         onClick={onDismiss}
         aria-label="Dismiss offline banner"
         style={{
-          background: 'none',
-          border: 'none',
+          background: `${colors.danger}0d`,
+          border: `1px solid ${colors.danger}33`,
           cursor: 'pointer',
           color: colors.danger,
-          fontSize: '14px',
-          padding: '14px 16px',
+          fontSize: '12px',
+          padding: '12px 14px',
           alignSelf: 'flex-start',
           opacity: 0.7,
           lineHeight: 1,
           flexShrink: 0,
-          transition: 'opacity 0.15s',
+          transition: 'opacity 0.15s, box-shadow 0.15s, background 0.15s, border-color 0.15s',
+          clipPath: 'polygon(4px 0%, 100% 0%, calc(100% - 4px) 100%, 0% 100%)',
         }}
-        onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.opacity = '1' }}
-        onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.opacity = '0.7' }}
+        onMouseEnter={e => {
+          const el = e.currentTarget as HTMLButtonElement
+          el.style.opacity = '1'
+          el.style.background = `${colors.danger}14`
+          el.style.borderColor = `${colors.danger}66`
+          el.style.boxShadow = glow(colors.danger, 6)
+        }}
+        onMouseLeave={e => {
+          const el = e.currentTarget as HTMLButtonElement
+          el.style.opacity = '0.7'
+          el.style.background = `${colors.danger}0d`
+          el.style.borderColor = `${colors.danger}33`
+          el.style.boxShadow = 'none'
+        }}
         title="Dismiss"
       >
         ✕
@@ -876,10 +889,9 @@ export function Dashboard() {
               accent={(stats?.reboot_needed ?? 0) > 0 ? colors.danger : colors.success}
             />
             <StatCard
-              label="Agent Current"
+              label={versionCardMeta ? `Agent ${versionCardMeta}` : 'Agent'}
               value={versionCardValue}
               sub={versionCardSub}
-              meta={versionCardMeta}
               accent={versionCardAccent}
             />
           </>
