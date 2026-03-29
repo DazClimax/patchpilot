@@ -73,6 +73,7 @@ Start it with:
 
 ```bash
 docker compose up -d
+sleep 3
 docker compose logs --tail=50 patchpilot | grep "Initial admin credentials\|username:\|password:"
 ```
 
