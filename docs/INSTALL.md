@@ -271,6 +271,7 @@ Adjust the file if needed, then start it with:
 
 ```bash
 docker compose up -d
+docker compose logs --tail=50 patchpilot | grep "Initial admin credentials\|username:\|password:"
 ```
 
 Default ports:
