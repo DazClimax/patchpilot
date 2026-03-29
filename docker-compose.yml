@@ -17,7 +17,4 @@ services:
       # PATCHPILOT_ADMIN_KEY: "set-a-long-random-hex-key"
       # PATCHPILOT_ALLOWED_ORIGINS: "http://localhost:5173,http://localhost:8000"
     volumes:
-      - patchpilot_data:/data
-
-volumes:
-  patchpilot_data:
+      - /opt/patchpilot:/data

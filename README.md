@@ -66,10 +66,7 @@ services:
       # PATCHPILOT_ADMIN_KEY: "set-a-long-random-hex-key"
       # PATCHPILOT_ALLOWED_ORIGINS: "http://localhost:5173,http://localhost:8000"
     volumes:
-      - patchpilot_data:/data
-
-volumes:
-  patchpilot_data:
+      - /opt/patchpilot:/data
 ```
 
 Start it with:
@@ -95,8 +92,10 @@ Then run:
 docker compose up -d --build
 ```
 
-This starts PatchPilot with persistent data under the `patchpilot_data` volume. The container keeps the SQLite database, generated TLS material, and restartable runtime config under `/data`.
+This starts PatchPilot with persistent host data under `/opt/patchpilot`. The container keeps the SQLite database, generated TLS material, and restartable runtime config under `/data`, which is bind-mounted from `/opt/patchpilot` on the Docker host.
 The container entrypoint starts as root only long enough to prepare the mounted data directory and then drops privileges to the dedicated `patchpilot` user before launching the app processes.
+
+If `/opt/patchpilot` does not exist yet, Docker creates it on first start of the Compose stack.
 
 To set a fixed admin password for the first startup, uncomment this in `docker-compose.yml` before you launch the container:
 

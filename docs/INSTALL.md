@@ -278,11 +278,13 @@ Default ports:
 - `8443` → UI
 - `8050` → agent API
 
-Persistent data lives in the named volume `patchpilot_data` and includes:
+Persistent data lives on the Docker host under `/opt/patchpilot` and includes:
 
 - the SQLite database
 - generated TLS certificates
 - the runtime env file used for restartable settings changes
+
+If `/opt/patchpilot` does not exist yet, Docker creates it on the first `docker compose up`.
 
 ### Set A Fixed Admin Password
 
