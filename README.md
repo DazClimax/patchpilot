@@ -73,19 +73,11 @@ Start it with:
 
 ```bash
 docker compose up -d
-sleep 3
 ```
 
 Show only the generated password:
 
 ```bash
-docker compose logs --tail=50 patchpilot | grep -m1 "password:" | sed 's/.*password: /Passwort: /'
-```
-
-If you want to wait a moment after first start:
-
-```bash
-sleep 3
 docker compose logs --tail=50 patchpilot | grep -m1 "password:" | sed 's/.*password: /Passwort: /'
 ```
 
