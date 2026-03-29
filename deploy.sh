@@ -32,6 +32,10 @@ echo "[deploy] Syncing agent..."
 rsync -av --exclude='__pycache__' --exclude='*.pyc' \
   -- agent/ "${PI}:/opt/patchpilot/agent/"
 
+echo "[deploy] Syncing Home Assistant add-on files..."
+rsync -av --exclude='__pycache__' --exclude='*.pyc' \
+  -- home-assistant-addons/ "${PI}:/opt/patchpilot/home-assistant-addons/"
+
 echo "[deploy] Installing pip requirements..."
 ssh -- "$PI" "/opt/patchpilot-venv/bin/pip install --quiet -r /opt/patchpilot/server/requirements.txt"
 

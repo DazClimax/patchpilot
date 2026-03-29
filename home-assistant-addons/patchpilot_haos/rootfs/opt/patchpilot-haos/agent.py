@@ -4,6 +4,7 @@ import ipaddress
 import json
 import os
 import platform
+import re
 import socket
 import ssl
 import sys
@@ -20,8 +21,9 @@ CA_FILE = Path("/data/patchpilot_ca.pem")
 SUPERVISOR_URL = "http://supervisor"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 SELF_ADDON_HINT = "patchpilot_haos"
-AGENT_VERSION = "1.2"
+AGENT_VERSION = "1.3"
 AUTO_UPDATE_CAPABILITY = "ha_agent_auto_update"
+WEBHOOK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 BASE_CAPABILITIES = (
     "ha_backup",
     "ha_core_update",
@@ -135,9 +137,18 @@ def is_self_addon(slug: str) -> bool:
 
 def build_capabilities(opts: dict) -> str:
     values = list(BASE_CAPABILITIES)
-    if str(opts.get("agent_update_webhook_id") or "").strip():
+    if normalize_webhook_id(str(opts.get("agent_update_webhook_id") or "").strip()):
         values.append(AUTO_UPDATE_CAPABILITY)
     return ",".join(values)
+
+
+def normalize_webhook_id(value: str) -> str:
+    candidate = (value or "").strip()
+    if not candidate:
+        return ""
+    if not WEBHOOK_ID_RE.fullmatch(candidate):
+        return ""
+    return candidate
 
 
 def _normalize_ip(value: str) -> str | None:
@@ -458,9 +469,9 @@ def run_job(job: dict) -> tuple[str, str]:
     if jtype == "update_agent":
         return "failed", "PatchPilot HAOS Agent updates are installed through the Home Assistant Add-on Store."
     if jtype == "ha_trigger_agent_update":
-        webhook_id = str(opts.get("agent_update_webhook_id") or "").strip()
+        webhook_id = normalize_webhook_id(str(opts.get("agent_update_webhook_id") or "").strip())
         if not webhook_id:
-            return "failed", "Home Assistant auto-update is not configured. Add a webhook ID in the PatchPilot HAOS add-on options."
+            return "failed", "Home Assistant auto-update is not configured correctly. Set a webhook ID with 8-128 characters using only letters, numbers, dash, or underscore."
         homeassistant_request("POST", f"/webhook/{webhook_id}")
         return "done", "Triggered Home Assistant automation webhook for PatchPilot HAOS Agent update."
     if jtype == "ha_backup":

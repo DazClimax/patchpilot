@@ -60,6 +60,7 @@ PatchPilot works without this. If you want PatchPilot to trigger HAOS agent upda
 
 1. Create the Home Assistant automation below.
 2. Choose a webhook ID, for example `patchpilot-ha-agent-update`.
+   Use a hard-to-guess value if Home Assistant is reachable from anything other than your private LAN.
 3. Put the same webhook ID into the add-on option `agent_update_webhook_id`.
 4. Save and restart the add-on.
 5. PatchPilot will then show the HA agent as auto-update capable.
@@ -86,3 +87,5 @@ Add this to the PatchPilot HAOS add-on configuration as well:
 ```yaml
 agent_update_webhook_id: "patchpilot-ha-agent-update"
 ```
+
+Accepted format: 8 to 128 characters using only letters, numbers, `-`, or `_`.

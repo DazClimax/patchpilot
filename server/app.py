@@ -86,6 +86,14 @@ _AGENT_TARGET_VERSION = os.environ.get(
     "PATCHPILOT_AGENT_TARGET_VERSION",
     _read_version_constant(_ROOT_DIR / "agent" / "agent.py", "AGENT_VERSION", "1.0"),
 )
+_HA_AGENT_TARGET_VERSION = os.environ.get(
+    "PATCHPILOT_HA_AGENT_TARGET_VERSION",
+    _read_version_constant(
+        _ROOT_DIR / "home-assistant-addons" / "patchpilot_haos" / "rootfs" / "opt" / "patchpilot-haos" / "agent.py",
+        "AGENT_VERSION",
+        _AGENT_TARGET_VERSION,
+    ),
+)
 
 
 def _bootstrap_password_file() -> Path:
@@ -1156,6 +1164,7 @@ def api_dashboard():
     payload = {
         "agents": result,
         "agent_target_version": _AGENT_TARGET_VERSION,
+        "ha_agent_target_version": _HA_AGENT_TARGET_VERSION,
         "stats": {
             "online": online,
             "total": len(result),
@@ -1271,6 +1280,7 @@ def api_agent(agent_id: str, days: int = 7, limit: int = 10, offset: int = 0):
         "refresh_updates",
         "reboot",
         "update_agent",
+        "ha_trigger_agent_update",
         "ha_core_update",
         "ha_backup_update",
         "ha_supervisor_update",
@@ -1302,6 +1312,7 @@ def api_agent(agent_id: str, days: int = 7, limit: int = 10, offset: int = 0):
     payload = {
         "agent": agent_dict,
         "agent_target_version": _AGENT_TARGET_VERSION,
+        "ha_agent_target_version": _HA_AGENT_TARGET_VERSION,
         "packages": [dict(p) for p in packages],
         "jobs": jobs_payload,
         "jobs_total": total_jobs,
@@ -2266,9 +2277,9 @@ def api_update_agents_batch_status(batch: str = ""):
     batch_filter = f'%"batch": "{batch}"%'
     with get_db_ctx() as conn:
         rows = conn.execute("""
-            SELECT j.agent_id, a.hostname, j.status, j.output, j.finished
+            SELECT j.agent_id, a.hostname, j.type, j.status, j.output, j.finished
             FROM jobs j JOIN agents a ON a.id = j.agent_id
-            WHERE j.type = 'update_agent' AND j.params LIKE ?
+            WHERE j.type IN ('update_agent', 'ha_trigger_agent_update') AND j.params LIKE ?
         """, (batch_filter,)).fetchall()
 
         online_rows = conn.execute("""

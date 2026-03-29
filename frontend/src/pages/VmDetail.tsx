@@ -149,6 +149,7 @@ export function VmDetail() {
   const [jobsTotal, setJobsTotal] = useState(0)
   const [jobsHasMore, setJobsHasMore] = useState(false)
   const [agentTargetVersion, setAgentTargetVersion] = useState('1.0')
+  const [haAgentTargetVersion, setHaAgentTargetVersion] = useState('1.0')
 
   const load = useCallback(async () => {
     if (!id) return
@@ -156,6 +157,7 @@ export function VmDetail() {
       const d = await api.agent(id, { days: jobDays, limit: jobLimit, offset: jobOffset })
       setAgent(d.agent)
       setAgentTargetVersion(d.agent_target_version || '1.0')
+      setHaAgentTargetVersion(d.ha_agent_target_version || d.agent_target_version || '1.0')
       setPackages(d.packages)
       setJobs(d.jobs)
       setJobsTotal(d.jobs_total)
@@ -322,6 +324,7 @@ export function VmDetail() {
   const online = (agent?.seconds_ago ?? 9999) < 120
   const isRpmSystem = ['dnf', 'yum'].includes(agent?.package_manager ?? '')
   const isHaos = agent?.agent_type === 'haos'
+  const effectiveAgentTargetVersion = isHaos ? haAgentTargetVersion : agentTargetVersion
   const capabilityList = (agent?.capabilities ?? '').split(',').map(item => item.trim()).filter(Boolean)
   const hasHaBackup = capabilityList.includes('ha_backup')
   const hasHaCoreUpdate = capabilityList.includes('ha_core_update')
@@ -628,7 +631,7 @@ export function VmDetail() {
         {[
           { label: 'IP Address', value: agent.ip ?? '—', accent: colors.primary },
           { label: 'OS',         value: agent.os_pretty ?? '—', accent: colors.primaryDim },
-          { label: 'Agent Ver',  value: agent.agent_version ?? 'unknown', accent: agent.agent_version === agentTargetVersion ? colors.success : colors.warn },
+          { label: 'Agent Ver',  value: agent.agent_version ?? 'unknown', accent: agent.agent_version === effectiveAgentTargetVersion ? colors.success : colors.warn },
           { label: 'Agent Type', value: agent.agent_type ?? 'linux', accent: isHaos ? colors.warn : colors.primaryDim },
           { label: 'Pkg Manager', value: agent.package_manager ?? '—', accent: colors.primaryDim },
           { label: 'Kernel',     value: agent.kernel ?? '—', accent: colors.primaryDim },

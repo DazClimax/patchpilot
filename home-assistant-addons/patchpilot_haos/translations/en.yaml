@@ -10,7 +10,7 @@ configuration:
     description: Optional custom name for this Home Assistant instance inside PatchPilot
   agent_update_webhook_id:
     name: Auto-Update Webhook ID
-    description: Optional Home Assistant webhook ID that PatchPilot can trigger for automatic add-on updates
+    description: Optional Home Assistant webhook ID (8-128 chars, letters/numbers/dash/underscore) that PatchPilot can trigger for automatic add-on updates
   poll_interval:
     name: Poll Interval
     description: Number of seconds between PatchPilot polls

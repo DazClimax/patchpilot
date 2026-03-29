@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.16
+
+- Fixed PatchPilot batch-status reporting so optional HA agent auto-updates appear correctly in the deployment modal.
+- Hardened optional `agent_update_webhook_id` handling by accepting only safe webhook ID characters.
+- Bumped the HAOS-reported PatchPilot agent version to `1.3` for another end-to-end auto-update test.
+
 ## 0.2.15
 
 - Bumped the HAOS-reported PatchPilot agent version to `1.2` for end-to-end testing of the optional webhook-based auto-update flow.

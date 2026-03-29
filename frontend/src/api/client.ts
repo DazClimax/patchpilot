@@ -185,7 +185,7 @@ export const api = {
 
   // Dashboard
   dashboard: () =>
-    req<{ agents: Agent[]; agent_target_version: string; stats: { online: number; total: number; reboot_needed: number; total_pending: number } }>('GET', '/dashboard'),
+    req<{ agents: Agent[]; agent_target_version: string; ha_agent_target_version: string; stats: { online: number; total: number; reboot_needed: number; total_pending: number } }>('GET', '/dashboard'),
 
   agent: (id: string, options?: { days?: number; limit?: number; offset?: number }) => {
     const params = new URLSearchParams()
@@ -193,7 +193,7 @@ export const api = {
     if (options?.limit !== undefined) params.set('limit', String(options.limit))
     if (options?.offset !== undefined) params.set('offset', String(options.offset))
     const suffix = params.toString() ? `?${params.toString()}` : ''
-    return req<{ agent: Agent; agent_target_version: string; packages: Package[]; jobs: Job[]; jobs_total: number; jobs_has_more: boolean }>('GET', `/agents/${id}${suffix}`)
+    return req<{ agent: Agent; agent_target_version: string; ha_agent_target_version: string; packages: Package[]; jobs: Job[]; jobs_total: number; jobs_has_more: boolean }>('GET', `/agents/${id}${suffix}`)
   },
 
   createJob: (agentId: string, type: string, params?: Record<string, unknown>) =>
