@@ -30,7 +30,14 @@ If you want a lightweight, self-hosted alternative to doing everything manually 
 
 ## Quick Start
 
-### Docker
+Choose one installation path:
+
+- **Docker / GHCR**
+  Best if you want the fastest self-hosted server setup with a visible host data path under `/opt/patchpilot`.
+- **Bare Metal / systemd**
+  Best if you want a native Debian/Ubuntu service install without Docker.
+
+### Docker Server
 
 Prebuilt image on GitHub Container Registry:
 
@@ -38,13 +45,13 @@ Prebuilt image on GitHub Container Registry:
 docker pull ghcr.io/dazclimax/patchpilot:v1.6.2
 ```
 
-Download the ready-to-use Compose file:
+1. Download the ready-to-use Compose file:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/docker-compose.yml -o docker-compose.yml
 ```
 
-Default `docker-compose.yml` for the published image:
+2. Review or adjust the defaults:
 
 ```yaml
 services:
@@ -69,16 +76,30 @@ services:
       - /opt/patchpilot:/data
 ```
 
-Start it with:
+3. Start the stack:
 
 ```bash
 docker compose up -d
 ```
 
-Show only the generated password:
+4. Show only the generated password:
 
 ```bash
 docker compose logs --tail=50 patchpilot | grep -m1 "password:" | sed 's/.*password: /Passwort: /'
+```
+
+Docker notes:
+
+- Host data is persisted under `/opt/patchpilot`
+- Docker creates `/opt/patchpilot` automatically on first start if it does not exist yet
+- If you start the stack in the foreground with `docker compose up`, the generated password is printed directly to the console
+
+Optional Docker settings:
+
+```yaml
+environment:
+  PATCHPILOT_ADMIN_PASSWORD: "change-me"
+  PATCHPILOT_ADMIN_KEY: "set-a-long-random-hex-key"
 ```
 
 If you want to build locally from the cloned repository instead of using GHCR, replace the service definition with:
@@ -98,45 +119,15 @@ Then run:
 docker compose up -d --build
 ```
 
-This starts PatchPilot with persistent host data under `/opt/patchpilot`. The container keeps the SQLite database, generated TLS material, and restartable runtime config under `/data`, which is bind-mounted from `/opt/patchpilot` on the Docker host.
-The container entrypoint starts as root only long enough to prepare the mounted data directory and then drops privileges to the dedicated `patchpilot` user before launching the app processes.
+### Bare Metal Server
 
-If `/opt/patchpilot` does not exist yet, Docker creates it on first start of the Compose stack.
-
-To set a fixed admin password for the first startup, uncomment this in `docker-compose.yml` before you launch the container:
-
-```yaml
-environment:
-  PATCHPILOT_ADMIN_PASSWORD: "change-me"
-```
-
-Optional additional hardening:
-
-```yaml
-environment:
-  PATCHPILOT_ADMIN_KEY: "set-a-long-random-hex-key"
-```
-
-```yaml
-security_opt:
-  - no-new-privileges:true
-```
-
-If you do not set `PATCHPILOT_ADMIN_PASSWORD`, PatchPilot generates the initial `admin` password and prints it to the container logs on first startup. The password is not baked into the image during `docker build`; it is only created when a fresh container starts with an empty data volume.
-
-If you start the stack in the foreground with `docker compose up`, the generated password is printed directly to the console. With `docker compose up -d`, it still lands in the container logs and can be retrieved with:
-
-```bash
-docker compose logs --tail=50 patchpilot | grep -m1 "password:" | sed 's/.*password: /Passwort: /'
-```
-
-### 1. Install the server
+1. Install the server:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh | sudo bash
 ```
 
-Custom ports:
+With custom ports:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
@@ -150,7 +141,7 @@ less setup.sh
 sudo bash setup.sh
 ```
 
-The server installer currently targets Debian/Ubuntu hosts. It will:
+The bare metal installer currently targets Debian/Ubuntu hosts. It will:
 
 - install system dependencies with `apt`
 - install Node.js 20 when needed for the frontend build
@@ -160,7 +151,13 @@ The server installer currently targets Debian/Ubuntu hosts. It will:
 - generate a 3-year self-signed certificate
 - start PatchPilot with separate UI and agent ports by default
 
-### 2. Sign in to the web UI
+2. Retrieve the generated password if you did not predefine `PATCHPILOT_ADMIN_PASSWORD`:
+
+```bash
+journalctl -u patchpilot | grep "Default admin user created"
+```
+
+### Open The Web UI
 
 Open:
 
@@ -168,20 +165,9 @@ Open:
 https://<server-ip>:8443
 ```
 
-On first install, PatchPilot creates a default `admin` user automatically. The password is either:
-
-- the value of `PATCHPILOT_ADMIN_PASSWORD` if you set it before install, or
-- an auto-generated password written to the service logs
-
-Retrieve the generated password with:
-
-```bash
-journalctl -u patchpilot | grep "Default admin user created"
-```
-
 Your browser will warn about the self-signed certificate on first access. That is expected until you replace the certificate or trust your internal CA.
 
-### 3. Register an agent
+### Add Your First Agent
 
 Generate a registration key in the **Deploy** page, then copy the generated secure installer from the UI and run it on the target VM.
 
