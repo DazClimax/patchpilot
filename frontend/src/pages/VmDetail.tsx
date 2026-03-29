@@ -329,6 +329,7 @@ export function VmDetail() {
   const hasHaOsUpdate = capabilityList.includes('ha_os_update')
   const hasHaAddonUpdate = capabilityList.includes('ha_addon_update')
   const hasHaAddonsUpdate = capabilityList.includes('ha_addons_update')
+  const hasHaAgentAutoUpdate = capabilityList.includes('ha_agent_auto_update')
   const refreshLabel = agent?.package_manager === 'apt'
     ? '↻ Apt Update'
     : agent?.package_manager === 'dnf'
@@ -528,6 +529,21 @@ export function VmDetail() {
               })}
               disabled={busy}
               title="Update agent binary to latest version"
+            >
+              ⟳ Agent
+            </Button>
+          )}
+          {isHaos && hasHaAgentAutoUpdate && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setConfirm({
+                title: 'Home Assistant Agent Update',
+                message: `Trigger the optional Home Assistant automation to update the PatchPilot add-on on "${agent?.hostname}"?`,
+                onConfirm: () => { setConfirm(null); triggerJob('ha_trigger_agent_update') },
+              })}
+              disabled={busy}
+              title="Trigger the optional Home Assistant automation for PatchPilot add-on updates"
             >
               ⟳ Agent
             </Button>

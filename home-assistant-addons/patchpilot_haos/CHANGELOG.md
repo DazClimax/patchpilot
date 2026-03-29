@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.12
+
+- Added optional `agent_update_webhook_id` support so PatchPilot can trigger a Home Assistant automation for HAOS add-on updates.
+- Report a dedicated HA auto-update capability back to PatchPilot when that webhook option is configured.
+
 ## 0.2.11
 
 - Bumped the PatchPilot agent version reported by the Home Assistant OS add-on to `1.1`.

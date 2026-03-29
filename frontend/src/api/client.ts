@@ -257,7 +257,7 @@ export const api = {
     req<{ status: string; agent_count: number; batch_id: string }>('POST', '/settings/deploy-ssl', retryBatch ? { retry_batch: retryBatch } : undefined),
 
   deploySslStatus: (batchId: string) =>
-    req<{ agents: Array<{ agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null; online: boolean }>; total: number; total_online: number; completed: number }>('GET', `/settings/deploy-ssl/status?batch=${batchId}`),
+    req<{ agents: Array<{ agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null; online: boolean; job_type?: string }>; total: number; total_online: number; completed: number }>('GET', `/settings/deploy-ssl/status?batch=${batchId}`),
 
   updateAgentsBatch: (retryBatch?: string, agentIds?: string[]) =>
     req<{ status: string; agent_count: number; batch_id: string }>(
@@ -272,7 +272,7 @@ export const api = {
     ),
 
   updateAgentsBatchStatus: (batchId: string) =>
-    req<{ agents: Array<{ agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null; online: boolean }>; total: number; total_online: number; completed: number }>('GET', `/agents/update-batch/status?batch=${batchId}`),
+    req<{ agents: Array<{ agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null; online: boolean; job_type?: string }>; total: number; total_online: number; completed: number }>('GET', `/agents/update-batch/status?batch=${batchId}`),
 
   setTags: (id: string, tags: string) =>
     req<{ status: string; tags: string }>('PATCH', `/agents/${id}/tags`, { tags }),

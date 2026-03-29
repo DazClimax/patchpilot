@@ -21,6 +21,15 @@ SUPERVISOR_URL = "http://supervisor"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 SELF_ADDON_HINT = "patchpilot_haos"
 AGENT_VERSION = "1.1"
+AUTO_UPDATE_CAPABILITY = "ha_agent_auto_update"
+BASE_CAPABILITIES = (
+    "ha_backup",
+    "ha_core_update",
+    "ha_supervisor_update",
+    "ha_os_update",
+    "ha_addon_update",
+    "ha_addons_update",
+)
 
 
 def load_options() -> dict:
@@ -84,6 +93,17 @@ def supervisor_json(method: str, path: str, data=None):
     )
 
 
+def homeassistant_request(method: str, path: str, data=None):
+    if not SUPERVISOR_TOKEN:
+        raise RuntimeError("SUPERVISOR_TOKEN not available")
+    url = f"{SUPERVISOR_URL}/core/api{path}"
+    headers = {"Authorization": f"Bearer {SUPERVISOR_TOKEN}"}
+    try:
+        return request_json(method, url, data=data, headers=headers)
+    except json.JSONDecodeError:
+        return {"result": "ok"}
+
+
 def get_core_info() -> dict:
     return supervisor_json("GET", "/core/info").get("data", {})
 
@@ -111,6 +131,13 @@ def get_addons_info() -> list[dict]:
 def is_self_addon(slug: str) -> bool:
     normalized = (slug or "").strip().lower()
     return normalized.endswith(SELF_ADDON_HINT)
+
+
+def build_capabilities(opts: dict) -> str:
+    values = list(BASE_CAPABILITIES)
+    if str(opts.get("agent_update_webhook_id") or "").strip():
+        values.append(AUTO_UPDATE_CAPABILITY)
+    return ",".join(values)
 
 
 def _normalize_ip(value: str) -> str | None:
@@ -358,6 +385,7 @@ def get_pending_updates() -> list[dict]:
 
 def register(server: str, register_key: str, agent_id: str, advertise_ip: str, ssl_ctx):
     host = get_host_info()
+    opts = load_options()
     payload = {
         "id": agent_id or socket.gethostname(),
         "hostname": host.get("hostname") or socket.gethostname(),
@@ -368,7 +396,7 @@ def register(server: str, register_key: str, agent_id: str, advertise_ip: str, s
         "package_manager": "haos",
         "agent_version": AGENT_VERSION,
         "agent_type": "haos",
-        "capabilities": "ha_backup,ha_core_update,ha_supervisor_update,ha_os_update,ha_addon_update,ha_addons_update",
+        "capabilities": build_capabilities(opts),
         "register_key": register_key,
     }
     data = request_json("POST", f"{server}/api/agents/register", data=payload, ssl_ctx=ssl_ctx)
@@ -378,6 +406,7 @@ def register(server: str, register_key: str, agent_id: str, advertise_ip: str, s
 def heartbeat(server: str, agent_id: str, token: str, advertise_ip: str, ssl_ctx):
     core = get_core_info()
     host = get_host_info()
+    opts = load_options()
     payload = {
         "hostname": host.get("hostname") or socket.gethostname(),
         "ip": detect_local_ip(server, host, advertise_ip),
@@ -387,7 +416,7 @@ def heartbeat(server: str, agent_id: str, token: str, advertise_ip: str, ssl_ctx
         "package_manager": "haos",
         "agent_version": AGENT_VERSION,
         "agent_type": "haos",
-        "capabilities": "ha_backup,ha_core_update,ha_supervisor_update,ha_os_update,ha_addon_update,ha_addons_update",
+        "capabilities": build_capabilities(opts),
         "packages": get_pending_updates(),
         "reboot_required": 0,
         "uptime_seconds": get_uptime_seconds(host),
@@ -423,10 +452,17 @@ def report_result(server: str, agent_id: str, token: str, job_id: int, status: s
 def run_job(job: dict) -> tuple[str, str]:
     jtype = job["type"]
     params = job.get("params") or {}
+    opts = load_options()
     if jtype == "refresh_updates":
         return "done", "Home Assistant update status refreshed."
     if jtype == "update_agent":
         return "failed", "PatchPilot HAOS Agent updates are installed through the Home Assistant Add-on Store."
+    if jtype == "ha_trigger_agent_update":
+        webhook_id = str(opts.get("agent_update_webhook_id") or "").strip()
+        if not webhook_id:
+            return "failed", "Home Assistant auto-update is not configured. Add a webhook ID in the PatchPilot HAOS add-on options."
+        homeassistant_request("POST", f"/webhook/{webhook_id}")
+        return "done", "Triggered Home Assistant automation webhook for PatchPilot HAOS Agent update."
     if jtype == "ha_backup":
         result = supervisor_json("POST", "/backups/new/full", {
             "name": f"PatchPilot backup {time.strftime('%Y-%m-%d %H:%M:%S')}",

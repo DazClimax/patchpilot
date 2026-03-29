@@ -725,9 +725,21 @@ export function Dashboard() {
   const agents = data?.agents ?? []
   const agentTargetVersion = data?.agent_target_version ?? '1.0'
   const onlineAgents = agents.filter(a => (a.seconds_ago ?? 9999) < 120)
+  const haAutoUpdateCap = 'ha_agent_auto_update'
   const updatableOnlineAgents = onlineAgents.filter(
-    a => a.agent_type !== 'haos' && (a.agent_version?.trim() || '') !== agentTargetVersion
+    a => {
+      if ((a.agent_version?.trim() || '') === agentTargetVersion) return false
+      if (a.agent_type !== 'haos') return true
+      const capabilityList = (a.capabilities ?? '').split(',').map(item => item.trim()).filter(Boolean)
+      return capabilityList.includes(haAutoUpdateCap)
+    }
   )
+  const manualHaUpdateAgents = onlineAgents.filter(a => {
+    if (a.agent_type !== 'haos') return false
+    if ((a.agent_version?.trim() || '') === agentTargetVersion) return false
+    const capabilityList = (a.capabilities ?? '').split(',').map(item => item.trim()).filter(Boolean)
+    return !capabilityList.includes(haAutoUpdateCap)
+  })
   const updateAllAgents = useCallback(async (retryBatch?: string) => {
     setAgentUpdateBusy(true)
     setAgentUpdateStatus(null)
@@ -821,7 +833,7 @@ export function Dashboard() {
               disabled={agentUpdateBusy || updatableOnlineAgents.length === 0}
               onClick={() => setConfirm({
                 title: 'Update All Agents',
-                message: `Update the PatchPilot agent on ${updatableOnlineAgents.length} online VM${updatableOnlineAgents.length === 1 ? '' : 's'}? Home Assistant OS agents are updated separately through Home Assistant.`,
+                message: `Update the PatchPilot agent on ${updatableOnlineAgents.length} online VM${updatableOnlineAgents.length === 1 ? '' : 's'}?${manualHaUpdateAgents.length > 0 ? ` ${manualHaUpdateAgents.length} Home Assistant instance${manualHaUpdateAgents.length === 1 ? ' is' : 's are'} still configured for manual updates in Home Assistant.` : ''}`,
                 onConfirm: () => { setConfirm(null); updateAllAgents() },
               })}
             >

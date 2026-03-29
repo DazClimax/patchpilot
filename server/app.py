@@ -237,7 +237,7 @@ STATIC_DIR = Path(os.environ.get("PATCHPILOT_STATIC_DIR", str(Path(__file__).par
 # ---------------------------------------------------------------------------
 _AGENT_ID_RE = re.compile(r'^[a-zA-Z0-9._-]{1,64}$')
 _TG_TOKEN_RE  = re.compile(r'^\d+:[A-Za-z0-9_-]{35,}$')
-ALLOWED_JOB_TYPES = {"patch", "dist_upgrade", "force_patch", "refresh_updates", "reboot", "update_agent", "autoremove", "deploy_ssl", "ack_config_review", "ha_backup", "ha_core_update", "ha_backup_update", "ha_supervisor_update", "ha_os_update", "ha_addon_update", "ha_addons_update"}
+ALLOWED_JOB_TYPES = {"patch", "dist_upgrade", "force_patch", "refresh_updates", "reboot", "update_agent", "autoremove", "deploy_ssl", "ack_config_review", "ha_backup", "ha_core_update", "ha_backup_update", "ha_supervisor_update", "ha_os_update", "ha_addon_update", "ha_addons_update", "ha_trigger_agent_update"}
 
 def _validate_agent_id(agent_id: str):
     if not _AGENT_ID_RE.match(agent_id):
@@ -1337,6 +1337,8 @@ async def create_job(agent_id: str, request: Request):
             }.get(job_type)
             if job_type == "ha_backup_update" and not {"ha_backup", "ha_core_update"}.issubset(capabilities):
                 raise HTTPException(status_code=422, detail="Agent does not support ha_backup_update")
+            if job_type == "ha_trigger_agent_update" and "ha_agent_auto_update" not in capabilities:
+                raise HTTPException(status_code=422, detail="Agent does not support ha_trigger_agent_update")
             if required and required not in capabilities:
                 raise HTTPException(status_code=422, detail=f"Agent does not support {job_type}")
         conn.execute(
@@ -2135,7 +2137,7 @@ async def api_update_agents_batch(request: Request):
             agents = conn.execute("""
                 SELECT DISTINCT j.agent_id, a.hostname FROM jobs j
                 JOIN agents a ON a.id = j.agent_id
-                WHERE j.type = 'update_agent' AND j.status = 'failed' AND j.params LIKE ?
+                WHERE j.type IN ('update_agent', 'ha_trigger_agent_update') AND j.status = 'failed' AND j.params LIKE ?
                   AND a.last_seen IS NOT NULL
                   AND (julianday('now','localtime') - julianday(a.last_seen)) * 86400 < 120
             """, (batch_filter,)).fetchall()
@@ -2143,19 +2145,17 @@ async def api_update_agents_batch(request: Request):
             if requested_agent_ids:
                 placeholders = ",".join("?" for _ in requested_agent_ids)
                 agents = conn.execute(f"""
-                    SELECT id AS agent_id, hostname
+                    SELECT id AS agent_id, hostname, COALESCE(agent_type, 'linux') AS agent_type, COALESCE(capabilities, '') AS capabilities
                     FROM agents
                     WHERE id IN ({placeholders})
                       AND last_seen IS NOT NULL
-                      AND COALESCE(agent_type, 'linux') != 'haos'
                       AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120
                 """, requested_agent_ids).fetchall()
             else:
                 agents = conn.execute("""
-                    SELECT id AS agent_id, hostname
+                    SELECT id AS agent_id, hostname, COALESCE(agent_type, 'linux') AS agent_type, COALESCE(capabilities, '') AS capabilities
                     FROM agents
                     WHERE last_seen IS NOT NULL
-                      AND COALESCE(agent_type, 'linux') != 'haos'
                       AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120
                 """).fetchall()
 
@@ -2165,12 +2165,22 @@ async def api_update_agents_batch(request: Request):
         count = 0
         for a in agents:
             aid = a["agent_id"] if "agent_id" in a.keys() else a["id"]
+            agent_type = a["agent_type"] if "agent_type" in a.keys() else "linux"
+            capabilities = set(filter(None, str(a["capabilities"] or "").split(",")))
+            if agent_type == "haos":
+                if "ha_agent_auto_update" not in capabilities:
+                    continue
+                job_type = "ha_trigger_agent_update"
+            else:
+                job_type = "update_agent"
             params = json.dumps({"batch": batch_id})
             conn.execute(
-                "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, 'update_agent', ?, datetime('now','localtime'))",
-                (aid, params),
+                "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, ?, ?, datetime('now','localtime'))",
+                (aid, job_type, params),
             )
             count += 1
+        if count == 0:
+            raise HTTPException(status_code=422, detail="No agents to update")
     _cache_invalidate("dashboard")
     return {"status": "queued", "agent_count": count, "batch_id": batch_id}
 
@@ -2199,9 +2209,9 @@ def api_deploy_ssl_status(batch: str = ""):
 
         # Get the chained update_agent jobs for this batch
         upd_rows = conn.execute("""
-            SELECT j.agent_id, a.hostname, j.status, j.output, j.finished
+            SELECT j.agent_id, a.hostname, j.type, j.status, j.output, j.finished
             FROM jobs j JOIN agents a ON a.id = j.agent_id
-            WHERE j.type = 'update_agent' AND j.params LIKE ?
+            WHERE j.type IN ('update_agent', 'ha_trigger_agent_update') AND j.params LIKE ?
         """, (batch_filter,)).fetchall()
 
         # Get online status for all agents (seen within last 2 min)
@@ -2269,12 +2279,18 @@ def api_update_agents_batch_status(batch: str = ""):
 
     agents = []
     for r in rows:
-        phase = "updating" if r["status"] in ("pending", "running") else (
-            "failed" if r["status"] == "failed" else "done"
-        )
+        if r["type"] == "ha_trigger_agent_update":
+            phase = "triggering" if r["status"] in ("pending", "running") else (
+                "failed" if r["status"] == "failed" else "done"
+            )
+        else:
+            phase = "updating" if r["status"] in ("pending", "running") else (
+                "failed" if r["status"] == "failed" else "done"
+            )
         agents.append({
             "agent_id": r["agent_id"],
             "hostname": r["hostname"],
+            "job_type": r["type"],
             "status": r["status"],
             "phase": phase,
             "output": r["output"] or "",

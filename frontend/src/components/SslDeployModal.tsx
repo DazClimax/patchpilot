@@ -8,6 +8,7 @@ export interface DeployStatus {
   agents: Array<{
     agent_id: string
     hostname: string
+    job_type?: string
     status: string
     phase: string
     output: string
@@ -99,7 +100,7 @@ export function SslDeployModal({
             width: 'min(520px, 92vw)',
             background: glassBg(0.97),
             backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
-            boxShadow: `0 0 60px ${colors.primary}18, 0 0 120px rgba(0,0,0,0.95), inset 0 0 40px ${colors.primary}05`,
+            boxShadow: `0 0 60px ${colors.primary}18, 0 0 120px ${colors.bg}f2, inset 0 0 40px ${colors.primary}05`,
             animation: 'pp-fadein 0.22s ease both',
           }}
         >
@@ -166,10 +167,12 @@ export function SslDeployModal({
                 </div>
               ) : visibleAgents.map(a => {
                 const phase = a.phase || a.status
+                const isHaAutoUpdate = a.job_type === 'ha_trigger_agent_update'
                 const isOffline = !a.online
                 const isPending = a.status === 'pending' || phase === 'pending'
-                const label = a.status === 'done' ? doneLabel
+                const label = a.status === 'done' ? (isHaAutoUpdate ? 'HA UPDATE TRIGGERED' : doneLabel)
                   : a.status === 'failed' ? 'FAILED'
+                  : phase === 'triggering' ? 'TRIGGERING HA UPDATE...'
                   : phase === 'updating' ? 'UPDATING AGENT...'
                   : phase === 'waiting' ? waitingLabel
                   : phase === 'deploying' ? activePhaseLabel
@@ -177,10 +180,10 @@ export function SslDeployModal({
                   : 'PENDING'
                 const dotColor = a.status === 'done' ? colors.success
                   : a.status === 'failed' ? colors.danger
-                  : (phase === 'updating' || phase === 'deploying') ? colors.warn
+                  : (phase === 'triggering' || phase === 'updating' || phase === 'deploying') ? colors.warn
                   : isOffline ? colors.textMuted
                   : colors.textMuted
-                const isActive = phase === 'updating' || phase === 'deploying'
+                const isActive = phase === 'triggering' || phase === 'updating' || phase === 'deploying'
                 return (
                   <div key={a.agent_id} style={{
                     display: 'flex', alignItems: 'center', gap: '10px',
@@ -197,10 +200,10 @@ export function SslDeployModal({
                     <span style={{ flex: 1, color: isOffline && isPending ? colors.textMuted : colors.text }}>
                       {a.hostname}
                       {isOffline && isPending && (
-                        <span style={{ fontSize: '8px', marginLeft: '6px', color: colors.textMuted }}>●  OFFLINE</span>
+                        <span style={{ fontSize: 'clamp(9px, 0.85vw, 10px)', marginLeft: '6px', color: colors.textMuted }}>●  OFFLINE</span>
                       )}
                     </span>
-                    <span style={{ fontSize: '9px', letterSpacing: '0.1em', color: dotColor }}>
+                    <span style={{ fontSize: 'clamp(9px, 0.85vw, 10px)', letterSpacing: '0.1em', color: dotColor }}>
                       {label}
                     </span>
                   </div>
