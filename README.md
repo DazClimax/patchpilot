@@ -32,8 +32,24 @@ If you want a lightweight, self-hosted alternative to doing everything manually 
 
 ### Docker
 
+Prebuilt image on GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/dazclimax/patchpilot:v1.6.2
+```
+
+With Compose:
+
 ```bash
 docker compose up -d --build
+```
+
+Or pin the published image path directly in your compose file:
+
+```yaml
+services:
+  patchpilot:
+    image: ghcr.io/dazclimax/patchpilot:v1.6.2
 ```
 
 This starts PatchPilot with persistent data under the `patchpilot_data` volume. The container keeps the SQLite database, generated TLS material, and restartable runtime config under `/data`.
