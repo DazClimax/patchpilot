@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.13
+
+- Test release to verify the optional Home Assistant webhook-based PatchPilot add-on update flow.
+
 ## 0.2.12
 
 - Added optional `agent_update_webhook_id` support so PatchPilot can trigger a Home Assistant automation for HAOS add-on updates.
