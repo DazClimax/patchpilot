@@ -20,7 +20,7 @@ CA_FILE = Path("/data/patchpilot_ca.pem")
 SUPERVISOR_URL = "http://supervisor"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 SELF_ADDON_HINT = "patchpilot_haos"
-AGENT_VERSION = "1.1"
+AGENT_VERSION = "1.2"
 AUTO_UPDATE_CAPABILITY = "ha_agent_auto_update"
 BASE_CAPABILITIES = (
     "ha_backup",

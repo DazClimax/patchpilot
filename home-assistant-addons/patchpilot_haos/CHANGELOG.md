@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.15
+
+- Bumped the HAOS-reported PatchPilot agent version to `1.2` for end-to-end testing of the optional webhook-based auto-update flow.
+
 ## 0.2.14
 
 - Improved the HAOS add-on documentation with a step-by-step install guide.
