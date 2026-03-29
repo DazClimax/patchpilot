@@ -38,7 +38,14 @@ Prebuilt image on GitHub Container Registry:
 docker pull ghcr.io/dazclimax/patchpilot:v1.6.2
 ```
 
-Example `docker-compose.yml` with default settings:
+Download the ready-to-use Compose file:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/docker-compose.ghcr.yml -o docker-compose.yml
+docker compose up -d
+```
+
+Default `docker-compose.yml` for the published image:
 
 ```yaml
 services:
