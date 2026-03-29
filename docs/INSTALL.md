@@ -264,7 +264,13 @@ The container runtime prepares the mounted `/data` volume as root and then drops
 ### Quick Start
 
 ```bash
-docker compose up -d --build
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/docker-compose.yml -o docker-compose.yml
+```
+
+Adjust the file if needed, then start it with:
+
+```bash
+docker compose up -d
 ```
 
 Default ports:
@@ -298,11 +304,27 @@ If you do not set `PATCHPILOT_ADMIN_PASSWORD`, the container creates the default
 
 ### What The Docker Stack Does
 
-- builds the frontend in a Node.js stage
-- installs the Python backend into a slim runtime image
+- pulls the published PatchPilot server image from GHCR
 - stores DB/config/SSL under `/data`
 - keeps the same dual-port UI/agent model
 - restarts the whole process when PatchPilot requests a restart from the UI
+
+If you prefer to build locally from the cloned repository instead of using GHCR, replace the service image with:
+
+```yaml
+services:
+  patchpilot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: patchpilot:1.6.2
+```
+
+and then run:
+
+```bash
+docker compose up -d --build
+```
 
 ### Notes
 

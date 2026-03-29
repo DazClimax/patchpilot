@@ -41,7 +41,7 @@ docker pull ghcr.io/dazclimax/patchpilot:v1.6.2
 Download the ready-to-use Compose file:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/docker-compose.ghcr.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/docker-compose.yml -o docker-compose.yml
 ```
 
 Default `docker-compose.yml` for the published image:
@@ -78,7 +78,7 @@ Start it with:
 docker compose up -d
 ```
 
-If you want to build locally from the cloned repository instead of using GHCR:
+If you want to build locally from the cloned repository instead of using GHCR, replace the service definition with:
 
 ```yaml
 services:

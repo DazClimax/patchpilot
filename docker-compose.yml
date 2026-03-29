@@ -1,9 +1,6 @@
 services:
   patchpilot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: patchpilot:1.6.2
+    image: ghcr.io/dazclimax/patchpilot:v1.6.2
     container_name: patchpilot
     restart: unless-stopped
     security_opt:
