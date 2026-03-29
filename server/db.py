@@ -7,7 +7,7 @@ import contextlib
 import sys
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "patchpilot.db"
+DB_PATH = Path(os.environ.get("PATCHPILOT_DB_PATH", str(Path(__file__).parent / "patchpilot.db")))
 
 
 # PERFORMANCE: Per-connection PRAGMAs applied to every new connection.

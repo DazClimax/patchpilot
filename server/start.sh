@@ -2,13 +2,19 @@
 # PatchPilot server startup — dual-port with independent SSL per port
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${PORT:-8443}"
 AGENT_PORT="${AGENT_PORT:-8050}"
 SSL_CERTFILE="${SSL_CERTFILE:-}"
 SSL_KEYFILE="${SSL_KEYFILE:-}"
 AGENT_SSL="${AGENT_SSL:-}"
 
-UVICORN="/opt/patchpilot-venv/bin/uvicorn"
+UVICORN="${PATCHPILOT_UVICORN_BIN:-/opt/patchpilot-venv/bin/uvicorn}"
+if [ ! -x "$UVICORN" ]; then
+    UVICORN="$(command -v uvicorn)"
+fi
+
+cd "$SCRIPT_DIR"
 
 # ── UI process ────────────────────────────────────────────────────────────────
 UI_ARGS="app:app --host 0.0.0.0 --port $PORT"

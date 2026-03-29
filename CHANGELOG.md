@@ -7,6 +7,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.2] - 2026-03-29
+
+### Added
+- Docker packaging for the PatchPilot server, including `Dockerfile`, `docker-compose.yml`, persistent `/data` storage, and GHCR publishing workflow support
+
+### Changed
+- Version bumped to `1.6.2`
+- Docker docs now explain more clearly how the initial admin password is generated on first startup and how to set fixed container credentials
+
+### Fixed
+- Docker runtime now drops privileges to the dedicated `patchpilot` user after preparing the mounted data directory
+- Docker build context now excludes common local secret material such as `.env` files, certificates, and private keys
+- Sample compose configuration now enables `no-new-privileges` by default
+- Container server startup now runs reliably from the correct working directory
+
 ## [1.6.1] - 2026-03-29
 
 ### Changed

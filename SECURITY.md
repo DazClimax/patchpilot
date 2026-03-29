@@ -1,6 +1,6 @@
 # PatchPilot — Security Audit Report
 
-**Last updated:** 2026-03-28
+**Last updated:** 2026-03-29
 **Scope:** All backend, frontend, agent, and deployment files
 **Context:** Private home network (Raspberry Pi), no external exposure planned
 **Auditors:** Automated security review plus manual follow-up checks
@@ -18,9 +18,9 @@
 
 ---
 
-## Latest Review (2026-03-28)
+## Latest Review (2026-03-29)
 
-This follow-up review focused on the current live hardening state after the recent deploy/bootstrap, agent-auth, HA OS add-on, and stale-job cleanup changes.
+This follow-up review focused on the new Docker/GHCR delivery path, alongside the existing live hardening state from the recent deploy/bootstrap, agent-auth, HA OS add-on, and stale-job cleanup changes.
 
 ### Verified in this pass
 
@@ -32,10 +32,19 @@ This follow-up review focused on the current live hardening state after the rece
 - Registration keys now use 128 bits of entropy instead of the earlier 48-bit format
 - Stale `pending` jobs now expire server-side instead of persisting indefinitely
 - Home Assistant OS support remains isolated to a dedicated add-on path rather than reusing unsupported legacy install modes
+- The Docker image now drops privileges to the dedicated `patchpilot` user before the app starts
+- The Docker build context now excludes common local secret files such as `.env`, certificates, and private keys
+- The sample compose setup now enables `no-new-privileges` for container runs
 
 ### Result
 
 No new PatchPilot application-level critical or high severity findings were identified in this pass.
+
+### Container findings fixed in this pass
+
+- **Medium:** Docker runtime previously kept the PatchPilot processes running as root. Fixed by preparing `/data` as root in the entrypoint and then launching the app with `gosu patchpilot`.
+- **Low:** The initial Docker build context did not exclude common local secret material such as `.env` files and TLS private keys. Fixed by tightening `.dockerignore`.
+- **Low:** The sample compose setup did not enable `no-new-privileges`. Fixed by shipping the flag in `docker-compose.yml` and documenting it.
 
 ### Validation notes
 

@@ -7,8 +7,9 @@
 3. [Agent Installation](#agent-installation)
 4. [Configuration](#configuration)
 5. [Managing the Service](#managing-the-service)
-6. [Upgrading](#upgrading)
-7. [Troubleshooting](#troubleshooting)
+6. [Docker](#docker)
+7. [Upgrading](#upgrading)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -42,13 +43,13 @@ PatchPilot server installation currently targets Debian/Ubuntu-style hosts and u
 Versioned one-liner:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh | sudo bash
 ```
 
 Inspect before running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```
@@ -56,7 +57,7 @@ sudo bash setup.sh
 With custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
 ```
 
 The bootstrap script will:
@@ -251,6 +252,63 @@ sudo systemctl status patchpilot-agent
 sudo journalctl -u patchpilot-agent -f
 sudo systemctl restart patchpilot-agent
 ```
+
+---
+
+## Docker
+
+PatchPilot can also run as a containerized server. This is separate from the Linux agent model on managed VMs.
+
+The container runtime prepares the mounted `/data` volume as root and then drops privileges to the dedicated `patchpilot` user before starting the server processes.
+
+### Quick Start
+
+```bash
+docker compose up -d --build
+```
+
+Default ports:
+
+- `8443` → UI
+- `8050` → agent API
+
+Persistent data lives in the named volume `patchpilot_data` and includes:
+
+- the SQLite database
+- generated TLS certificates
+- the runtime env file used for restartable settings changes
+
+### Set A Fixed Admin Password
+
+Before the first start, set a fixed initial password in `docker-compose.yml`:
+
+```yaml
+environment:
+  PATCHPILOT_ADMIN_PASSWORD: "change-me"
+```
+
+Optional:
+
+```yaml
+environment:
+  PATCHPILOT_ADMIN_KEY: "set-a-long-random-hex-key"
+```
+
+If you do not set `PATCHPILOT_ADMIN_PASSWORD`, the container creates the default `admin` user on first startup and prints the generated password to the container logs. This happens when the container starts with an empty data volume, not during `docker build`.
+
+### What The Docker Stack Does
+
+- builds the frontend in a Node.js stage
+- installs the Python backend into a slim runtime image
+- stores DB/config/SSL under `/data`
+- keeps the same dual-port UI/agent model
+- restarts the whole process when PatchPilot requests a restart from the UI
+
+### Notes
+
+- Docker support is for the PatchPilot server
+- managed clients and agents still run directly on Linux systems
+- Home Assistant OS continues to use the dedicated add-on path instead of this container image
 
 ---
 

@@ -30,22 +30,52 @@ If you want a lightweight, self-hosted alternative to doing everything manually 
 
 ## Quick Start
 
+### Docker
+
+```bash
+docker compose up -d --build
+```
+
+This starts PatchPilot with persistent data under the `patchpilot_data` volume. The container keeps the SQLite database, generated TLS material, and restartable runtime config under `/data`.
+The container entrypoint starts as root only long enough to prepare the mounted data directory and then drops privileges to the dedicated `patchpilot` user before launching the app processes.
+
+To set a fixed admin password for the first startup, add this to `docker-compose.yml` before you launch the container:
+
+```yaml
+environment:
+  PATCHPILOT_ADMIN_PASSWORD: "change-me"
+```
+
+Optional hardening for container installs:
+
+```yaml
+environment:
+  PATCHPILOT_ADMIN_KEY: "set-a-long-random-hex-key"
+```
+
+```yaml
+security_opt:
+  - no-new-privileges:true
+```
+
+If you do not set `PATCHPILOT_ADMIN_PASSWORD`, PatchPilot generates the initial `admin` password and prints it to the container logs on first startup. The password is not baked into the image during `docker build`; it is only created when a fresh container starts with an empty data volume.
+
 ### 1. Install the server
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh | sudo bash
 ```
 
 Custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
 ```
 
 Inspect before running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.1/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```
@@ -201,6 +231,7 @@ In the current local environment, `pytest` is not installed, so the suite could 
 ## Documentation
 
 - [Installation Guide](docs/INSTALL.md)
+- [Docker Notes](docs/INSTALL.md#docker)
 - [Agent Documentation](docs/AGENT.md)
 - [API Reference](docs/API.md)
 - [Security Notes](SECURITY.md)

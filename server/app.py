@@ -195,7 +195,7 @@ def require_role(*roles: str):
 # Register monitoring router — must be after require_admin is defined
 app.include_router(metrics_module.router, dependencies=[Depends(require_role("admin"))])
 
-STATIC_DIR = Path(__file__).parent.parent / "frontend" / "dist"
+STATIC_DIR = Path(os.environ.get("PATCHPILOT_STATIC_DIR", str(Path(__file__).parent.parent / "frontend" / "dist")))
 
 # ---------------------------------------------------------------------------
 # Input validation
@@ -470,7 +470,7 @@ _last_heartbeat: dict[str, float] = {}
 # Port-change helpers
 # ---------------------------------------------------------------------------
 
-_ENV_FILE   = Path(__file__).parent.parent / ".env"
+_ENV_FILE   = Path(os.environ.get("PATCHPILOT_ENV_FILE", str(Path(__file__).parent.parent / ".env")))
 _SERVER_PORT = int(os.environ.get("PORT", "8000"))
 _LEGACY_PORT = int(os.environ.get("PORT_LEGACY", "0"))
 
@@ -644,10 +644,12 @@ def _update_env_key(key: str, value: str) -> None:
 
 
 def _schedule_restart(delay: float = 1.5) -> None:
-    """Restart the patchpilot systemd service after *delay* s (in background)."""
+    """Restart PatchPilot after *delay* s (systemd by default, process exit in containers)."""
     def _do() -> None:
         time.sleep(delay)
         try:
+            if os.environ.get("PATCHPILOT_RESTART_MODE", "systemd") == "process":
+                os._exit(0)
             subprocess.run(["sudo", "systemctl", "restart", "patchpilot"], check=False)
         except Exception as exc:
             import sys
@@ -1480,7 +1482,7 @@ _SETTINGS_ALLOWED_KEYS = {
     "ui_audio_enabled", "ui_audio_volume", "ui_login_animation_enabled", "ui_login_background_animation_enabled", "ui_login_background_opacity",
 }
 
-_SSL_DIR = Path(__file__).parent.parent / "ssl"
+_SSL_DIR = Path(os.environ.get("PATCHPILOT_SSL_DIR", str(Path(__file__).parent.parent / "ssl")))
 
 
 def _get_internal_ip() -> str:
