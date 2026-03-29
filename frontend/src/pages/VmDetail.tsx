@@ -324,7 +324,6 @@ export function VmDetail() {
   const online = (agent?.seconds_ago ?? 9999) < 120
   const isRpmSystem = ['dnf', 'yum'].includes(agent?.package_manager ?? '')
   const isHaos = agent?.agent_type === 'haos'
-  const effectiveAgentTargetVersion = isHaos ? haAgentTargetVersion : agentTargetVersion
   const capabilityList = (agent?.capabilities ?? '').split(',').map(item => item.trim()).filter(Boolean)
   const hasHaBackup = capabilityList.includes('ha_backup')
   const hasHaCoreUpdate = capabilityList.includes('ha_core_update')
@@ -333,6 +332,12 @@ export function VmDetail() {
   const hasHaAddonUpdate = capabilityList.includes('ha_addon_update')
   const hasHaAddonsUpdate = capabilityList.includes('ha_addons_update')
   const hasHaAgentAutoUpdate = capabilityList.includes('ha_agent_auto_update')
+  const effectiveAgentTargetVersion = isHaos ? haAgentTargetVersion : agentTargetVersion
+  const agentVersionAccent = isHaos && !hasHaAgentAutoUpdate
+    ? colors.primaryDim
+    : agent?.agent_version === effectiveAgentTargetVersion
+      ? colors.success
+      : colors.warn
   const refreshLabel = agent?.package_manager === 'apt'
     ? '↻ Apt Update'
     : agent?.package_manager === 'dnf'
@@ -631,7 +636,7 @@ export function VmDetail() {
         {[
           { label: 'IP Address', value: agent.ip ?? '—', accent: colors.primary },
           { label: 'OS',         value: agent.os_pretty ?? '—', accent: colors.primaryDim },
-          { label: 'Agent Ver',  value: agent.agent_version ?? 'unknown', accent: agent.agent_version === effectiveAgentTargetVersion ? colors.success : colors.warn },
+          { label: 'Agent Ver',  value: agent.agent_version ?? 'unknown', accent: agentVersionAccent },
           { label: 'Agent Type', value: agent.agent_type ?? 'linux', accent: isHaos ? colors.warn : colors.primaryDim },
           { label: 'Pkg Manager', value: agent.package_manager ?? '—', accent: colors.primaryDim },
           { label: 'Kernel',     value: agent.kernel ?? '—', accent: colors.primaryDim },

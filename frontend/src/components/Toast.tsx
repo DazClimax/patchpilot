@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react'
-import { colors, glow } from '../theme'
+import { colors, glow, glassBg } from '../theme'
 
 interface ToastItem {
   id: number
@@ -54,13 +54,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           return (
             <div key={t.id} style={{
               padding: '10px 16px',
-              background: `rgba(2,12,14,0.96)`,
+              background: glassBg(0.96),
               border: `1px solid ${c}66`,
               color: c,
               fontFamily: "'Electrolize', monospace",
               fontSize: '12px',
               letterSpacing: '0.06em',
-              boxShadow: `0 0 20px ${c}22, 0 4px 24px rgba(0,0,0,0.8)`,
+              boxShadow: `0 0 20px ${c}22, 0 4px 24px ${colors.bg}cc`,
               animation: 'pp-fadein 0.25s ease both',
               maxWidth: '340px',
               lineHeight: 1.5,

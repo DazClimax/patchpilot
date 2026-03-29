@@ -2277,7 +2277,7 @@ def api_update_agents_batch_status(batch: str = ""):
     batch_filter = f'%"batch": "{batch}"%'
     with get_db_ctx() as conn:
         rows = conn.execute("""
-            SELECT j.agent_id, a.hostname, j.type, j.status, j.output, j.finished
+            SELECT j.agent_id, a.hostname, a.agent_version, j.type, j.status, j.output, j.finished
             FROM jobs j JOIN agents a ON a.id = j.agent_id
             WHERE j.type IN ('update_agent', 'ha_trigger_agent_update') AND j.params LIKE ?
         """, (batch_filter,)).fetchall()
@@ -2291,18 +2291,28 @@ def api_update_agents_batch_status(batch: str = ""):
     agents = []
     for r in rows:
         if r["type"] == "ha_trigger_agent_update":
-            phase = "triggering" if r["status"] in ("pending", "running") else (
-                "failed" if r["status"] == "failed" else "done"
-            )
+            if r["status"] == "failed":
+                phase = "failed"
+                status = "failed"
+            elif r["status"] in ("pending", "running"):
+                phase = "triggering"
+                status = r["status"]
+            elif (r["agent_version"] or "").strip() == _HA_AGENT_TARGET_VERSION:
+                phase = "done"
+                status = "done"
+            else:
+                phase = "waiting"
+                status = "running"
         else:
             phase = "updating" if r["status"] in ("pending", "running") else (
                 "failed" if r["status"] == "failed" else "done"
             )
+            status = r["status"]
         agents.append({
             "agent_id": r["agent_id"],
             "hostname": r["hostname"],
             "job_type": r["type"],
-            "status": r["status"],
+            "status": status,
             "phase": phase,
             "output": r["output"] or "",
             "finished": r["finished"],

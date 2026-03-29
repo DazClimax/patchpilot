@@ -91,7 +91,7 @@ export function LogModal({ job, onClose }: LogModalProps) {
         onClick={onClose}
         style={{
           position: 'fixed', inset: 0, zIndex: 200,
-          background: 'rgba(2,12,14,0.88)',
+          background: `${colors.bg}e0`,
           backdropFilter: 'blur(6px)',
           WebkitBackdropFilter: 'blur(6px)',
           animation: 'pp-fadein 0.2s ease both',
@@ -122,7 +122,7 @@ export function LogModal({ job, onClose }: LogModalProps) {
             background: glassBg(0.97),
             backdropFilter: 'blur(16px)',
             WebkitBackdropFilter: 'blur(16px)',
-            boxShadow: `0 0 60px ${colors.primary}14, 0 0 100px rgba(0,0,0,0.9), inset 0 0 40px ${colors.primary}04`,
+            boxShadow: `0 0 60px ${colors.primary}14, 0 0 100px ${colors.bg}e6, inset 0 0 40px ${colors.primary}04`,
             animation: 'pp-fadein 0.25s ease both',
           }}>
 
@@ -299,8 +299,8 @@ export function LogModal({ job, onClose }: LogModalProps) {
                 0deg,
                 transparent,
                 transparent 2px,
-                rgba(0,0,0,0.04) 2px,
-                rgba(0,0,0,0.04) 4px
+                ${colors.bg}0a 2px,
+                ${colors.bg}0a 4px
               )`,
               zIndex: 1,
             }} />

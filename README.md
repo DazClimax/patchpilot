@@ -220,7 +220,7 @@ By default, the UI and agent API run on separate ports. If both are configured t
 | Deployment | systemd, rsync, shell scripts |
 
 PatchPilot's sci-fi interface is built with [Arwes](https://arwes.dev).
-Home Assistant OS is supported through a dedicated add-on, including backup, Core, Supervisor, OS, and add-on update workflows: [HAOS Add-on Notes](docs/HAOS_ADDON.md).
+Home Assistant OS is supported through a dedicated add-on, including backup, Core, Supervisor, OS, and add-on update workflows. Optional PatchPilot-triggered HA agent updates are available through a simple Home Assistant webhook automation: [HAOS Add-on Notes](docs/HAOS_ADDON.md).
 
 ## Security At A Glance
 

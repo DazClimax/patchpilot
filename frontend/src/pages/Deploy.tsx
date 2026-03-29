@@ -704,7 +704,7 @@ export function DeployPage() {
         {oneliner ? (
           <>
             <div style={{
-              background: 'rgba(1,8,10,0.95)',
+              background: glassBg(0.95),
               border: `1px solid ${colors.border}`,
               padding: '16px 20px',
               fontFamily: "'Courier New', Courier, monospace",
@@ -757,41 +757,16 @@ export function DeployPage() {
           <SectionHeader right={
             <div style={{ display: 'flex', gap: '8px' }}>
               <CopyButton text={script} label="Copy Script" />
-              <button
-                onClick={downloadScript}
-                style={{
-                  background: `${colors.primary}12`,
-                  border: `1px solid ${colors.primary}66`,
-                  color: colors.primary,
-                  cursor: 'pointer',
-                  padding: '6px 16px',
-                  fontSize: '11px',
-                  fontFamily: "'Electrolize', monospace",
-                  letterSpacing: '0.1em',
-                  textTransform: 'uppercase',
-                  textShadow: glowText(colors.primary, 3),
-                  transition: 'all 0.2s',
-                  clipPath: 'polygon(4px 0%, 100% 0%, calc(100% - 4px) 100%, 0% 100%)',
-                  whiteSpace: 'nowrap',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.background = `${colors.primary}22`
-                  e.currentTarget.style.boxShadow = `0 0 12px ${colors.primary}33`
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.background = `${colors.primary}12`
-                  e.currentTarget.style.boxShadow = 'none'
-                }}
-              >
+              <Button size="sm" onClick={downloadScript}>
                 ↓ Download .sh
-              </button>
+              </Button>
             </div>
           }>
             4. Full Install Script
           </SectionHeader>
 
           <div style={{
-            background: 'rgba(1,8,10,0.95)',
+            background: glassBg(0.95),
             border: `1px solid ${colors.border}`,
             position: 'relative',
             maxHeight: '420px',
@@ -805,7 +780,7 @@ export function DeployPage() {
             {/* Scanline */}
             <div style={{
               position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 1,
-              background: `repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.04) 2px,rgba(0,0,0,0.04) 4px)`,
+              background: `repeating-linear-gradient(0deg,transparent,transparent 2px,${colors.bg}0a 2px,${colors.bg}0a 4px)`,
             }} />
             <pre style={{
               margin: 0,
@@ -865,7 +840,7 @@ export function DeployPage() {
                 Add-on Repository
               </div>
               <div style={{
-                background: 'rgba(1,8,10,0.95)',
+                background: glassBg(0.95),
                 border: `1px solid ${colors.border}`,
                 padding: '14px 16px',
                 display: 'flex',
@@ -905,7 +880,7 @@ export function DeployPage() {
                     <CopyButton text={haAddonConfig} label="Copy Add-on Config" />
                   </div>
                   <div style={{
-                    background: 'rgba(1,8,10,0.95)',
+                    background: glassBg(0.95),
                     border: `1px solid ${colors.border}`,
                     position: 'relative',
                     maxHeight: '360px',

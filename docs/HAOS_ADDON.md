@@ -34,12 +34,66 @@ The add-on lives in this repository under:
    - `register_key`
    - optional `agent_id`
    - optional `advertise_ip`
+   - optional `agent_update_webhook_id`
    - optional `ca_pem`
 5. Start the add-on.
 6. Update the PatchPilot HAOS add-on itself through the Home Assistant Add-on Store, not through `HA Add-ons` inside PatchPilot.
+
+Example add-on configuration:
+
+```yaml
+patchpilot_server: "https://PATCHPILOT_HOST:8050"
+register_key: "PASTE_YOUR_REGISTER_KEY_HERE"
+agent_id: "homeassistant"
+advertise_ip: "YOUR_HOME_ASSISTANT_LAN_IP"
+poll_interval: 30
+ca_pem: |
+  -----BEGIN CERTIFICATE-----
+  ...
+  -----END CERTIFICATE-----
+```
 
 ## Notes
 
 - `ha_backup_update` uses the official Supervisor API with `backup=true`.
 - The supported scope is Home Assistant OS.
 - Deprecated Home Assistant installation methods are intentionally not covered.
+
+## Optional Auto-Update From PatchPilot
+
+This is optional. Without it, the add-on still works normally and PatchPilot will simply continue to show HA add-on updates as manual Home Assistant updates.
+
+If you want PatchPilot to trigger the HA add-on update flow for this Home Assistant instance:
+
+1. Create the Home Assistant automation below.
+2. Pick a webhook ID, for example `patchpilot-ha-agent-update`.
+3. Put the same value into the add-on option `agent_update_webhook_id`.
+4. Save and restart the add-on.
+5. PatchPilot can then include this HA instance in normal `Update Agents` runs.
+
+Automation example:
+
+```yaml
+automation:
+  - alias: PatchPilot HAOS Agent Auto Update
+    trigger:
+      - platform: webhook
+        webhook_id: patchpilot-ha-agent-update
+    action:
+      - service: update.install
+        target:
+          entity_id: update.patchpilot_haos_agent_update
+    mode: single
+```
+
+Add this to the add-on configuration as well:
+
+```yaml
+agent_update_webhook_id: "patchpilot-ha-agent-update"
+```
+
+Notes:
+
+- If the update entity has a different name on your system, search for `patchpilot` in Home Assistant entities and replace `update.patchpilot_haos_agent_update`.
+- Use a hard-to-guess webhook ID if Home Assistant is reachable from anything other than your private LAN.
+- Accepted webhook format: 8 to 128 characters using only letters, numbers, `-`, or `_`.

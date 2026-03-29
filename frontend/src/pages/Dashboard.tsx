@@ -725,22 +725,23 @@ export function Dashboard() {
   const agents = data?.agents ?? []
   const agentTargetVersion = data?.agent_target_version ?? '1.0'
   const haAgentTargetVersion = data?.ha_agent_target_version ?? agentTargetVersion
-  const targetVersionForAgent = (agent: Agent) => agent.agent_type === 'haos' ? haAgentTargetVersion : agentTargetVersion
   const onlineAgents = agents.filter(a => (a.seconds_ago ?? 9999) < 120)
   const haAutoUpdateCap = 'ha_agent_auto_update'
+  const capabilityListFor = (agent: Agent) => (agent.capabilities ?? '').split(',').map(item => item.trim()).filter(Boolean)
+  const hasHaAutoUpdateEnabled = (agent: Agent) => capabilityListFor(agent).includes(haAutoUpdateCap)
+  const targetVersionForAgent = (agent: Agent) => agent.agent_type === 'haos' ? haAgentTargetVersion : agentTargetVersion
+  const isManagedByAgentUpdate = (agent: Agent) => agent.agent_type !== 'haos' || hasHaAutoUpdateEnabled(agent)
   const updatableOnlineAgents = onlineAgents.filter(
     a => {
+      if (!isManagedByAgentUpdate(a)) return false
       if ((a.agent_version?.trim() || '') === targetVersionForAgent(a)) return false
-      if (a.agent_type !== 'haos') return true
-      const capabilityList = (a.capabilities ?? '').split(',').map(item => item.trim()).filter(Boolean)
-      return capabilityList.includes(haAutoUpdateCap)
+      return true
     }
   )
   const manualHaUpdateAgents = onlineAgents.filter(a => {
     if (a.agent_type !== 'haos') return false
     if ((a.agent_version?.trim() || '') === targetVersionForAgent(a)) return false
-    const capabilityList = (a.capabilities ?? '').split(',').map(item => item.trim()).filter(Boolean)
-    return !capabilityList.includes(haAutoUpdateCap)
+    return !hasHaAutoUpdateEnabled(a)
   })
   const updateAllAgents = useCallback(async (retryBatch?: string) => {
     setAgentUpdateBusy(true)
@@ -762,14 +763,15 @@ export function Dashboard() {
       setAgentUpdateModal(false)
     }
   }, [pollAgentUpdateStatus, updatableOnlineAgents])
-  const onlineCurrentVersionCount = onlineAgents.filter(a => a.agent_version?.trim() === targetVersionForAgent(a)).length
+  const managedOnlineAgents = onlineAgents.filter(isManagedByAgentUpdate)
+  const onlineCurrentVersionCount = managedOnlineAgents.filter(a => a.agent_version?.trim() === targetVersionForAgent(a)).length
   const onlineUnknownVersionCount = onlineAgents.filter(a => !a.agent_version?.trim()).length
-  const versionCardValue = onlineAgents.length === 0 ? '—' : `${onlineCurrentVersionCount}`
-  const versionCardSub = onlineAgents.length === 0 ? undefined : `/${onlineAgents.length}`
-  const versionCardMeta = `v ${agentTargetVersion}${haAgentTargetVersion !== agentTargetVersion ? ` / HA ${haAgentTargetVersion}` : ''}`
-  const versionCardAccent = onlineAgents.length === 0
+  const versionCardValue = managedOnlineAgents.length === 0 ? '—' : `${onlineCurrentVersionCount}`
+  const versionCardSub = managedOnlineAgents.length === 0 ? undefined : `/${managedOnlineAgents.length}`
+  const versionCardMeta = `v ${agentTargetVersion}${haAgentTargetVersion !== agentTargetVersion ? ` / HA ${haAgentTargetVersion}` : ''}${manualHaUpdateAgents.length > 0 ? ` · ${manualHaUpdateAgents.length} HA manual` : ''}`
+  const versionCardAccent = managedOnlineAgents.length === 0
     ? colors.textMuted
-    : onlineCurrentVersionCount === onlineAgents.length
+    : onlineCurrentVersionCount === managedOnlineAgents.length
       ? colors.success
       : colors.warn
 
@@ -784,7 +786,7 @@ export function Dashboard() {
       filterKey === 'offline' ? (agent.seconds_ago ?? 9999) >= 120 :
       filterKey === 'updates' ? (agent.pending_count ?? 0) > 0 :
       filterKey === 'reboot' ? !!agent.reboot_required :
-      filterKey === 'outdated' ? (agent.agent_version?.trim() || '') !== targetVersionForAgent(agent) :
+      filterKey === 'outdated' ? isManagedByAgentUpdate(agent) && (agent.agent_version?.trim() || '') !== targetVersionForAgent(agent) :
       filterKey === 'haos' ? agent.agent_type === 'haos' :
       true
     if (!matchesFilter) return false

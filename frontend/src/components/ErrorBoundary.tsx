@@ -1,5 +1,6 @@
 import React from 'react'
 import { colors, glassBg } from '../theme'
+import { Button } from './Button'
 
 interface State { hasError: boolean; error: Error | null }
 
@@ -48,21 +49,9 @@ export class ErrorBoundary extends React.Component<
           <div style={{ fontSize: '12px', color: colors.textDim, marginBottom: '20px', lineHeight: 1.6 }}>
             {this.state.error?.message || 'An unexpected error occurred.'}
           </div>
-          <button
-            onClick={() => window.location.reload()}
-            style={{
-              background: `${colors.danger}18`,
-              border: `1px solid ${colors.danger}66`,
-              color: colors.danger,
-              padding: '8px 24px',
-              cursor: 'pointer',
-              fontFamily: "'Electrolize', monospace",
-              fontSize: '11px',
-              letterSpacing: '0.12em',
-            }}
-          >
+          <Button variant="danger" onClick={() => window.location.reload()}>
             RELOAD
-          </button>
+          </Button>
         </div>
       </div>
     )

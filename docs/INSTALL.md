@@ -346,6 +346,7 @@ docker compose up -d --build
 - Docker support is for the PatchPilot server
 - managed clients and agents still run directly on Linux systems
 - Home Assistant OS continues to use the dedicated add-on path instead of this container image
+- optional HA agent auto-update is configured inside Home Assistant through the PatchPilot HAOS add-on and a small webhook automation, not through the Docker server setup
 
 ---
 

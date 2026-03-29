@@ -160,19 +160,20 @@ function TelegramGuide() {
         type="button"
         onClick={() => setOpen(o => !o)}
         style={{
-          background: 'none',
-          border: 'none',
+          background: open ? `${colors.primary}10` : 'transparent',
+          border: `1px solid ${open ? `${colors.primary}55` : colors.border}`,
           cursor: 'pointer',
           display: 'flex',
           alignItems: 'center',
           gap: '6px',
-          padding: '0',
+          padding: '6px 10px',
           color: open ? colors.primary : colors.textMuted,
           fontFamily: "'Electrolize', monospace",
           fontSize: '11px',
           letterSpacing: '0.1em',
           textShadow: open ? glowText(colors.primary, 3) : 'none',
-          transition: 'color 0.15s',
+          transition: 'all 0.15s',
+          clipPath: 'polygon(4px 0%, 100% 0%, calc(100% - 4px) 100%, 0% 100%)',
         }}
       >
         <span style={{

@@ -20,7 +20,7 @@ const inputStyle: React.CSSProperties = {
 
 const labelStyle: React.CSSProperties = {
   display: 'block',
-  fontSize: '10px',
+  fontSize: 'clamp(9px, 0.95vw, 10px)',
   letterSpacing: '0.2em',
   textTransform: 'uppercase',
   fontFamily: "'Orbitron', sans-serif",
@@ -108,7 +108,7 @@ export function UsersPage() {
       <span style={{
         display: 'inline-block',
         padding: '2px 8px',
-        fontSize: '9px',
+        fontSize: 'clamp(9px, 0.9vw, 10px)',
         letterSpacing: '0.15em',
         fontFamily: "'Orbitron', sans-serif",
         border: `1px solid ${c}44`,
@@ -148,7 +148,7 @@ export function UsersPage() {
                       textAlign: i === 4 ? 'right' : 'left',
                       padding: '8px 10px',
                       color: colors.textMuted,
-                      fontSize: '9px',
+                      fontSize: 'clamp(9px, 0.9vw, 10px)',
                       letterSpacing: '0.2em',
                       fontFamily: "'Orbitron', sans-serif",
                       fontWeight: 500,

@@ -170,9 +170,10 @@ export function SslDeployModal({
                 const isHaAutoUpdate = a.job_type === 'ha_trigger_agent_update'
                 const isOffline = !a.online
                 const isPending = a.status === 'pending' || phase === 'pending'
-                const label = a.status === 'done' ? (isHaAutoUpdate ? 'HA UPDATE TRIGGERED' : doneLabel)
+                const label = a.status === 'done' ? (isHaAutoUpdate ? 'HA UPDATE COMPLETED' : doneLabel)
                   : a.status === 'failed' ? 'FAILED'
                   : phase === 'triggering' ? 'TRIGGERING HA UPDATE...'
+                  : isHaAutoUpdate && phase === 'waiting' ? 'WAITING FOR HA RESTART...'
                   : phase === 'updating' ? 'UPDATING AGENT...'
                   : phase === 'waiting' ? waitingLabel
                   : phase === 'deploying' ? activePhaseLabel
@@ -180,10 +181,10 @@ export function SslDeployModal({
                   : 'PENDING'
                 const dotColor = a.status === 'done' ? colors.success
                   : a.status === 'failed' ? colors.danger
-                  : (phase === 'triggering' || phase === 'updating' || phase === 'deploying') ? colors.warn
+                  : (phase === 'triggering' || phase === 'waiting' || phase === 'updating' || phase === 'deploying') ? colors.warn
                   : isOffline ? colors.textMuted
                   : colors.textMuted
-                const isActive = phase === 'triggering' || phase === 'updating' || phase === 'deploying'
+                const isActive = phase === 'triggering' || phase === 'waiting' || phase === 'updating' || phase === 'deploying'
                 return (
                   <div key={a.agent_id} style={{
                     display: 'flex', alignItems: 'center', gap: '10px',
