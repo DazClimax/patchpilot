@@ -4,7 +4,6 @@ import os
 import secrets
 import sqlite3
 import contextlib
-import sys
 from pathlib import Path
 
 DB_PATH = Path(os.environ.get("PATCHPILOT_DB_PATH", str(Path(__file__).parent / "patchpilot.db")))
@@ -26,10 +25,11 @@ _CONNECTION_PRAGMAS = (
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     for pragma in _CONNECTION_PRAGMAS:
         conn.execute(pragma)
+    conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
 
@@ -215,11 +215,22 @@ def init_db():
             admin_pw = os.environ.get("PATCHPILOT_ADMIN_PASSWORD", "")
             if not admin_pw:
                 admin_pw = secrets.token_urlsafe(16)
-                print(
-                    f"[patchpilot] Default admin user created — "
-                    f"username: admin  password: {admin_pw}",
-                    file=sys.stderr,
-                )
+                bootstrap_file = os.environ.get("PATCHPILOT_BOOTSTRAP_PASSWORD_FILE", "").strip()
+                if bootstrap_file:
+                    bootstrap_path = Path(bootstrap_file)
+                    bootstrap_path.parent.mkdir(parents=True, exist_ok=True)
+                    bootstrap_path.write_text(
+                        "PatchPilot bootstrap credentials\n"
+                        "username: admin\n"
+                        f"password: {admin_pw}\n"
+                        "Remove this file after the first successful login.\n"
+                    )
+                    bootstrap_path.chmod(0o600)
+                else:
+                    raise RuntimeError(
+                        "PATCHPILOT_ADMIN_PASSWORD or PATCHPILOT_BOOTSTRAP_PASSWORD_FILE "
+                        "must be set for the first startup"
+                    )
             conn.execute(
                 "INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'admin')",
                 ("admin", hash_password(admin_pw)),

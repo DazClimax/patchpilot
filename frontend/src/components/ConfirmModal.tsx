@@ -1,6 +1,8 @@
 import React, { useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { Animator, FrameCorners } from '@arwes/react'
 import { colors, glow, glowText, glassBg } from '../theme'
+import { Button } from './Button'
 
 interface ConfirmModalProps {
   title: string
@@ -39,14 +41,14 @@ export function ConfirmModal({
     return () => window.removeEventListener('keydown', handler)
   }, [onCancel])
 
-  return (
+  const modal = (
     <>
       {/* Backdrop */}
       <div
         onClick={onCancel}
         style={{
           position: 'fixed', inset: 0, zIndex: 200,
-          background: 'rgba(2,12,14,0.85)',
+          background: `${colors.bg}d9`,
           backdropFilter: 'blur(6px)',
           WebkitBackdropFilter: 'blur(6px)',
           animation: 'pp-fadein 0.2s ease both',
@@ -69,7 +71,7 @@ export function ConfirmModal({
               background: glassBg(0.97),
               backdropFilter: 'blur(16px)',
               WebkitBackdropFilter: 'blur(16px)',
-              boxShadow: `0 0 60px ${accentColor}18, 0 0 120px rgba(0,0,0,0.95), inset 0 0 40px ${accentColor}05`,
+              boxShadow: `0 0 60px ${accentColor}18, 0 0 120px ${colors.bg}f2, inset 0 0 40px ${accentColor}05`,
               animation: 'pp-fadein 0.22s ease both',
             }}
           >
@@ -142,70 +144,29 @@ export function ConfirmModal({
               position: 'relative',
               zIndex: 2,
             }}>
-              {/* Cancel */}
-              <button
+              <Button
                 autoFocus
+                size="sm"
+                variant="ghost"
                 onClick={onCancel}
-                style={{
-                  background: 'none',
-                  border: `1px solid ${colors.border}`,
-                  color: colors.textDim,
-                  cursor: 'pointer',
-                  padding: '10px 20px',
-                  fontSize: '11px',
-                  fontFamily: "'Electrolize', monospace",
-                  letterSpacing: '0.1em',
-                  textTransform: 'uppercase',
-                  transition: 'all 0.15s',
-                  clipPath: 'polygon(4px 0%, 100% 0%, calc(100% - 4px) 100%, 0% 100%)',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.borderColor = colors.primary
-                  e.currentTarget.style.color = colors.primary
-                  e.currentTarget.style.background = `${colors.primary}0d`
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.borderColor = colors.border
-                  e.currentTarget.style.color = colors.textDim
-                  e.currentTarget.style.background = 'none'
-                }}
               >
                 Cancel
-              </button>
+              </Button>
 
-              {/* Confirm */}
-              <button
+              <Button
+                size="sm"
+                variant={variant}
                 onClick={onConfirm}
-                style={{
-                  background: `${accentColor}15`,
-                  border: `1px solid ${accentColor}88`,
-                  color: accentColor,
-                  cursor: 'pointer',
-                  padding: '10px 20px',
-                  fontSize: '11px',
-                  fontFamily: "'Electrolize', monospace",
-                  letterSpacing: '0.1em',
-                  textTransform: 'uppercase',
-                  textShadow: glowText(accentColor, 3),
-                  boxShadow: `0 0 10px ${accentColor}20`,
-                  transition: 'all 0.15s',
-                  clipPath: 'polygon(4px 0%, 100% 0%, calc(100% - 4px) 100%, 0% 100%)',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.background = `${accentColor}28`
-                  e.currentTarget.style.boxShadow = `0 0 18px ${accentColor}44`
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.background = `${accentColor}15`
-                  e.currentTarget.style.boxShadow = `0 0 10px ${accentColor}20`
-                }}
               >
                 {confirmLabel}
-              </button>
+              </Button>
             </div>
           </div>
         </Animator>
       </div>
     </>
   )
+
+  if (typeof document === 'undefined') return modal
+  return createPortal(modal, document.body)
 }

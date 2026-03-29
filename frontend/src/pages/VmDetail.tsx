@@ -11,8 +11,6 @@ import { LogModal } from '../components/LogModal'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { fmtAgo, fmtUptime } from '../utils/format'
 
-const AGENT_VERSION = '1.0'
-
 function jobStatus(s: string): [string, string] {
   const map: Record<string, [string, string]> = {
     done:    ['✓ Done',    colors.success],
@@ -145,26 +143,46 @@ export function VmDetail() {
   const [logJob, setLogJob] = useState<Job | null>(null)
   const [copiedField, setCopiedField] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null)
+  const [jobDays, setJobDays] = useState<7 | 30 | 90 | 0>(7)
+  const [jobLimit, setJobLimit] = useState<10 | 25 | 50 | 100 | 0>(10)
+  const [jobOffset, setJobOffset] = useState(0)
+  const [jobsTotal, setJobsTotal] = useState(0)
+  const [jobsHasMore, setJobsHasMore] = useState(false)
+  const [agentTargetVersion, setAgentTargetVersion] = useState('1.0')
 
   const load = useCallback(async () => {
     if (!id) return
     try {
-      const d = await api.agent(id)
+      const d = await api.agent(id, { days: jobDays, limit: jobLimit, offset: jobOffset })
       setAgent(d.agent)
+      setAgentTargetVersion(d.agent_target_version || '1.0')
       setPackages(d.packages)
       setJobs(d.jobs)
+      setJobsTotal(d.jobs_total)
+      setJobsHasMore(d.jobs_has_more)
     } catch {
       navigate('/')
     } finally {
       setLoading(false)
     }
-  }, [id, navigate])
+  }, [id, navigate, jobDays, jobLimit, jobOffset])
 
   useEffect(() => {
     load()
     const t = setInterval(load, 10_000)
     return () => clearInterval(t)
   }, [load])
+
+  useEffect(() => {
+    setJobOffset(0)
+  }, [jobDays, jobLimit])
+
+  const healthBadge = (status?: 'ok' | 'pending' | 'stale' | null): [string, string] => {
+    if (status === 'ok') return ['OK', colors.success]
+    if (status === 'pending') return ['Awaiting Check', colors.warn]
+    if (status === 'stale') return ['No Return', colors.danger]
+    return ['—', colors.textMuted]
+  }
 
   const triggerJob = async (type: string, params?: Record<string, unknown>) => {
     if (!id || busy) return
@@ -594,7 +612,7 @@ export function VmDetail() {
         {[
           { label: 'IP Address', value: agent.ip ?? '—', accent: colors.primary },
           { label: 'OS',         value: agent.os_pretty ?? '—', accent: colors.primaryDim },
-          { label: 'Agent Ver',  value: agent.agent_version ?? 'unknown', accent: agent.agent_version === AGENT_VERSION ? colors.success : colors.warn },
+          { label: 'Agent Ver',  value: agent.agent_version ?? 'unknown', accent: agent.agent_version === agentTargetVersion ? colors.success : colors.warn },
           { label: 'Agent Type', value: agent.agent_type ?? 'linux', accent: isHaos ? colors.warn : colors.primaryDim },
           { label: 'Pkg Manager', value: agent.package_manager ?? '—', accent: colors.primaryDim },
           { label: 'Kernel',     value: agent.kernel ?? '—', accent: colors.primaryDim },
@@ -856,26 +874,95 @@ export function VmDetail() {
       {/* Job history */}
       <div style={{ marginBottom: '32px' }}>
         <SectionHeader right={
-          jobs.filter(j => j.status === 'pending').length > 1 && isAdmin ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              style={{ color: colors.danger }}
-              onClick={() => setConfirm({
-                title: 'Cancel All Pending',
-                message: `Cancel all ${jobs.filter(j => j.status === 'pending').length} pending jobs for this agent?`,
-                onConfirm: async () => {
-                  setConfirm(null)
-                  try {
-                    await api.cancelPendingJobs(id!)
-                    load()
-                  } catch (e) { console.error(e) }
-                },
-              })}
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <select
+              value={String(jobDays)}
+              onChange={e => setJobDays(Number(e.target.value) as 7 | 30 | 90 | 0)}
+              style={{
+                background: `${colors.bg}cc`,
+                border: `1px solid ${colors.border}`,
+                color: colors.text,
+                fontSize: '11px',
+                fontFamily: "'Electrolize', monospace",
+                padding: '6px 8px',
+                outline: 'none',
+              }}
             >
-              ✕ CANCEL ALL PENDING
-            </Button>
-          ) : undefined
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="0">All time</option>
+            </select>
+            <select
+              value={String(jobLimit)}
+              onChange={e => setJobLimit(Number(e.target.value) as 10 | 25 | 50 | 100 | 0)}
+              style={{
+                background: `${colors.bg}cc`,
+                border: `1px solid ${colors.border}`,
+                color: colors.text,
+                fontSize: '11px',
+                fontFamily: "'Electrolize', monospace",
+                padding: '6px 8px',
+                outline: 'none',
+              }}
+            >
+              <option value="10">10 jobs</option>
+              <option value="25">25 jobs</option>
+              <option value="50">50 jobs</option>
+              <option value="100">100 jobs</option>
+              <option value="0">All jobs</option>
+            </select>
+            {jobLimit > 0 && (
+              <>
+                <Button
+                  size="sm"
+                  variant={jobOffset === 0 ? 'ghost' : 'primary'}
+                  disabled={jobOffset === 0}
+                  onClick={() => setJobOffset(current => Math.max(0, current - jobLimit))}
+                >
+                  ← Prev
+                </Button>
+                <Button
+                  size="sm"
+                  variant={jobsHasMore ? 'primary' : 'ghost'}
+                  disabled={!jobsHasMore}
+                  onClick={() => setJobOffset(current => current + jobLimit)}
+                >
+                  Next →
+                </Button>
+                <span style={{
+                  fontSize: '10px',
+                  color: colors.textMuted,
+                  fontFamily: "'Electrolize', monospace",
+                  letterSpacing: '0.08em',
+                }}>
+                  {jobsTotal === 0
+                    ? '0/0'
+                    : `${jobOffset + 1}-${Math.min(jobOffset + jobs.length, jobsTotal)} / ${jobsTotal}`}
+                </span>
+              </>
+            )}
+            {jobs.filter(j => j.status === 'pending').length > 1 && isAdmin ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                style={{ color: colors.danger }}
+                onClick={() => setConfirm({
+                  title: 'Cancel All Pending',
+                  message: `Cancel all ${jobs.filter(j => j.status === 'pending').length} pending jobs for this agent?`,
+                  onConfirm: async () => {
+                    setConfirm(null)
+                    try {
+                      await api.cancelPendingJobs(id!)
+                      load()
+                    } catch (e) { console.error(e) }
+                  },
+                })}
+              >
+                ✕ CANCEL ALL PENDING
+              </Button>
+            ) : undefined}
+          </div>
         }>Job History</SectionHeader>
         <div style={{
           border: `1px solid ${colors.border}`,
@@ -884,21 +971,22 @@ export function VmDetail() {
           WebkitBackdropFilter: 'blur(8px)',
           overflowX: 'auto',
         }}>
-          <table style={{ width: '100%', minWidth: '760px', borderCollapse: 'collapse', fontSize: '12px', tableLayout: 'fixed' }}>
+          <table style={{ width: '100%', minWidth: '900px', borderCollapse: 'collapse', fontSize: '12px', tableLayout: 'fixed' }}>
             <colgroup>
               <col style={{ width: '50px' }} />
               <col style={{ width: '170px' }} />
               <col style={{ width: '120px' }} />
+              <col style={{ width: '130px' }} />
               <col style={{ width: '150px' }} />
               <col />
               <col style={{ width: '110px' }} />
             </colgroup>
             <thead>
               <tr style={{ borderBottom: `1px solid ${colors.border}` }}>
-                {['ID', 'Type', 'Status', 'Finished', 'Output', ''].map((h, i) => (
+                {['ID', 'Type', 'Status', 'Health', 'Finished', 'Output', ''].map((h, i) => (
                   <th key={i} style={{
                     padding: '10px 16px',
-                    textAlign: i === 5 ? 'right' : 'left',
+                    textAlign: i === 6 ? 'right' : 'left',
                     fontSize: '10px', letterSpacing: '0.2em', textTransform: 'uppercase',
                     color: colors.textMuted, fontWeight: 500, fontFamily: "'Orbitron', sans-serif",
                   }}>
@@ -910,7 +998,7 @@ export function VmDetail() {
             <tbody>
               {jobs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{
+                  <td colSpan={7} style={{
                     padding: '36px',
                     textAlign: 'center',
                     color: colors.textMuted,
@@ -923,6 +1011,7 @@ export function VmDetail() {
                 </tr>
               ) : jobs.map((job, idx) => {
                 const [statusText, statusColor] = jobStatus(job.status)
+                const [healthText, healthColor] = healthBadge(job.health_status)
                 const typeColor = jobTypeColor(job.type)
                 const hasLog = !!job.output && ['done', 'failed'].includes(job.status)
                 const isRunning = job.status === 'running'
@@ -963,6 +1052,17 @@ export function VmDetail() {
                           }} />
                         )}
                         {statusText}
+                      </span>
+                    </td>
+                    <td style={{ padding: '10px 16px', whiteSpace: 'nowrap' }}>
+                      <span style={{
+                        color: healthColor,
+                        textShadow: glow(healthColor, 2),
+                        fontSize: '11px',
+                        letterSpacing: '0.06em',
+                        fontFamily: "'Electrolize', monospace",
+                      }}>
+                        {healthText}
                       </span>
                     </td>
                     <td style={{ padding: '10px 16px', color: colors.textMuted, fontFamily: 'monospace', fontSize: '11px' }}>

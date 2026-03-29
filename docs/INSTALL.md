@@ -43,13 +43,13 @@ PatchPilot server installation currently targets Debian/Ubuntu-style hosts and u
 Versioned one-liner:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/setup.sh | sudo bash
 ```
 
 Inspect before running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```
@@ -57,7 +57,7 @@ sudo bash setup.sh
 With custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
 ```
 
 The bootstrap script will:
@@ -112,13 +112,15 @@ The script:
 On first start, PatchPilot creates a default `admin` user automatically.
 
 - If `PATCHPILOT_ADMIN_PASSWORD` is already set in the environment before installation, that value becomes the initial password.
-- Otherwise, PatchPilot generates a password and writes it to the service logs.
+- Otherwise, PatchPilot generates a bootstrap password and writes it to a local file with restricted permissions.
 
-To retrieve the generated password:
+To retrieve the generated bootstrap password:
 
 ```bash
-journalctl -u patchpilot | grep "Default admin user created"
+sudo cat /opt/patchpilot/bootstrap-admin.txt
 ```
+
+The bootstrap file is removed automatically after the first successful login.
 
 PatchPilot also uses `PATCHPILOT_ADMIN_KEY` for legacy admin-key authentication and to derive the Fernet encryption key for sensitive settings.
 
@@ -266,7 +268,7 @@ The container runtime prepares the mounted `/data` volume as root and then drops
 Use this path if you want to run the PatchPilot server with Docker instead of a native systemd service install.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/docker-compose.yml -o docker-compose.yml
 ```
 
 Adjust the file if needed, then start it with:
@@ -275,11 +277,13 @@ Adjust the file if needed, then start it with:
 docker compose up -d
 ```
 
-Show only the generated password:
+Read the generated bootstrap password:
 
 ```bash
-docker compose logs --tail=50 patchpilot | grep -m1 "password:" | sed 's/.*password: /Passwort: /'
+sudo cat /opt/patchpilot/bootstrap-admin.txt
 ```
+
+The bootstrap file is removed automatically after the first successful login.
 
 Default ports:
 
@@ -291,6 +295,7 @@ Persistent data lives on the Docker host under `/opt/patchpilot` and includes:
 - the SQLite database
 - generated TLS certificates
 - the runtime env file used for restartable settings changes
+- persistent runtime logs under `/opt/patchpilot/logs/server.log`
 
 If `/opt/patchpilot` does not exist yet, Docker creates it on the first `docker compose up`.
 
@@ -310,7 +315,7 @@ environment:
   PATCHPILOT_ADMIN_KEY: "set-a-long-random-hex-key"
 ```
 
-If you do not set `PATCHPILOT_ADMIN_PASSWORD`, the container creates the default `admin` user on first startup and prints the generated password to the container logs. This happens when the container starts with an empty data volume, not during `docker build`.
+If you do not set `PATCHPILOT_ADMIN_PASSWORD`, the container creates the default `admin` user on first startup and writes the bootstrap password to `/opt/patchpilot/bootstrap-admin.txt` on the host. This happens when the container starts with an empty data volume, not during `docker build`. The file is removed automatically after the first successful login.
 
 ### What The Docker Stack Does
 
@@ -327,7 +332,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: patchpilot:1.6.2
+    image: patchpilot:1.6.3
 ```
 
 and then run:

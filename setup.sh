@@ -1,15 +1,15 @@
 #!/bin/bash
 # PatchPilot — One-liner server setup
-# Usage: curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh | sudo bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/setup.sh | sudo bash
 #
 # Or with custom ports:
-#   curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
+#   curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
 
 set -e
 
 REPO="https://github.com/DazClimax/patchpilot.git"
 INSTALL_TMP="/tmp/patchpilot-install"
-PATCHPILOT_REF="${PATCHPILOT_REF:-v1.6.2}"
+PATCHPILOT_REF="${PATCHPILOT_REF:-v1.6.3}"
 LOG_FILE="/var/log/patchpilot-setup.log"
 
 require_root() {
@@ -100,7 +100,7 @@ echo "  Web UI  : https://${IP}:${PORT}"
 echo "  Status  : systemctl status patchpilot"
 echo "  Logs    : journalctl -u patchpilot -f"
 echo ""
-echo "  Default login: admin / (check logs)"
-echo "  journalctl -u patchpilot | grep password"
+echo "  Default login: admin / (see bootstrap file)"
+echo "  Admin pass : sudo cat /opt/patchpilot/bootstrap-admin.txt"
 echo "  Installer log: $LOG_FILE"
 echo ""

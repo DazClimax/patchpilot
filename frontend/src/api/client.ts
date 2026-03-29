@@ -101,6 +101,7 @@ export interface Job {
   finished: string | null
   output: string | null
   params: string | null
+  health_status?: 'ok' | 'pending' | 'stale' | null
 }
 
 export interface Schedule {
@@ -184,10 +185,16 @@ export const api = {
 
   // Dashboard
   dashboard: () =>
-    req<{ agents: Agent[]; stats: { online: number; total: number; reboot_needed: number; total_pending: number } }>('GET', '/dashboard'),
+    req<{ agents: Agent[]; agent_target_version: string; stats: { online: number; total: number; reboot_needed: number; total_pending: number } }>('GET', '/dashboard'),
 
-  agent: (id: string) =>
-    req<{ agent: Agent; packages: Package[]; jobs: Job[] }>('GET', `/agents/${id}`),
+  agent: (id: string, options?: { days?: number; limit?: number; offset?: number }) => {
+    const params = new URLSearchParams()
+    if (options?.days !== undefined) params.set('days', String(options.days))
+    if (options?.limit !== undefined) params.set('limit', String(options.limit))
+    if (options?.offset !== undefined) params.set('offset', String(options.offset))
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+    return req<{ agent: Agent; agent_target_version: string; packages: Package[]; jobs: Job[]; jobs_total: number; jobs_has_more: boolean }>('GET', `/agents/${id}${suffix}`)
+  },
 
   createJob: (agentId: string, type: string, params?: Record<string, unknown>) =>
     req('POST', `/agents/${agentId}/jobs`, { type, params: params ?? {} }),
@@ -252,8 +259,17 @@ export const api = {
   deploySslStatus: (batchId: string) =>
     req<{ agents: Array<{ agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null; online: boolean }>; total: number; total_online: number; completed: number }>('GET', `/settings/deploy-ssl/status?batch=${batchId}`),
 
-  updateAgentsBatch: (retryBatch?: string) =>
-    req<{ status: string; agent_count: number; batch_id: string }>('POST', '/agents/update-batch', retryBatch ? { retry_batch: retryBatch } : undefined),
+  updateAgentsBatch: (retryBatch?: string, agentIds?: string[]) =>
+    req<{ status: string; agent_count: number; batch_id: string }>(
+      'POST',
+      '/agents/update-batch',
+      retryBatch || agentIds?.length
+        ? {
+            ...(retryBatch ? { retry_batch: retryBatch } : {}),
+            ...(agentIds?.length ? { agent_ids: agentIds } : {}),
+          }
+        : undefined
+    ),
 
   updateAgentsBatchStatus: (batchId: string) =>
     req<{ agents: Array<{ agent_id: string; hostname: string; status: string; phase: string; output: string; finished: string | null; online: boolean }>; total: number; total_online: number; completed: number }>('GET', `/agents/update-batch/status?batch=${batchId}`),

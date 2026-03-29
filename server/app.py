@@ -69,6 +69,41 @@ _AGENT_PORT = int(os.environ.get("AGENT_PORT", "8050"))
 _AGENT_SSL = os.environ.get("AGENT_SSL", "") == "1" and bool(os.environ.get("SSL_CERTFILE"))
 _AGENT_SCHEME = "https" if _AGENT_SSL else "http"
 
+
+def _read_version_constant(path: Path, constant: str, fallback: str) -> str:
+    try:
+        content = path.read_text(encoding="utf-8")
+        match = re.search(rf'^{constant}\s*=\s*["\']([^"\']+)["\']', content, re.MULTILINE)
+        if match:
+            return match.group(1).strip() or fallback
+    except Exception:
+        pass
+    return fallback
+
+
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+_AGENT_TARGET_VERSION = os.environ.get(
+    "PATCHPILOT_AGENT_TARGET_VERSION",
+    _read_version_constant(_ROOT_DIR / "agent" / "agent.py", "AGENT_VERSION", "1.0"),
+)
+
+
+def _bootstrap_password_file() -> Path:
+    raw = os.environ.get(
+        "PATCHPILOT_BOOTSTRAP_PASSWORD_FILE",
+        str(_ROOT_DIR / "bootstrap-admin.txt"),
+    ).strip()
+    return Path(raw)
+
+
+def _remove_bootstrap_password_file() -> None:
+    path = _bootstrap_password_file()
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception as exc:
+        print(f"[patchpilot] WARNING: failed to remove bootstrap password file {path}: {exc}")
+
 # Prefixes that are agent-only (served on AGENT_PORT)
 _AGENT_PREFIXES = ("/api/agents/", "/agent/")
 
@@ -676,6 +711,11 @@ def startup():
         except Exception as exc:
             print(f"[startup] Warning: jobs timestamp schema check failed: {exc}")
     with get_db_ctx() as conn:
+        future_jobs = conn.execute(
+            "UPDATE jobs SET created=datetime('now','localtime') "
+            "WHERE created IS NOT NULL "
+            "AND datetime(created) > datetime('now','localtime', '+5 minutes')"
+        ).rowcount
         # Mark stale running jobs as failed (stuck for >15 min)
         stale_running = conn.execute(
             "UPDATE jobs SET status='failed', output=COALESCE(output,'') || '\n[server] Marked as failed: stuck in running state', "
@@ -689,6 +729,8 @@ def startup():
             "WHERE status='pending' AND created IS NOT NULL "
             "AND (julianday('now','localtime') - julianday(created)) * 86400 > 1800"
         ).rowcount
+        if future_jobs:
+            print(f"[startup] Normalized {future_jobs} future-dated job timestamp(s)")
         if stale_running:
             print(f"[startup] Cleaned up {stale_running} stale running job(s)")
         if stale_pending:
@@ -1113,6 +1155,7 @@ def api_dashboard():
     total_pending = sum(a.get("pending_count") or 0 for a in result)
     payload = {
         "agents": result,
+        "agent_target_version": _AGENT_TARGET_VERSION,
         "stats": {
             "online": online,
             "total": len(result),
@@ -1174,11 +1217,14 @@ def api_server_time():
 
 
 @app.get("/api/agents/{agent_id}", dependencies=[Depends(require_role("admin","user","readonly"))])
-def api_agent(agent_id: str):
+def api_agent(agent_id: str, days: int = 7, limit: int = 10, offset: int = 0):
     # PERFORMANCE: Cache per-agent detail page for 5 s.  This endpoint joins
     # three tables (agents + packages + jobs) — caching saves the most work.
     # Invalidated on heartbeat (packages change) and job creation.
-    cache_key = f"agent:{agent_id}"
+    days = 0 if days <= 0 else min(days, 365)
+    limit = 0 if limit <= 0 else min(limit, 500)
+    offset = max(offset, 0)
+    cache_key = f"agent:{agent_id}:days:{days}:limit:{limit}:offset:{offset}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
@@ -1195,13 +1241,71 @@ def api_agent(agent_id: str):
         packages = conn.execute(
             "SELECT * FROM packages WHERE agent_id=? ORDER BY name", (agent_id,)
         ).fetchall()
-        jobs = conn.execute(
-            "SELECT * FROM jobs WHERE agent_id=? ORDER BY id DESC LIMIT 50", (agent_id,)
-        ).fetchall()
+        jobs_where = " WHERE agent_id=?"
+        jobs_params: list[object] = [agent_id]
+        if days > 0:
+            jobs_where += " AND datetime(created) >= datetime('now','localtime', ?)"
+            jobs_params.append(f"-{days} days")
+        total_jobs = conn.execute(
+            f"SELECT COUNT(*) AS count FROM jobs{jobs_where}",
+            jobs_params,
+        ).fetchone()["count"]
+        jobs_query = f"SELECT * FROM jobs{jobs_where} ORDER BY id DESC"
+        if limit > 0:
+            jobs_query += " LIMIT ? OFFSET ?"
+            jobs_params = [*jobs_params, limit, offset]
+        jobs = conn.execute(jobs_query, jobs_params).fetchall()
+    now_local = datetime.now()
+    agent_dict = _redact_agent_record(dict(agent))
+    agent_last_seen_raw = agent_dict.get("last_seen")
+    agent_last_seen_dt = None
+    if agent_last_seen_raw:
+        try:
+            agent_last_seen_dt = datetime.strptime(agent_last_seen_raw, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            agent_last_seen_dt = None
+    health_job_types = {
+        "patch",
+        "dist_upgrade",
+        "force_patch",
+        "refresh_updates",
+        "reboot",
+        "update_agent",
+        "ha_core_update",
+        "ha_backup_update",
+        "ha_supervisor_update",
+        "ha_os_update",
+        "ha_addon_update",
+        "ha_addons_update",
+    }
+    jobs_payload = []
+    for j in jobs:
+        job = dict(j)
+        health_status = None
+        if job.get("status") == "done" and job.get("type") in health_job_types:
+            finished_raw = job.get("finished")
+            finished_dt = None
+            if finished_raw:
+                try:
+                    finished_dt = datetime.strptime(finished_raw, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    finished_dt = None
+            if finished_dt:
+                if agent_last_seen_dt and agent_last_seen_dt >= finished_dt:
+                    health_status = "ok"
+                elif (now_local - finished_dt).total_seconds() <= 600:
+                    health_status = "pending"
+                else:
+                    health_status = "stale"
+        job["health_status"] = health_status
+        jobs_payload.append(job)
     payload = {
-        "agent": _redact_agent_record(dict(agent)),
+        "agent": agent_dict,
+        "agent_target_version": _AGENT_TARGET_VERSION,
         "packages": [dict(p) for p in packages],
-        "jobs": [dict(j) for j in jobs],
+        "jobs": jobs_payload,
+        "jobs_total": total_jobs,
+        "jobs_has_more": False if limit == 0 else (offset + len(jobs_payload) < total_jobs),
     }
     _cache_set(cache_key, payload, _CACHE_TTL_AGENT)
     return payload
@@ -2018,6 +2122,12 @@ async def api_update_agents_batch(request: Request):
     except Exception:
         pass
     retry_batch = re.sub(r'[^a-fA-F0-9]', '', data.get("retry_batch", ""))
+    requested_agent_ids = [
+        re.sub(r"[^a-zA-Z0-9._:-]", "", str(agent_id))
+        for agent_id in (data.get("agent_ids") or [])
+        if str(agent_id).strip()
+    ]
+    requested_agent_ids = [agent_id for agent_id in requested_agent_ids if agent_id]
 
     with get_db_ctx() as conn:
         if retry_batch:
@@ -2030,13 +2140,24 @@ async def api_update_agents_batch(request: Request):
                   AND (julianday('now','localtime') - julianday(a.last_seen)) * 86400 < 120
             """, (batch_filter,)).fetchall()
         else:
-            agents = conn.execute("""
-                SELECT id AS agent_id, hostname
-                FROM agents
-                WHERE last_seen IS NOT NULL
-                  AND COALESCE(agent_type, 'linux') != 'haos'
-                  AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120
-            """).fetchall()
+            if requested_agent_ids:
+                placeholders = ",".join("?" for _ in requested_agent_ids)
+                agents = conn.execute(f"""
+                    SELECT id AS agent_id, hostname
+                    FROM agents
+                    WHERE id IN ({placeholders})
+                      AND last_seen IS NOT NULL
+                      AND COALESCE(agent_type, 'linux') != 'haos'
+                      AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120
+                """, requested_agent_ids).fetchall()
+            else:
+                agents = conn.execute("""
+                    SELECT id AS agent_id, hostname
+                    FROM agents
+                    WHERE last_seen IS NOT NULL
+                      AND COALESCE(agent_type, 'linux') != 'haos'
+                      AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120
+                """).fetchall()
 
         if not agents:
             raise HTTPException(status_code=422, detail="No agents to update")
@@ -2201,6 +2322,7 @@ async def auth_login(request: Request):
         "role": row["role"],
         "created": time.monotonic(),
     }
+    _remove_bootstrap_password_file()
     return {"token": token, "role": row["role"], "username": row["username"]}
 
 

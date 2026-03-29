@@ -150,7 +150,7 @@ export function Layout({ children }: { children: ReactNode }) {
               right: 0 !important;
               z-index: 100 !important;
               border-right: none !important;
-              border-top: 1px solid #0d3540 !important;
+              border-top: 1px solid ${colors.border} !important;
             }
             .pp-sidebar .pp-logo-area,
             .pp-sidebar .pp-nav-section-label,
@@ -240,8 +240,8 @@ export function Layout({ children }: { children: ReactNode }) {
               0deg,
               transparent,
               transparent 2px,
-              rgba(0,0,0,0.03) 2px,
-              rgba(0,0,0,0.03) 4px
+              ${colors.bg}08 2px,
+              ${colors.bg}08 4px
             )`,
           }} />
 
@@ -249,7 +249,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <aside className="pp-sidebar" style={{
             width: '220px',
             flexShrink: 0,
-            background: `linear-gradient(180deg, rgba(4,15,18,0.95) 0%, rgba(2,12,14,0.98) 100%)`,
+            background: `linear-gradient(180deg, ${colors.bgCard}f2 0%, ${colors.bg}fa 100%)`,
             borderRight: `1px solid ${colors.border}`,
             display: 'flex',
             flexDirection: 'column',
@@ -470,7 +470,7 @@ export function Layout({ children }: { children: ReactNode }) {
               letterSpacing: '0.1em',
               fontFamily: "'Electrolize', monospace",
             }}>
-              v1.6.2
+              v1.6.3
             </div>
 
             {/* Bottom edge glow line */}

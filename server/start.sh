@@ -8,6 +8,8 @@ AGENT_PORT="${AGENT_PORT:-8050}"
 SSL_CERTFILE="${SSL_CERTFILE:-}"
 SSL_KEYFILE="${SSL_KEYFILE:-}"
 AGENT_SSL="${AGENT_SSL:-}"
+LOG_DIR="${PATCHPILOT_LOG_DIR:-/var/log/patchpilot}"
+LOG_FILE="${PATCHPILOT_LOG_FILE:-$LOG_DIR/server.log}"
 
 UVICORN="${PATCHPILOT_UVICORN_BIN:-/opt/patchpilot-venv/bin/uvicorn}"
 if [ ! -x "$UVICORN" ]; then
@@ -15,6 +17,17 @@ if [ ! -x "$UVICORN" ]; then
 fi
 
 cd "$SCRIPT_DIR"
+
+mkdir -p "$LOG_DIR"
+touch "$LOG_FILE"
+chmod 640 "$LOG_FILE" 2>/dev/null || true
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "[patchpilot] Runtime log file: $LOG_FILE"
+
+python3 - <<'PY'
+from db import init_db
+init_db()
+PY
 
 # ── UI process ────────────────────────────────────────────────────────────────
 UI_ARGS="app:app --host 0.0.0.0 --port $PORT"

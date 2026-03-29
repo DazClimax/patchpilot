@@ -117,6 +117,7 @@ interface StatCardProps {
   value: string | number
   accent?: string
   sub?: string
+  meta?: string
   loading?: boolean
 }
 
@@ -125,6 +126,7 @@ export function StatCard({
   value,
   accent = colors.primary,
   sub,
+  meta,
   loading = false,
 }: StatCardProps) {
   if (loading) return <SkeletonCard height={90} />
@@ -166,6 +168,18 @@ export function StatCard({
           </span>
         )}
       </div>
+
+      {meta && (
+        <div style={{
+          marginTop: '6px',
+          fontSize: '11px',
+          color: colors.textDim,
+          letterSpacing: '0.08em',
+          fontFamily: "'Electrolize', monospace",
+        }}>
+          {meta}
+        </div>
+      )}
 
       {/* Bottom accent bar */}
       <div style={{

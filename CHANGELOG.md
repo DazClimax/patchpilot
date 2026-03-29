@@ -7,6 +7,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-03-29
+
+### Added
+- Agent fleet visibility now includes a server-provided target version plus clearer `Agent Current` status on the dashboard
+- Runtime file logging is now first-class for both bare metal and Docker installs, including shipped `patchpilot.logrotate`
+
+### Changed
+- Version bumped to `1.6.3`
+- Docker, setup, and install docs now point consistently at the new `v1.6.3` release paths
+- `Patch All` and `Update Agents` now target only the correct online systems instead of sweeping in unrelated or unsupported hosts
+- Dashboard stat cards and confirmation dialogs were polished for more consistent visual feedback
+
+### Fixed
+- Initial bootstrap credentials are no longer written to journal or container logs; they are exposed through a restricted bootstrap file instead
+- The bootstrap password file is now removed automatically after the first successful login on both bare-metal and Docker installs
+- Docker startup now avoids the earlier SSL permission race and first-boot SQLite lock race
+- Bare-metal and Docker installs both persist runtime logs in the documented locations and rotate host logs for seven days
+- Deploy host validation is stricter, reducing the risk of malformed `PATCHPILOT_HOST` values being interpreted as command options
+
 ## [1.6.2] - 2026-03-29
 
 ### Added

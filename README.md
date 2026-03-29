@@ -42,7 +42,7 @@ Choose one installation path:
 1. Download the ready-to-use Compose file:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/docker-compose.yml -o docker-compose.yml
 ```
 
 2. Review or adjust the defaults:
@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/docker-co
 ```yaml
 services:
   patchpilot:
-    image: ghcr.io/dazclimax/patchpilot:v1.6.2
+    image: ghcr.io/dazclimax/patchpilot:v1.6.3
     container_name: patchpilot
     restart: unless-stopped
     security_opt:
@@ -76,17 +76,18 @@ services:
 docker compose up -d
 ```
 
-4. Show only the generated password:
+4. Read the generated bootstrap password if you did not predefine `PATCHPILOT_ADMIN_PASSWORD`:
 
 ```bash
-docker compose logs --tail=50 patchpilot | grep -m1 "password:" | sed 's/.*password: /Password: /'
+sudo cat /opt/patchpilot/bootstrap-admin.txt
 ```
 
 Docker notes:
 
 - Host data is persisted under `/opt/patchpilot`
 - Docker creates `/opt/patchpilot` automatically on first start if it does not exist yet
-- If you start the stack in the foreground with `docker compose up`, the generated password is printed directly to the console
+- Runtime log file is persisted under `/opt/patchpilot/logs/server.log`
+- The bootstrap file is removed automatically after the first successful login
 
 Optional Docker settings:
 
@@ -104,7 +105,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: patchpilot:1.6.2
+    image: patchpilot:1.6.3
 ```
 
 Then run:
@@ -118,19 +119,19 @@ docker compose up -d --build
 1. Install the server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/setup.sh | sudo bash
 ```
 
 With custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
 ```
 
 Inspect before running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.2/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```
@@ -145,10 +146,10 @@ The bare metal installer currently targets Debian/Ubuntu hosts. It will:
 - generate a 3-year self-signed certificate
 - start PatchPilot with separate UI and agent ports by default
 
-2. Retrieve the generated password if you did not predefine `PATCHPILOT_ADMIN_PASSWORD`:
+2. Retrieve the generated bootstrap password if you did not predefine `PATCHPILOT_ADMIN_PASSWORD`:
 
 ```bash
-journalctl -u patchpilot | grep "Default admin user created"
+sudo cat /opt/patchpilot/bootstrap-admin.txt
 ```
 
 ### Common Next Steps

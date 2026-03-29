@@ -117,7 +117,7 @@ function OfflineBanner({ hostnames, onDismiss }: { hostnames: string[]; onDismis
 // ─── Sort types ────────────────────────────────────────────────────────────────
 
 type SortKey = 'status' | 'conn' | 'hostname' | 'ip' | 'os' | 'updates' | 'reboot' | 'last_job' | 'uptime' | 'last_seen'
-const AGENT_VERSION = '1.0'
+type FilterKey = 'all' | 'online' | 'offline' | 'updates' | 'reboot' | 'outdated' | 'haos'
 
 /** Map OS name to font-logos CSS class */
 function osIcon(os: string | null): string {
@@ -592,6 +592,8 @@ export function Dashboard() {
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [filterKey, setFilterKey] = useState<FilterKey>('all')
+  const [search, setSearch] = useState('')
   const [confirm, setConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null)
   const [bulkBusy, setBulkBusy] = useState(false)
   const [agentUpdateBusy, setAgentUpdateBusy] = useState(false)
@@ -660,7 +662,9 @@ export function Dashboard() {
     }
   }, [])
 
-  const patchableAgents = (data?.agents ?? []).filter(a => (a.pending_count ?? 0) > 0)
+  const patchableAgents = (data?.agents ?? []).filter(
+    a => a.agent_type !== 'haos' && (a.seconds_ago ?? 9999) < 120 && (a.pending_count ?? 0) > 0
+  )
 
   const patchAll = async () => {
     setBulkBusy(true)
@@ -695,24 +699,6 @@ export function Dashboard() {
     }
   }, [load])
 
-  const updateAllAgents = useCallback(async (retryBatch?: string) => {
-    setAgentUpdateBusy(true)
-    setAgentUpdateStatus(null)
-    agentUpdateBatchRef.current = ''
-    agentUpdateStartRef.current = Date.now()
-    setAgentUpdateModal(true)
-    try {
-      const res = await api.updateAgentsBatch(retryBatch)
-      agentUpdateBatchRef.current = res.batch_id
-      pollAgentUpdateStatus()
-      agentUpdatePollRef.current = setInterval(pollAgentUpdateStatus, 3000)
-    } catch (e) {
-      console.error(e)
-      setAgentUpdateBusy(false)
-      setAgentUpdateModal(false)
-    }
-  }, [pollAgentUpdateStatus])
-
   const closeAgentUpdateModal = useCallback(() => {
     if (agentUpdatePollRef.current) {
       clearInterval(agentUpdatePollRef.current)
@@ -724,28 +710,73 @@ export function Dashboard() {
 
   const stats = data?.stats
   const agents = data?.agents ?? []
+  const agentTargetVersion = data?.agent_target_version ?? '1.0'
   const onlineAgents = agents.filter(a => (a.seconds_ago ?? 9999) < 120)
-  const updatableOnlineAgents = onlineAgents.filter(a => a.agent_type !== 'haos')
-  const onlineCurrentVersionCount = onlineAgents.filter(a => a.agent_version?.trim() === AGENT_VERSION).length
+  const updatableOnlineAgents = onlineAgents.filter(
+    a => a.agent_type !== 'haos' && (a.agent_version?.trim() || '') !== agentTargetVersion
+  )
+  const updateAllAgents = useCallback(async (retryBatch?: string) => {
+    setAgentUpdateBusy(true)
+    setAgentUpdateStatus(null)
+    agentUpdateBatchRef.current = ''
+    agentUpdateStartRef.current = Date.now()
+    setAgentUpdateModal(true)
+    try {
+      const res = await api.updateAgentsBatch(
+        retryBatch,
+        retryBatch ? undefined : updatableOnlineAgents.map(agent => agent.id)
+      )
+      agentUpdateBatchRef.current = res.batch_id
+      pollAgentUpdateStatus()
+      agentUpdatePollRef.current = setInterval(pollAgentUpdateStatus, 3000)
+    } catch (e) {
+      console.error(e)
+      setAgentUpdateBusy(false)
+      setAgentUpdateModal(false)
+    }
+  }, [pollAgentUpdateStatus, updatableOnlineAgents])
+  const onlineCurrentVersionCount = onlineAgents.filter(a => a.agent_version?.trim() === agentTargetVersion).length
   const onlineUnknownVersionCount = onlineAgents.filter(a => !a.agent_version?.trim()).length
-  const versionCardValue = onlineAgents.length === 0 ? '—' : `${onlineCurrentVersionCount}/${onlineAgents.length}`
-  const versionCardSub = `v ${AGENT_VERSION}`
+  const versionCardValue = onlineAgents.length === 0 ? '—' : `${onlineCurrentVersionCount}`
+  const versionCardSub = onlineAgents.length === 0 ? undefined : `/${onlineAgents.length}`
+  const versionCardMeta = `v ${agentTargetVersion}`
   const versionCardAccent = onlineAgents.length === 0
     ? colors.textMuted
     : onlineCurrentVersionCount === onlineAgents.length
       ? colors.success
-      : onlineCurrentVersionCount > 0
-        ? colors.warn
-        : colors.danger
+      : colors.warn
 
   // Offline VMs (seconds_ago > 120)
   const offlineAgents = agents.filter(a => (a.seconds_ago ?? 9999) > 120)
   const showBanner = !bannerDismissed && offlineAgents.length > 0 && !loading
+  const normalizedSearch = search.trim().toLowerCase()
+  const filteredAgents = agents.filter(agent => {
+    const matchesFilter =
+      filterKey === 'all' ? true :
+      filterKey === 'online' ? (agent.seconds_ago ?? 9999) < 120 :
+      filterKey === 'offline' ? (agent.seconds_ago ?? 9999) >= 120 :
+      filterKey === 'updates' ? (agent.pending_count ?? 0) > 0 :
+      filterKey === 'reboot' ? !!agent.reboot_required :
+      filterKey === 'outdated' ? (agent.agent_version?.trim() || '') !== agentTargetVersion :
+      filterKey === 'haos' ? agent.agent_type === 'haos' :
+      true
+    if (!matchesFilter) return false
+    if (!normalizedSearch) return true
+    const haystack = [
+      agent.hostname,
+      agent.id,
+      agent.ip,
+      agent.os_pretty,
+      agent.tags,
+      agent.agent_version,
+    ].join(' ').toLowerCase()
+    return haystack.includes(normalizedSearch)
+  })
 
   // Apply sort if active
   const displayAgents = sortKey
-    ? sortAgents(agents, sortKey, sortDir)
-    : agents
+    ? sortAgents(filteredAgents, sortKey, sortDir)
+    : filteredAgents
 
   return (
     <div style={{ padding: 'clamp(16px, 4vw, 32px)', maxWidth: '1400px', animation: 'pp-fadein 0.4s ease both' }}>
@@ -772,7 +803,7 @@ export function Dashboard() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {isAdmin && (
             <Button
-              variant="ghost"
+              variant={updatableOnlineAgents.length > 0 ? 'primary' : 'ghost'}
               size="sm"
               disabled={agentUpdateBusy || updatableOnlineAgents.length === 0}
               onClick={() => setConfirm({
@@ -848,6 +879,7 @@ export function Dashboard() {
               label="Agent Current"
               value={versionCardValue}
               sub={versionCardSub}
+              meta={versionCardMeta}
               accent={versionCardAccent}
             />
           </>
@@ -861,6 +893,52 @@ export function Dashboard() {
           onDismiss={() => setBannerDismissed(true)}
         />
       )}
+
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: '12px',
+        flexWrap: 'wrap',
+        marginBottom: '16px',
+      }}>
+        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          {[
+            ['all', 'All'],
+            ['online', 'Online'],
+            ['offline', 'Offline'],
+            ['updates', 'Updates'],
+            ['reboot', 'Reboot'],
+            ['outdated', 'Outdated'],
+            ['haos', 'HAOS'],
+          ].map(([key, label]) => (
+            <Button
+              key={key}
+              size="sm"
+              variant={filterKey === key ? 'primary' : 'ghost'}
+              onClick={() => setFilterKey(key as FilterKey)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search hostname, IP, tags..."
+          style={{
+            minWidth: '260px',
+            maxWidth: '100%',
+            background: `${colors.bg}cc`,
+            border: `1px solid ${colors.border}`,
+            color: colors.text,
+            fontSize: '12px',
+            fontFamily: "'Electrolize', monospace",
+            padding: '8px 12px',
+            outline: 'none',
+          }}
+        />
+      </div>
 
       {/* Agent table */}
       <div style={{
@@ -906,7 +984,7 @@ export function Dashboard() {
                 border: `1px solid ${colors.border}`,
                 padding: '1px 7px',
               }}>
-                {agents.length}
+                {displayAgents.length}/{agents.length}
               </span>
             )}
           </div>

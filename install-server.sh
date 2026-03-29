@@ -14,6 +14,9 @@ SSL_DIR="$INSTALL_DIR/ssl"
 SERVICE_USER="patchpilot"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_FILE="/var/log/patchpilot-install.log"
+RUNTIME_LOG_DIR="/var/log/patchpilot"
+BOOTSTRAP_ENV_FILE="/run/patchpilot-bootstrap.env"
+BOOTSTRAP_PASSWORD_FILE="$INSTALL_DIR/bootstrap-admin.txt"
 
 require_root() {
   if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -53,6 +56,7 @@ echo "Venv         : $VENV_DIR"
 echo "UI port      : $PORT (HTTPS)"
 echo "Agent port   : $AGENT_PORT (HTTPS)"
 echo "Log file     : $LOG_FILE"
+echo "Runtime log  : $RUNTIME_LOG_DIR/server.log"
 
 # Dependencies
 step 1 "Installing server dependencies"
@@ -111,7 +115,6 @@ fi
 
 # Generate admin key (used for API auth and Fernet encryption of secrets)
 ADMIN_KEY="$(openssl rand -hex 32)"
-
 # Environment file (only create if missing — never overwrite existing config)
 step 6 "Writing environment configuration"
 if [ ! -f "$INSTALL_DIR/.env" ]; then
@@ -138,27 +141,64 @@ fi
 step 7 "Fixing ownership and service permissions"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$VENV_DIR"
+mkdir -p "$RUNTIME_LOG_DIR"
+touch "$RUNTIME_LOG_DIR/server.log"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$RUNTIME_LOG_DIR"
+chmod 750 "$RUNTIME_LOG_DIR"
+chmod 640 "$RUNTIME_LOG_DIR/server.log"
 
 # Install systemd service file
 cp "$SCRIPT_DIR/patchpilot.service" /etc/systemd/system/patchpilot.service
+cp "$SCRIPT_DIR/patchpilot.logrotate" /etc/logrotate.d/patchpilot
 
 # Sudoers entry for service self-restart (needed for port/SSL changes from UI)
 echo "$SERVICE_USER ALL=(root) NOPASSWD: /bin/systemctl restart patchpilot" > /etc/sudoers.d/patchpilot
 chmod 440 /etc/sudoers.d/patchpilot
 
 step 8 "Enabling and starting PatchPilot"
+rm -f "$BOOTSTRAP_ENV_FILE"
+if ! grep -q '^PATCHPILOT_ADMIN_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null; then
+  if [ -n "${PATCHPILOT_ADMIN_PASSWORD:-}" ]; then
+    cat > "$BOOTSTRAP_ENV_FILE" <<EOF
+PATCHPILOT_ADMIN_PASSWORD=$PATCHPILOT_ADMIN_PASSWORD
+EOF
+  else
+    cat > "$BOOTSTRAP_ENV_FILE" <<EOF
+PATCHPILOT_BOOTSTRAP_PASSWORD_FILE=$BOOTSTRAP_PASSWORD_FILE
+EOF
+  fi
+  chmod 600 "$BOOTSTRAP_ENV_FILE"
+fi
 systemctl daemon-reload
 systemctl enable patchpilot
 systemctl restart patchpilot
+
+if [ -f "$BOOTSTRAP_ENV_FILE" ]; then
+  for _ in $(seq 1 20); do
+    if [ -n "${PATCHPILOT_ADMIN_PASSWORD:-}" ] || [ -f "$BOOTSTRAP_PASSWORD_FILE" ]; then
+      break
+    fi
+    sleep 1
+  done
+  rm -f "$BOOTSTRAP_ENV_FILE"
+  if [ -f "$BOOTSTRAP_PASSWORD_FILE" ]; then
+    chmod 600 "$BOOTSTRAP_PASSWORD_FILE"
+    chown root:root "$BOOTSTRAP_PASSWORD_FILE"
+  fi
+fi
 
 IP="$(hostname -I | awk '{print $1}')"
 echo ""
 echo "=== Installation complete! ==="
 echo "Service    : systemctl status patchpilot"
 echo "Logs       : journalctl -u patchpilot -f"
+echo "File log   : tail -f $RUNTIME_LOG_DIR/server.log"
 echo "Web UI     : https://${IP}:${PORT}"
 echo "Agent API  : https://${IP}:${AGENT_PORT}"
 echo "Install log: $LOG_FILE"
+if [ -f "$BOOTSTRAP_PASSWORD_FILE" ]; then
+  echo "Admin pass : sudo cat $BOOTSTRAP_PASSWORD_FILE"
+fi
 echo ""
 echo "SSL is enabled by default with a self-signed certificate (3 years)."
 echo "You can replace it with your own certificate in the Settings UI."
