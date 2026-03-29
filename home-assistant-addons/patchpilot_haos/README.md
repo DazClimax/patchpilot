@@ -32,10 +32,10 @@ Use these values in the add-on form:
 Example:
 
 ```yaml
-patchpilot_server: "https://192.168.111.20:8050"
+patchpilot_server: "https://PATCHPILOT_HOST:8050"
 register_key: "PASTE_YOUR_REGISTER_KEY_HERE"
 agent_id: "homeassistant"
-advertise_ip: "192.168.111.12"
+advertise_ip: "YOUR_HOME_ASSISTANT_LAN_IP"
 poll_interval: 30
 ca_pem: |
   -----BEGIN CERTIFICATE-----
