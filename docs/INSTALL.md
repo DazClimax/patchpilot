@@ -36,7 +36,7 @@ PatchPilot server installation currently targets Debian/Ubuntu-style hosts and u
 
 ---
 
-## Server Installation
+## Server Installation (Bare Metal)
 
 ### Quick Install
 
@@ -255,13 +255,15 @@ sudo systemctl restart patchpilot-agent
 
 ---
 
-## Docker
+## Docker Server
 
-PatchPilot can also run as a containerized server. This is separate from the Linux agent model on managed VMs.
+PatchPilot can also run as a containerized server. This is separate from the bare metal Debian/Ubuntu install path and from the Linux agent model on managed VMs.
 
 The container runtime prepares the mounted `/data` volume as root and then drops privileges to the dedicated `patchpilot` user before starting the server processes.
 
 ### Quick Start
+
+Use this path if you want to run the PatchPilot server with Docker instead of a native systemd service install.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/main/docker-compose.yml -o docker-compose.yml
