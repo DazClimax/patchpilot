@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.17
+
+- Bumped the HAOS-reported PatchPilot agent version to `1.4` for another webhook auto-update test.
+
 ## 0.2.16
 
 - Fixed PatchPilot batch-status reporting so optional HA agent auto-updates appear correctly in the deployment modal.
