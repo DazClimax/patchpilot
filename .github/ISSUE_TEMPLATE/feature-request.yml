@@ -1,0 +1,69 @@
+name: Feature request
+description: Schlage eine neue Funktion oder Verbesserung fuer PatchPilot vor
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke fuer die Idee. PatchPilot ist bewusst leichtgewichtig, deshalb helfen konkrete Praxisprobleme und klare Nutzungsfaelle besonders.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Welches Problem willst du loesen?
+      description: Beschreibe den aktuellen Schmerzpunkt oder das fehlende Verhalten.
+      placeholder: |
+        Ich moechte ...
+        Heute muss ich dafuer ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Gewuenschte Loesung
+      description: Wie sollte PatchPilot sich deiner Meinung nach verhalten?
+      placeholder: Beschreibe die gewuenschte Funktion moeglichst konkret.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Bereich
+      options:
+        - Dashboard / UI
+        - Server / API
+        - Linux-Agent
+        - Home Assistant Add-on
+        - Docker
+        - Installer / Deployment
+        - Dokumentation
+        - Sonstiges
+    validations:
+      required: true
+
+  - type: textarea
+    id: benefit
+    attributes:
+      label: Warum passt das zu PatchPilot?
+      description: Wie hilft das konkret im Homelab-, Selfhost- oder kleinen Linux-Fleet-Alltag?
+      placeholder: Diese Funktion waere hilfreich, weil ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativen oder Workarounds
+      description: Was machst du aktuell stattdessen?
+      placeholder: Momentan loese ich das ueber ...
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Zusatzkontext
+      description: Screenshots, Links oder Beispiele, falls hilfreich.
+

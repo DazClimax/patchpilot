@@ -1,0 +1,93 @@
+name: Bug report
+description: Melde einen reproduzierbaren Fehler in PatchPilot
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke fuer den Report. Bitte beschreibe das Problem so konkret wie moeglich, damit wir es schnell nachvollziehen koennen.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Zusammenfassung
+      description: Was ist kaputt oder verhaelt sich unerwartet?
+      placeholder: Kurze, klare Beschreibung des Problems.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Bereich
+      description: Wo tritt das Problem auf?
+      options:
+        - Dashboard / UI
+        - Server / API
+        - Linux-Agent
+        - Home Assistant Add-on
+        - Docker
+        - Installer / Deployment
+        - Dokumentation
+        - Sonstiges
+    validations:
+      required: true
+
+  - type: input
+    id: patchpilot_version
+    attributes:
+      label: PatchPilot-Version
+      placeholder: "z. B. v1.6.4"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Umgebung
+      description: Gib die wichtigsten Umgebungsdetails an.
+      placeholder: |
+        Server-OS: Debian 12
+        Agent-OS: Ubuntu 24.04
+        Browser: Firefox 136
+        Installationsart: Docker / Bare Metal / HAOS
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Schritte zum Reproduzieren
+      description: Wie koennen wir das Problem nachstellen?
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Erwartetes Verhalten
+      placeholder: Was sollte stattdessen passieren?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Tatsaechliches Verhalten
+      placeholder: Was ist stattdessen passiert?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, Screenshots oder weitere Hinweise
+      description: Bitte entferne sensible Daten wie Keys, Tokens oder interne Domains.
+      render: shell
+
