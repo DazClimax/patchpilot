@@ -42,7 +42,7 @@ Choose one installation path:
 1. Download the ready-to-use Compose file:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.4/docker-compose.yml -o docker-compose.yml
 ```
 
 2. Review or adjust the defaults:
@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/docker-
 ```yaml
 services:
   patchpilot:
-    image: ghcr.io/dazclimax/patchpilot:v1.6.3
+    image: ghcr.io/dazclimax/patchpilot:v1.6.4
     container_name: patchpilot
     restart: unless-stopped
     security_opt:
@@ -105,7 +105,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: patchpilot:1.6.3
+    image: patchpilot:1.6.4
 ```
 
 Then run:
@@ -119,19 +119,19 @@ docker compose up -d --build
 1. Install the server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.4/setup.sh | sudo bash
 ```
 
 With custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.4/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
 ```
 
 Inspect before running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.3/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.4/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```
