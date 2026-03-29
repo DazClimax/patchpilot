@@ -74,7 +74,19 @@ Start it with:
 ```bash
 docker compose up -d
 sleep 3
-docker compose logs --tail=50 patchpilot | grep "Initial admin credentials\|username:\|password:"
+```
+
+Show only the generated password:
+
+```bash
+docker compose logs --tail=50 patchpilot | grep -m1 "password:" | sed 's/.*password: /Passwort: /'
+```
+
+If you want to wait a moment after first start:
+
+```bash
+sleep 3
+docker compose logs --tail=50 patchpilot | grep -m1 "password:" | sed 's/.*password: /Passwort: /'
 ```
 
 If you want to build locally from the cloned repository instead of using GHCR, replace the service definition with:
@@ -123,7 +135,7 @@ If you do not set `PATCHPILOT_ADMIN_PASSWORD`, PatchPilot generates the initial 
 If you start the stack in the foreground with `docker compose up`, the generated password is printed directly to the console. With `docker compose up -d`, it still lands in the container logs and can be retrieved with:
 
 ```bash
-docker compose logs --tail=50 patchpilot | grep "Initial admin credentials\|username:\|password:"
+docker compose logs --tail=50 patchpilot | grep -m1 "password:" | sed 's/.*password: /Passwort: /'
 ```
 
 ### 1. Install the server
