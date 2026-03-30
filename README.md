@@ -70,13 +70,19 @@ services:
       - /opt/patchpilot:/data
 ```
 
-3. Start the stack:
+3. Pull the published image explicitly if you want to verify the tag first:
+
+```bash
+docker pull ghcr.io/dazclimax/patchpilot:v1.6.4
+```
+
+4. Start the stack:
 
 ```bash
 docker compose up -d
 ```
 
-4. Read the generated bootstrap password if you did not predefine `PATCHPILOT_ADMIN_PASSWORD`:
+5. Read the generated bootstrap password if you did not predefine `PATCHPILOT_ADMIN_PASSWORD`:
 
 ```bash
 sudo cat /opt/patchpilot/bootstrap-admin.txt

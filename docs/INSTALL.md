@@ -274,6 +274,12 @@ curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.4/docker-
 Adjust the file if needed, then start it with:
 
 ```bash
+docker pull ghcr.io/dazclimax/patchpilot:v1.6.4
+```
+
+Then launch it with:
+
+```bash
 docker compose up -d
 ```
 
