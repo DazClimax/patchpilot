@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef, useContext } from 'react'
+import { createPortal } from 'react-dom'
 import { api, Schedule } from '../api/client'
-import { colors, glow, glowText, glowInset, glassBg } from '../theme'
+import { colors, glow, glowText, glowInset, glassBg, controlStyles } from '../theme'
 import { Card } from '../components/Card'
 import { Badge } from '../components/Badge'
 import { Button } from '../components/Button'
@@ -86,12 +87,15 @@ function VmMultiPicker({
 
   const base: React.CSSProperties = {
     width: '100%',
-    padding: '9px 12px',
+    minHeight: controlStyles.minHeight,
+    padding: controlStyles.padding,
+    boxSizing: 'border-box',
     background: colors.bg,
     border: `1px solid ${open ? colors.primary : colors.border}`,
     color: isAll ? colors.textDim : colors.text,
     fontFamily: "'Electrolize', monospace",
-    fontSize: '13px',
+    fontSize: controlStyles.fontSize,
+    lineHeight: controlStyles.lineHeight,
     outline: 'none',
     letterSpacing: '0.05em',
     cursor: 'pointer',
@@ -220,12 +224,15 @@ function VmMultiPicker({
 function useInputStyle() {
   const base: React.CSSProperties = {
     width: '100%',
-    padding: '9px 12px',
+    minHeight: controlStyles.minHeight,
+    padding: controlStyles.padding,
+    boxSizing: 'border-box',
     background: `${colors.bg}`,
     border: `1px solid ${colors.border}`,
     color: colors.text,
     fontFamily: "'Electrolize', monospace",
-    fontSize: '13px',
+    fontSize: controlStyles.fontSize,
+    lineHeight: controlStyles.lineHeight,
     outline: 'none',
     letterSpacing: '0.05em',
     transition: 'border-color 0.15s, box-shadow 0.15s',
@@ -316,10 +323,59 @@ const CRON_FIELDS = [
 
 function CronHelp() {
   const [open, setOpen] = useState(false)
+  const [panelStyle, setPanelStyle] = useState<React.CSSProperties | null>(null)
+  const triggerRef = useRef<HTMLSpanElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open || !triggerRef.current) return
+
+    const updatePosition = () => {
+      if (!triggerRef.current) return
+      const rect = triggerRef.current.getBoundingClientRect()
+      const panelWidth = Math.min(360, window.innerWidth - 32)
+      setPanelStyle({
+        position: 'fixed',
+        top: rect.bottom + 8,
+        left: Math.max(16, rect.right - panelWidth),
+        zIndex: 2200,
+      })
+    }
+
+    updatePosition()
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
+
+    const handlePointerDown = (e: MouseEvent) => {
+      const target = e.target as Node
+      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return
+      setOpen(false)
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [open])
 
   return (
     <span style={{ position: 'relative', display: 'inline-block', marginLeft: '6px' }}>
       <span
+        ref={triggerRef}
         onClick={() => setOpen(o => !o)}
         title="Cron expression help"
         style={{
@@ -341,19 +397,20 @@ function CronHelp() {
       >
         ?
       </span>
-      {open && (
-        <div style={{
-          position: 'absolute',
-          top: '22px',
-          left: '0',
-          zIndex: 200,
-          background: colors.bgCard,
-          border: `1px solid ${colors.border}`,
-          padding: '14px',
-          minWidth: '320px',
-          boxShadow: `0 4px 24px rgba(0,0,0,0.6), 0 0 12px ${colors.primary}18`,
-          animation: 'pp-fadein 0.15s ease both',
-        }}>
+      {open && panelStyle && typeof document !== 'undefined' && createPortal((
+        <div
+          ref={panelRef}
+          style={{
+            ...panelStyle,
+            background: colors.bgCard,
+            border: `1px solid ${colors.border}`,
+            padding: '14px',
+            minWidth: '320px',
+            maxWidth: 'min(360px, calc(100vw - 32px))',
+            boxShadow: `0 8px 30px rgba(0,0,0,0.7), 0 0 14px ${colors.primary}22`,
+            animation: 'pp-fadein 0.15s ease both',
+          }}
+        >
           <div style={{
             fontFamily: "'Orbitron', sans-serif",
             fontSize: '10px',
@@ -408,7 +465,7 @@ function CronHelp() {
             All times are evaluated in <span style={{ color: colors.primary }}>server local time (CET/CEST)</span>.
           </div>
         </div>
-      )}
+      ), document.body)}
     </span>
   )
 }
@@ -616,7 +673,15 @@ export function SchedulePage() {
           zIndex: 2,
         }}>
           <Card>
-            <SectionHeader>{editingId !== null ? 'Edit Schedule' : 'New Schedule'}</SectionHeader>
+            <SectionHeader
+              right={
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                  <CronHelp />
+                </div>
+              }
+            >
+              {editingId !== null ? 'Edit Schedule' : 'New Schedule'}
+            </SectionHeader>
             <form onSubmit={handleSubmit}>
               <div style={{
                 display: 'grid',
@@ -652,9 +717,7 @@ export function SchedulePage() {
 
                 {/* Cron expression */}
                 <div>
-                  <label style={{ ...labelStyle, display: 'flex', alignItems: 'center' }}>
-                    Cron Expression <CronHelp />
-                  </label>
+                  <label style={labelStyle}>Cron Expression</label>
                   <FocusInput
                     value={form.cron}
                     onChange={v => setForm(f => ({ ...f, cron: v }))}

@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { Animator, AnimatorGeneralProvider, Dots, MovingLines, useBleeps } from '@arwes/react'
 import { auth, api } from '../api/client'
-import { colors, glow, glowText, glassBg, globalKeyframes } from '../theme'
+import { colors, glow, glowText, glassBg, globalKeyframes, controlStyles } from '../theme'
 import { useUiEffects } from '../effects'
 
 interface LoginPageProps {
@@ -55,12 +55,14 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
-    padding: '10px 14px',
+    minHeight: controlStyles.minHeight,
+    padding: `${controlStyles.paddingY} 14px`,
     background: `${colors.bg}cc`,
     border: `1px solid ${error ? colors.danger : colors.border}`,
     color: colors.text,
     fontFamily: "'Electrolize', monospace",
-    fontSize: '13px',
+    fontSize: controlStyles.fontSize,
+    lineHeight: controlStyles.lineHeight,
     letterSpacing: '0.06em',
     outline: 'none',
     marginBottom: '8px',

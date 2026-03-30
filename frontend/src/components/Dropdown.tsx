@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { colors, glow, glowText, glassBg } from '../theme'
+import { createPortal } from 'react-dom'
+import { colors, glow, glowText, glassBg, controlStyles } from '../theme'
 
 export interface DropdownOption {
   value: string
@@ -16,9 +17,34 @@ interface DropdownProps {
 export function Dropdown({ value, onChange, options, placeholder }: DropdownProps) {
   const [open, setOpen] = useState(false)
   const [focused, setFocused] = useState(false)
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties | null>(null)
   const ref = useRef<HTMLDivElement>(null)
 
   const selected = options.find(o => o.value === value)
+
+  useEffect(() => {
+    if (!open || !ref.current) return
+
+    const updatePosition = () => {
+      if (!ref.current) return
+      const rect = ref.current.getBoundingClientRect()
+      setMenuStyle({
+        position: 'fixed',
+        top: rect.bottom + 2,
+        left: rect.left,
+        width: rect.width,
+        zIndex: 1000,
+      })
+    }
+
+    updatePosition()
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', updatePosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', updatePosition, true)
+    }
+  }, [open])
 
   // Close on outside click
   useEffect(() => {
@@ -53,12 +79,15 @@ export function Dropdown({ value, onChange, options, placeholder }: DropdownProp
         onClick={() => setOpen(o => !o)}
         style={{
           width: '100%',
-          padding: '9px 36px 9px 12px',
+          minHeight: controlStyles.minHeight,
+          padding: `${controlStyles.paddingY} 34px ${controlStyles.paddingY} ${controlStyles.paddingX}`,
+          boxSizing: 'border-box',
           background: colors.bg,
           border: `1px solid ${borderColor}`,
           color: selected ? colors.text : colors.textMuted,
           fontFamily: "'Electrolize', monospace",
-          fontSize: '13px',
+          fontSize: controlStyles.fontSize,
+          lineHeight: controlStyles.lineHeight,
           letterSpacing: '0.05em',
           cursor: 'pointer',
           textAlign: 'left',
@@ -87,13 +116,9 @@ export function Dropdown({ value, onChange, options, placeholder }: DropdownProp
       </button>
 
       {/* Dropdown list */}
-      {open && (
+      {open && menuStyle && typeof document !== 'undefined' && createPortal((
         <div style={{
-          position: 'absolute',
-          top: 'calc(100% + 2px)',
-          left: 0,
-          right: 0,
-          zIndex: 150,
+          ...menuStyle,
           background: glassBg(0.98),
           backdropFilter: 'blur(16px)',
           WebkitBackdropFilter: 'blur(16px)',
@@ -160,7 +185,7 @@ export function Dropdown({ value, onChange, options, placeholder }: DropdownProp
             )
           })}
         </div>
-      )}
+      ), document.body)}
     </div>
   )
 }

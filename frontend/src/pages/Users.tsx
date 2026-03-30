@@ -1,19 +1,24 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { api, User } from '../api/client'
-import { colors, glassBg } from '../theme'
+import { colors, glassBg, controlStyles } from '../theme'
 import { Card } from '../components/Card'
 import { Button } from '../components/Button'
+import { Dropdown } from '../components/Dropdown'
 import { PageHeader, SectionHeader } from '../components/SectionHeader'
+import { ConfirmModal } from '../components/ConfirmModal'
 import { useToast } from '../components/Toast'
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
-  padding: '8px 12px',
+  minHeight: controlStyles.minHeight,
+  padding: controlStyles.padding,
+  boxSizing: 'border-box',
   background: colors.bg,
   border: `1px solid ${colors.border}`,
   color: colors.text,
   fontFamily: "'Electrolize', monospace",
-  fontSize: '13px',
+  fontSize: controlStyles.fontSize,
+  lineHeight: controlStyles.lineHeight,
   outline: 'none',
   letterSpacing: '0.04em',
 }
@@ -35,6 +40,7 @@ export function UsersPage() {
   const [loadError, setLoadError] = useState<string>('')
   const [resetId, setResetId] = useState<number | null>(null)
   const [resetPw, setResetPw] = useState('')
+  const [deleteUser, setDeleteUser] = useState<User | null>(null)
   const { showToast } = useToast()
 
   const load = useCallback(async () => {
@@ -67,7 +73,6 @@ export function UsersPage() {
   }
 
   const handleDelete = async (user: User) => {
-    if (!confirm(`Delete user "${user.username}"?`)) return
     try {
       await api.deleteUser(user.id)
       showToast('User deleted', 'success')
@@ -120,8 +125,29 @@ export function UsersPage() {
     )
   }
 
+  const roleOptions = [
+    { value: 'admin', label: 'admin' },
+    { value: 'user', label: 'user' },
+    { value: 'readonly', label: 'readonly' },
+  ]
+
   return (
     <div style={{ padding: 'clamp(16px, 4vw, 32px)', maxWidth: '1400px', animation: 'pp-fadein 0.4s ease both' }}>
+      {deleteUser && (
+        <ConfirmModal
+          title="Delete User"
+          message={`Delete user "${deleteUser.username}"?`}
+          confirmLabel="Delete"
+          variant="danger"
+          onConfirm={() => {
+            const user = deleteUser
+            setDeleteUser(null)
+            handleDelete(user)
+          }}
+          onCancel={() => setDeleteUser(null)}
+        />
+      )}
+
       <PageHeader>Users</PageHeader>
 
       {/* User list */}
@@ -160,16 +186,14 @@ export function UsersPage() {
                 {users.map(u => (
                   <tr key={u.id} style={{ borderBottom: `1px solid ${colors.border}22` }}>
                     <td style={{ padding: '10px 10px', color: colors.text }}>{u.username}</td>
-                    <td style={{ padding: '10px 10px' }}>
-                      <select
-                        value={u.role}
-                        onChange={e => handleRoleChange(u, e.target.value)}
-                        style={{ ...inputStyle, width: 'auto', padding: '4px 8px', fontSize: '11px' }}
-                      >
-                        <option value="admin">admin</option>
-                        <option value="user">user</option>
-                        <option value="readonly">readonly</option>
-                      </select>
+                    <td style={{ padding: '10px 10px', position: 'relative', zIndex: 20 }}>
+                      <div style={{ width: '140px', position: 'relative', zIndex: 20 }}>
+                        <Dropdown
+                          value={u.role}
+                          onChange={value => handleRoleChange(u, value)}
+                          options={roleOptions}
+                        />
+                      </div>
                     </td>
                     <td style={{ padding: '10px 10px', color: colors.textMuted, fontSize: '11px' }}>
                       {u.created?.replace('T', ' ').slice(0, 16) ?? '—'}
@@ -184,19 +208,19 @@ export function UsersPage() {
                             onKeyDown={e => { if (e.key === 'Enter') handleResetPassword(u); if (e.key === 'Escape') { setResetId(null); setResetPw('') } }}
                             placeholder="new password"
                             autoFocus
-                            style={{ ...inputStyle, width: '120px', padding: '4px 8px', fontSize: '11px' }}
+                            style={{ ...inputStyle, width: '120px', minHeight: '36px', padding: '6px 8px', fontSize: '11px', lineHeight: '16px' }}
                           />
-                          <Button size="sm" onClick={() => handleResetPassword(u)}>Set</Button>
-                          <Button variant="ghost" size="sm" onClick={() => { setResetId(null); setResetPw('') }}>✕</Button>
+                          <Button size="sm" style={{ minHeight: '36px' }} onClick={() => handleResetPassword(u)}>Set</Button>
+                          <Button variant="ghost" size="sm" style={{ minHeight: '36px' }} onClick={() => { setResetId(null); setResetPw('') }}>✕</Button>
                         </div>
                       ) : (
-                        <Button variant="ghost" size="sm" onClick={() => { setResetId(u.id); setResetPw('') }}>
+                        <Button variant="ghost" size="sm" style={{ minHeight: '39px', minWidth: '60px' }} onClick={() => { setResetId(u.id); setResetPw('') }}>
                           Reset
                         </Button>
                       )}
                     </td>
                     <td style={{ padding: '10px 10px', textAlign: 'right' }}>
-                      <Button variant="danger" size="sm" onClick={() => handleDelete(u)}>
+                      <Button variant="danger" size="sm" style={{ minHeight: '39px', minWidth: '60px' }} onClick={() => setDeleteUser(u)}>
                         Delete
                       </Button>
                     </td>
@@ -233,17 +257,13 @@ export function UsersPage() {
           </div>
           <div style={{ flex: '0 0 120px' }}>
             <div style={labelStyle}>Role</div>
-            <select
+            <Dropdown
               value={newUser.role}
-              onChange={e => setNewUser(p => ({ ...p, role: e.target.value }))}
-              style={inputStyle}
-            >
-              <option value="admin">admin</option>
-              <option value="user">user</option>
-              <option value="readonly">readonly</option>
-            </select>
+              onChange={value => setNewUser(p => ({ ...p, role: value }))}
+              options={roleOptions}
+            />
           </div>
-          <Button type="submit" disabled={!newUser.username.trim() || !newUser.password}>
+          <Button type="submit" style={{ minHeight: '39px' }} disabled={!newUser.username.trim() || !newUser.password}>
             Add User
           </Button>
         </form>

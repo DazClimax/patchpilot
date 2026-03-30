@@ -17,6 +17,15 @@ export const colors = {
   textMuted:  '#2a5560',
 }
 
+export const controlStyles = {
+  minHeight: '35px',
+  paddingY: '7px',
+  paddingX: '12px',
+  padding: '7px 12px',
+  lineHeight: '17px',
+  fontSize: '13px',
+} as const
+
 // Standard glow — subtle ambient
 export const glow = (color: string, size = 8) =>
   `0 0 ${size}px ${color}44, 0 0 ${size * 2}px ${color}22`

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
 import { api, Settings, auth } from '../api/client'
-import { colors, glow, glowText, glassBg } from '../theme'
+import { colors, glow, glowText, glassBg, controlStyles } from '../theme'
 import { Card } from '../components/Card'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { Button } from '../components/Button'
@@ -16,12 +16,15 @@ import { persistUiEffectsSettings } from '../effects'
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
-  padding: '8px 12px',
+  minHeight: controlStyles.minHeight,
+  padding: controlStyles.padding,
+  boxSizing: 'border-box',
   background: colors.bg,
   border: `1px solid ${colors.border}`,
   color: colors.text,
   fontFamily: "'Electrolize', monospace",
-  fontSize: '13px',
+  fontSize: controlStyles.fontSize,
+  lineHeight: controlStyles.lineHeight,
   outline: 'none',
   letterSpacing: '0.04em',
 }
@@ -235,10 +238,10 @@ function TelegramGuide() {
 }
 
 const SMTP_SECURITY_OPTIONS = [
-  { value: 'starttls', label: 'STARTTLS (Port 587)' },
-  { value: 'ssl',      label: 'SSL / TLS (Port 465)' },
-  { value: 'plain',    label: 'Plain + Login (Port 25)' },
-  { value: 'none',     label: 'Plain / No Auth (Port 25)' },
+  { value: 'starttls', label: 'STARTTLS (587)' },
+  { value: 'ssl',      label: 'SSL / TLS (465)' },
+  { value: 'plain',    label: 'Plain + Login (25)' },
+  { value: 'none',     label: 'Plain / No Auth (25)' },
 ]
 
 const SMTP_DEFAULT_PORTS: Record<string, string> = {
