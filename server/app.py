@@ -45,7 +45,7 @@ _CONTENT_SECURITY_POLICY = (
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; "
     "font-src 'self' data:; "
-    "connect-src 'self' capacitor: ionic:; "
+    "connect-src 'self'; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "frame-ancestors 'none'"
@@ -60,11 +60,7 @@ _raw_origins = os.environ.get(
     "PATCHPILOT_ALLOWED_ORIGINS",
     "http://localhost:5173,http://localhost:8000",
 )
-# Always include Capacitor/Ionic app origins (native mobile app)
-_APP_ORIGINS = ["capacitor://localhost", "ionic://localhost", "http://localhost"]
-ALLOWED_ORIGINS = list(dict.fromkeys(
-    [o.strip() for o in _raw_origins.split(",") if o.strip()] + _APP_ORIGINS
-))
+ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
