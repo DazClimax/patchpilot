@@ -31,7 +31,7 @@ class TestInvalidToken:
     def test_job_result_wrong_token_is_401(self, client, registered_agent):
         agent_id, token = registered_agent
         # Create and poll a job to get its ID
-        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "upgrade", "params": {}})
+        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "patch", "params": {}})
         jobs = client.get(f"/api/agents/{agent_id}/jobs", headers={"x-token": token}).json()
         job_id = jobs[0]["id"]
 
@@ -68,7 +68,7 @@ class TestMissingToken:
 
     def test_job_result_no_token_header_is_422(self, client, registered_agent):
         agent_id, token = registered_agent
-        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "upgrade", "params": {}})
+        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "patch", "params": {}})
         jobs = client.get(f"/api/agents/{agent_id}/jobs", headers={"x-token": token}).json()
         job_id = jobs[0]["id"]
 
@@ -100,7 +100,7 @@ class TestCrossAgentIsolation:
         id_b, tok_b = self._register(client, "b")
 
         # Create a job for agent A
-        client.post(f"/api/agents/{id_a}/jobs", json={"type": "upgrade", "params": {}})
+        client.post(f"/api/agents/{id_a}/jobs", json={"type": "patch", "params": {}})
 
         # Agent B polls its own queue — should be empty
         resp = client.get(f"/api/agents/{id_b}/jobs", headers={"x-token": tok_b})
@@ -124,7 +124,7 @@ class TestCrossAgentIsolation:
         id_b, tok_b = self._register(client, "b3")
 
         # Create and poll a job for agent A
-        client.post(f"/api/agents/{id_a}/jobs", json={"type": "check", "params": {}})
+        client.post(f"/api/agents/{id_a}/jobs", json={"type": "refresh_updates", "params": {}})
         jobs = client.get(f"/api/agents/{id_a}/jobs", headers={"x-token": tok_a}).json()
         job_id = jobs[0]["id"]
 

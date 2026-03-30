@@ -10,6 +10,7 @@ import socket
 import subprocess
 import threading
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -26,7 +27,17 @@ from scheduler import scheduler, schedule_job, register_system_jobs
 from notifications import notification_manager
 import metrics as metrics_module
 
-app = FastAPI(title="PatchPilot API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _startup_app()
+    try:
+        yield
+    finally:
+        _shutdown_app()
+
+
+app = FastAPI(title="PatchPilot API", lifespan=lifespan)
 
 _CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
@@ -34,7 +45,7 @@ _CONTENT_SECURITY_POLICY = (
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; "
     "font-src 'self' data:; "
-    "connect-src 'self'; "
+    "connect-src 'self' capacitor: ionic:; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "frame-ancestors 'none'"
@@ -49,7 +60,11 @@ _raw_origins = os.environ.get(
     "PATCHPILOT_ALLOWED_ORIGINS",
     "http://localhost:5173,http://localhost:8000",
 )
-ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+# Always include Capacitor/Ionic app origins (native mobile app)
+_APP_ORIGINS = ["capacitor://localhost", "ionic://localhost", "http://localhost"]
+ALLOWED_ORIGINS = list(dict.fromkeys(
+    [o.strip() for o in _raw_origins.split(",") if o.strip()] + _APP_ORIGINS
+))
 
 app.add_middleware(
     CORSMiddleware,
@@ -115,25 +130,36 @@ def _remove_bootstrap_password_file() -> None:
 # Prefixes that are agent-only (served on AGENT_PORT)
 _AGENT_PREFIXES = ("/api/agents/", "/agent/")
 
+
+def _is_agent_only_request(path: str, method: str) -> bool:
+    """Return True only for agent-facing endpoints that must stay on AGENT_PORT."""
+    if path == "/api/agents/register" or path.startswith("/agent/"):
+        return True
+    if not path.startswith("/api/agents/"):
+        return False
+    suffix = path[len("/api/agents/"):]
+    if suffix.endswith("/heartbeat"):
+        return True
+    if method == "GET" and suffix.endswith("/jobs"):
+        return True
+    if method == "POST" and "/jobs/" in suffix and suffix.endswith("/result"):
+        return True
+    return False
+
+
 @app.middleware("http")
 async def _port_routing(request: Request, call_next):
     """Block requests that arrive on the wrong port."""
     if _UI_PORT != _AGENT_PORT:
         port = request.url.port or (443 if request.url.scheme == "https" else 80)
         path = request.url.path
-        is_agent_path = any(path.startswith(p) for p in _AGENT_PREFIXES)
         is_shared = path in ("/api/ping", "/api/server-time")
-
-        # Agent-only paths: heartbeat, job polling, result reporting, registration
-        _agent_only = ("/api/agents/register", "/agent/")
-        is_agent_only = any(path.startswith(p) or path == p.rstrip("/") for p in _agent_only) or \
-            (path.startswith("/api/agents/") and ("/heartbeat" in path or "/jobs" in path and "/result" in path))
+        is_agent_only = _is_agent_only_request(path, request.method)
 
         if not is_shared:
-            if port == _AGENT_PORT and not is_agent_path:
+            if port == _AGENT_PORT and not is_agent_only:
                 return JSONResponse(status_code=404, content={"detail": "Not available on agent port"})
-            if port == _UI_PORT and path.startswith("/agent/"):
-                # Block raw file downloads on UI port
+            if port == _UI_PORT and is_agent_only:
                 return JSONResponse(status_code=404, content={"detail": "Not available on UI port"})
     return await call_next(request)
 
@@ -701,8 +727,7 @@ def _schedule_restart(delay: float = 1.5) -> None:
     threading.Thread(target=_do, daemon=True).start()
 
 
-@app.on_event("startup")
-def startup():
+def _startup_app():
     init_db()
     with get_db_ctx() as conn:
         try:
@@ -751,8 +776,7 @@ def startup():
         _start_legacy_forwarder(_LEGACY_PORT, _SERVER_PORT)
 
 
-@app.on_event("shutdown")
-def shutdown():
+def _shutdown_app():
     scheduler.shutdown(wait=False)
 
 
@@ -951,6 +975,11 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
     # Detect connection protocol from the request
     protocol = "https" if request.url.scheme == "https" else "http"
     with get_db_ctx() as conn:
+        current = conn.execute(
+            "SELECT hostname FROM agents WHERE id=?",
+            (agent_id,),
+        ).fetchone()
+        hostname = fields["hostname"] or (current["hostname"] if current else "unknown")
         conn.execute(
             """UPDATE agents SET
                 hostname=?, ip=?, os_pretty=?, kernel=?, arch=?, package_manager=?, agent_version=?, agent_type=?, capabilities=?,
@@ -958,7 +987,7 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
                 protocol=?, config_review_required=?, config_review_note=?
                WHERE id=?""",
             (
-                fields["hostname"],
+                hostname,
                 fields["ip"],
                 fields["os_pretty"],
                 fields["kernel"],
@@ -1512,10 +1541,20 @@ async def toggle_schedule(sid: int, request: Request):
     data = await request.json()
     enabled = 1 if data.get("enabled") else 0
     with get_db_ctx() as conn:
-        row = conn.execute("SELECT id FROM schedules WHERE id=?", (sid,)).fetchone()
+        row = conn.execute(
+            "SELECT id, name, cron, action, target FROM schedules WHERE id=?",
+            (sid,),
+        ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Schedule not found")
         conn.execute("UPDATE schedules SET enabled=? WHERE id=?", (enabled, sid))
+    if enabled:
+        schedule_job(sid, row["name"], row["cron"], row["action"], row["target"])
+    else:
+        try:
+            scheduler.remove_job(str(sid))
+        except Exception:
+            pass
     return {"status": "updated"}
 
 
@@ -1533,15 +1572,20 @@ async def update_schedule(sid: int, request: Request):
     _validate_cron(cron)
     _validate_schedule_target(target)
     with get_db_ctx() as conn:
-        row = conn.execute("SELECT id FROM schedules WHERE id=?", (sid,)).fetchone()
+        row = conn.execute("SELECT id, enabled FROM schedules WHERE id=?", (sid,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Schedule not found")
         conn.execute(
             "UPDATE schedules SET name=?, cron=?, action=?, target=? WHERE id=?",
             (name, cron, action, target, sid),
         )
-    # Re-register with updated cron
-    schedule_job(sid, name, cron, action, target)
+    if row["enabled"]:
+        schedule_job(sid, name, cron, action, target)
+    else:
+        try:
+            scheduler.remove_job(str(sid))
+        except Exception:
+            pass
     return {"status": "updated"}
 
 

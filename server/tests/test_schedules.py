@@ -2,13 +2,13 @@
 test_schedules.py — tests for the schedule endpoints.
 """
 
-import pytest
+import app as app_module
 
 
 VALID_CRON = "0 3 * * *"
 
 
-def _create_schedule(client, name="Nightly upgrade", cron=VALID_CRON, action="upgrade", target="all"):
+def _create_schedule(client, name="Nightly patch", cron=VALID_CRON, action="patch", target="all"):
     resp = client.post(
         "/api/schedules",
         json={"name": name, "cron": cron, "action": action, "target": target},
@@ -32,11 +32,11 @@ class TestListSchedules:
         assert len(resp.json()["schedules"]) == 1
 
     def test_list_schedules_returns_all_fields(self, client):
-        _create_schedule(client, name="Test Sched", cron="0 2 * * 1", action="check", target="all")
+        _create_schedule(client, name="Test Sched", cron="0 2 * * 1", action="refresh_updates", target="all")
         schedule = client.get("/api/schedules").json()["schedules"][0]
         assert schedule["name"] == "Test Sched"
         assert schedule["cron"] == "0 2 * * 1"
-        assert schedule["action"] == "check"
+        assert schedule["action"] == "refresh_updates"
         assert schedule["target"] == "all"
         assert schedule["enabled"] == 1
 
@@ -72,10 +72,12 @@ class TestToggleSchedule:
     def test_disable_schedule(self, client):
         _create_schedule(client)
         sid = client.get("/api/schedules").json()["schedules"][0]["id"]
+        scheduler_mock = client.app.state.scheduler_mock
 
         resp = client.patch(f"/api/schedules/{sid}", json={"enabled": False})
         assert resp.status_code == 200
         assert resp.json()["status"] == "updated"
+        scheduler_mock.remove_job.assert_called_with(str(sid))
 
         schedule = client.get("/api/schedules").json()["schedules"][0]
         assert schedule["enabled"] == 0
@@ -83,20 +85,23 @@ class TestToggleSchedule:
     def test_enable_schedule(self, client):
         _create_schedule(client)
         sid = client.get("/api/schedules").json()["schedules"][0]["id"]
+        scheduler_mock = client.app.state.scheduler_mock
 
         # Disable first
         client.patch(f"/api/schedules/{sid}", json={"enabled": False})
+        scheduler_mock.reset_mock()
         # Re-enable
         resp = client.patch(f"/api/schedules/{sid}", json={"enabled": True})
         assert resp.status_code == 200
+        scheduler_mock.add_job.assert_called()
 
         schedule = client.get("/api/schedules").json()["schedules"][0]
         assert schedule["enabled"] == 1
 
     def test_toggle_nonexistent_schedule_returns_200(self, client):
-        # Patch on a nonexistent ID performs an UPDATE that matches zero rows — not an error
+        # The API now returns 404 for unknown schedules.
         resp = client.patch("/api/schedules/99999", json={"enabled": False})
-        assert resp.status_code == 200
+        assert resp.status_code == 404
 
 
 class TestDeleteSchedule:
@@ -119,3 +124,32 @@ class TestDeleteSchedule:
     def test_delete_nonexistent_schedule_returns_200(self, client):
         resp = client.delete("/api/schedules/99999")
         assert resp.status_code == 200
+
+
+class TestScheduleUpdate:
+    def test_update_disabled_schedule_does_not_re_register_job(self, client):
+        _create_schedule(client)
+        sid = client.get("/api/schedules").json()["schedules"][0]["id"]
+        scheduler_mock = client.app.state.scheduler_mock
+
+        client.patch(f"/api/schedules/{sid}", json={"enabled": False})
+        scheduler_mock.reset_mock()
+
+        resp = client.put(
+            f"/api/schedules/{sid}",
+            json={"name": "Updated", "cron": "0 5 * * *", "action": "patch", "target": "all"},
+        )
+
+        assert resp.status_code == 200
+        scheduler_mock.add_job.assert_not_called()
+        scheduler_mock.remove_job.assert_called_with(str(sid))
+
+
+class TestPortRouting:
+    def test_helper_marks_only_agent_runtime_routes_as_agent_only(self):
+        assert app_module._is_agent_only_request("/api/agents/register", "POST") is True
+        assert app_module._is_agent_only_request("/api/agents/demo/heartbeat", "POST") is True
+        assert app_module._is_agent_only_request("/api/agents/demo/jobs", "GET") is True
+        assert app_module._is_agent_only_request("/api/agents/demo/jobs/1/result", "POST") is True
+        assert app_module._is_agent_only_request("/api/agents/demo", "GET") is False
+        assert app_module._is_agent_only_request("/api/agents/demo/jobs", "POST") is False

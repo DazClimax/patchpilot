@@ -24,24 +24,24 @@ class TestAgentRegistration:
 
     def test_register_with_explicit_id_and_token(self, client):
         agent_id = "explicit-id-001"
-        token = "explicit-token-abc"
         resp = client.post(
             "/api/agents/register",
-            json={"id": agent_id, "token": token, "hostname": "host1"},
+            json={"id": agent_id, "token": "explicit-token-abc", "hostname": "host1"},
         )
         assert resp.status_code == 200
         data = resp.json()
         assert data["agent_id"] == agent_id
-        assert data["token"] == token
+        assert isinstance(data["token"], str)
+        assert len(data["token"]) > 0
 
     def test_register_same_id_returns_existing_token(self, client):
         agent_id = "duplicate-agent"
-        token = "original-token"
-        client.post("/api/agents/register", json={"id": agent_id, "token": token, "hostname": "h"})
+        first = client.post("/api/agents/register", json={"id": agent_id, "token": "original-token", "hostname": "h"})
         resp = client.post("/api/agents/register", json={"id": agent_id, "token": "new-token", "hostname": "h"})
         assert resp.status_code == 200
-        # Must return the original token, not the new one
-        assert resp.json()["token"] == token
+        assert first.status_code == 200
+        # Re-registration rotates the returned token.
+        assert resp.json()["token"] != first.json()["token"]
 
     def test_register_stores_agent_metadata(self, client):
         resp = client.post(
@@ -144,16 +144,16 @@ class TestJobPolling:
     def test_poll_jobs_returns_pending_jobs(self, client, registered_agent):
         agent_id, token = registered_agent
         # Create a job via the web API
-        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "upgrade", "params": {}})
+        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "patch", "params": {}})
         resp = client.get(f"/api/agents/{agent_id}/jobs", headers={"x-token": token})
         assert resp.status_code == 200
         jobs = resp.json()
         assert len(jobs) == 1
-        assert jobs[0]["type"] == "upgrade"
+        assert jobs[0]["type"] == "patch"
 
     def test_poll_jobs_marks_running(self, client, registered_agent):
         agent_id, token = registered_agent
-        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "upgrade", "params": {}})
+        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "patch", "params": {}})
         # First poll returns the job and marks it running
         client.get(f"/api/agents/{agent_id}/jobs", headers={"x-token": token})
         # Second poll should return nothing (already running, not pending)
@@ -173,7 +173,7 @@ class TestJobPolling:
 class TestJobResult:
     def test_submit_job_result(self, client, registered_agent):
         agent_id, token = registered_agent
-        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "upgrade", "params": {}})
+        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "patch", "params": {}})
         jobs = client.get(f"/api/agents/{agent_id}/jobs", headers={"x-token": token}).json()
         job_id = jobs[0]["id"]
 
@@ -187,7 +187,7 @@ class TestJobResult:
 
     def test_job_result_updates_status(self, client, registered_agent):
         agent_id, token = registered_agent
-        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "upgrade", "params": {}})
+        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "patch", "params": {}})
         jobs = client.get(f"/api/agents/{agent_id}/jobs", headers={"x-token": token}).json()
         job_id = jobs[0]["id"]
 
@@ -203,7 +203,7 @@ class TestJobResult:
 
     def test_job_result_invalid_token(self, client, registered_agent):
         agent_id, token = registered_agent
-        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "upgrade", "params": {}})
+        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "patch", "params": {}})
         jobs = client.get(f"/api/agents/{agent_id}/jobs", headers={"x-token": token}).json()
         job_id = jobs[0]["id"]
 
@@ -276,17 +276,17 @@ class TestCreateJob:
         agent_id, _ = registered_agent
         resp = client.post(
             f"/api/agents/{agent_id}/jobs",
-            json={"type": "upgrade", "params": {"packages": ["bash"]}},
+            json={"type": "patch", "params": {"packages": ["bash"]}},
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "queued"
 
     def test_created_job_appears_in_agent_detail(self, client, registered_agent):
         agent_id, _ = registered_agent
-        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "check", "params": {}})
+        client.post(f"/api/agents/{agent_id}/jobs", json={"type": "refresh_updates", "params": {}})
         detail = client.get(f"/api/agents/{agent_id}").json()
         job_types = [j["type"] for j in detail["jobs"]]
-        assert "check" in job_types
+        assert "refresh_updates" in job_types
 
 
 # ---------------------------------------------------------------------------

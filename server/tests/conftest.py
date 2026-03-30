@@ -2,17 +2,16 @@
 conftest.py — shared pytest fixtures for PatchPilot server tests.
 
 Strategy:
-- Patch db.DB_PATH to an in-memory SQLite database before any import of app.py
-  so every test runs against a fresh, isolated database.
-- Patch scheduler.scheduler to a dummy object so APScheduler never starts.
-- Provide a TestClient, a pre-registered agent fixture, and the admin key.
+- Provide a fresh in-memory SQLite database per test.
+- Patch the symbols imported into app.py directly, because startup handlers call
+  app-local references, not the originals from db.py.
+- Disable scheduler/system background work so tests stay deterministic.
 """
 
-import sqlite3
 import contextlib
 import secrets
-import os
-from unittest.mock import MagicMock, patch
+import sqlite3
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,11 +33,20 @@ def _make_in_memory_conn():
             os_pretty   TEXT,
             kernel      TEXT,
             arch        TEXT,
+            package_manager TEXT,
+            agent_version TEXT DEFAULT '',
+            agent_type  TEXT DEFAULT 'linux',
+            capabilities TEXT DEFAULT '',
             reboot_required INTEGER DEFAULT 0,
             pending_count   INTEGER DEFAULT 0,
             last_seen   TEXT,
             registered  TEXT DEFAULT (datetime('now','localtime')),
-            token       TEXT NOT NULL
+            token       TEXT NOT NULL,
+            tags        TEXT DEFAULT '',
+            uptime_seconds INTEGER,
+            protocol    TEXT DEFAULT 'http',
+            config_review_required INTEGER DEFAULT 0,
+            config_review_note TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS packages (
@@ -72,6 +80,34 @@ def _make_in_memory_conn():
             last_run    TEXT,
             next_run    TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role          TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin','user','readonly')),
+            created       TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS rename_aliases (
+            old_id   TEXT PRIMARY KEY,
+            new_id   TEXT NOT NULL,
+            created  TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_packages_agent_id
+            ON packages(agent_id);
+
+        CREATE INDEX IF NOT EXISTS idx_jobs_agent_id_status
+            ON jobs(agent_id, status);
+
+        CREATE INDEX IF NOT EXISTS idx_agents_last_seen
+            ON agents(last_seen);
     """)
     conn.commit()
     return conn
@@ -82,12 +118,31 @@ def _make_in_memory_conn():
 # ---------------------------------------------------------------------------
 
 TEST_ADMIN_KEY = "test-admin-key-fixed"
+TEST_REGISTER_KEY = "test-register-key"
 
 
 @pytest.fixture(autouse=True)
 def _patch_env(monkeypatch):
     """Fix the admin key so tests can rely on a known value."""
     monkeypatch.setenv("PATCHPILOT_ADMIN_KEY", TEST_ADMIN_KEY)
+
+
+@pytest.fixture(autouse=True)
+def _reset_app_state():
+    """Reset global in-memory app state between tests."""
+    import app as app_module
+
+    app_module._RATE_LIMIT.clear()
+    app_module._AGENT_RATE_LIMIT.clear()
+    app_module._sessions.clear()
+    app_module._CACHE.clear()
+    app_module._last_heartbeat.clear()
+    yield
+    app_module._RATE_LIMIT.clear()
+    app_module._AGENT_RATE_LIMIT.clear()
+    app_module._sessions.clear()
+    app_module._CACHE.clear()
+    app_module._last_heartbeat.clear()
 
 
 @pytest.fixture()
@@ -106,32 +161,31 @@ def client(db_conn, monkeypatch):
     Each call creates a fresh connection from the shared db_conn fixture so
     all operations within a test share the same in-memory database.
     """
-    # Re-import fresh module state is tricky; instead we patch db.db and
-    # db.init_db at the module level so app.py uses our in-memory connection.
-
     @contextlib.contextmanager
     def _fake_db():
         yield db_conn
         db_conn.commit()
 
-    # Patch the admin key at module level (app._ADMIN_KEY_ENV)
     import app as app_module
-    import db as db_module
+    import scheduler as scheduler_module
 
     monkeypatch.setattr(app_module, "_ADMIN_KEY_ENV", TEST_ADMIN_KEY)
-    monkeypatch.setattr(db_module, "db", _fake_db)
+    monkeypatch.setattr(app_module, "get_db_ctx", _fake_db)
+    monkeypatch.setattr(app_module, "init_db", lambda: None)
+    monkeypatch.setattr(app_module, "_verify_register_key", lambda submitted: None)
 
-    # Prevent APScheduler from actually starting
     mock_scheduler = MagicMock()
     monkeypatch.setattr(app_module, "scheduler", mock_scheduler)
-
-    # Skip _load_schedules side-effects on startup
+    monkeypatch.setattr(scheduler_module, "scheduler", mock_scheduler)
     monkeypatch.setattr(app_module, "_load_schedules", lambda: None)
-
-    # init_db should be a no-op (schema already created in db_conn)
-    monkeypatch.setattr(db_module, "init_db", lambda: None)
+    monkeypatch.setattr(app_module, "register_system_jobs", lambda: None)
+    app_module.app.state.scheduler_mock = mock_scheduler
 
     with TestClient(app_module.app, raise_server_exceptions=True) as c:
+        c.headers.update({
+            "x-admin-key": TEST_ADMIN_KEY,
+            "x-register-key": TEST_REGISTER_KEY,
+        })
         yield c
 
 
