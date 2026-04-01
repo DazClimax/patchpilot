@@ -2,6 +2,7 @@
 test_agents.py — tests for agent and job endpoints.
 """
 
+import json
 import secrets
 import pytest
 
@@ -213,6 +214,84 @@ class TestJobResult:
             headers={"x-token": "wrong"},
         )
         assert resp.status_code == 401
+
+
+class TestUpdateBatchStatus:
+    def test_linux_agent_version_marks_batch_done(self, client, registered_agent, db_conn):
+        agent_id, token = registered_agent
+        batch = "abc123"
+        client.post(
+            f"/api/agents/{agent_id}/heartbeat",
+            json={"hostname": "testhost", "agent_version": "1.2", "packages": []},
+            headers={"x-token": token},
+        )
+        db_conn.execute(
+            "INSERT INTO jobs (agent_id, type, status, params) VALUES (?, 'update_agent', 'running', ?)",
+            (agent_id, json.dumps({"batch": batch})),
+        )
+        db_conn.commit()
+
+        resp = client.get(f"/api/agents/update-batch/status?batch={batch}")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["total_online"] == 1
+        assert data["completed"] == 1
+        assert data["agents"][0]["status"] == "done"
+        assert data["agents"][0]["phase"] == "done"
+
+    def test_ssl_deploy_status_includes_haos_deploy_ssl_jobs(self, client, db_conn):
+        batch = "beefcafe"
+        agent_id = "ha-agent-1"
+        db_conn.execute(
+            """
+            INSERT INTO agents (id, hostname, token, agent_type, last_seen)
+            VALUES (?, ?, ?, 'haos', datetime('now','localtime'))
+            """,
+            (agent_id, "homeassistant", "token-ha"),
+        )
+        db_conn.execute(
+            "INSERT INTO jobs (agent_id, type, status, params) VALUES (?, 'deploy_ssl', 'running', ?)",
+            (agent_id, json.dumps({"batch": batch})),
+        )
+        db_conn.commit()
+
+        resp = client.get(f"/api/settings/deploy-ssl/status?batch={batch}")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["total_online"] == 1
+        assert data["completed"] == 0
+        assert data["agents"][0]["hostname"] == "homeassistant"
+        assert data["agents"][0]["phase"] == "deploying"
+        assert data["agents"][0]["status"] == "running"
+
+
+class TestHaUpdateCallback:
+    def test_callback_updates_matching_ha_job_output(self, client, registered_agent, db_conn):
+        agent_id, token = registered_agent
+        batch = "feedcafe"
+        db_conn.execute(
+            "INSERT INTO jobs (agent_id, type, status, params) VALUES (?, 'ha_trigger_agent_update', 'done', ?)",
+            (agent_id, json.dumps({"batch": batch})),
+        )
+        db_conn.commit()
+
+        resp = client.post(
+            f"/api/agents/{agent_id}/ha-update-callback",
+            json={"batch": batch, "agent_version": "1.7"},
+            headers={"x-token": token},
+        )
+
+        assert resp.status_code == 200
+        row = db_conn.execute(
+            "SELECT output FROM jobs WHERE agent_id=? AND type='ha_trigger_agent_update' ORDER BY id DESC LIMIT 1",
+            (agent_id,),
+        ).fetchone()
+        assert row is not None
+        assert "1.7" in row["output"]
 
 
 # ---------------------------------------------------------------------------

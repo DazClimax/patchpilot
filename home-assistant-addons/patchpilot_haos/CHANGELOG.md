@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.21
+
+- Added a persistent HA add-on update callback so PatchPilot can confirm the new agent version after Home Assistant restarts the add-on.
+- Improved deployment feedback handling for the HAOS agent and bumped the reported PatchPilot agent version to `1.7`.
+
 ## 0.2.20
 
 - Added detection of Home Assistant `update.*` entities so HACS and frontend-style updates such as custom cards can appear in PatchPilot.

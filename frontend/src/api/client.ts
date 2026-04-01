@@ -138,6 +138,7 @@ export interface Settings {
   agent_port: string
   agent_ssl: string
   agent_url: string
+  internal_url: string
   ssl_certfile: string
   ssl_keyfile: string
   ssl_enabled: boolean

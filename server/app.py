@@ -136,6 +136,8 @@ def _is_agent_only_request(path: str, method: str) -> bool:
     suffix = path[len("/api/agents/"):]
     if suffix.endswith("/heartbeat"):
         return True
+    if method == "POST" and suffix.endswith("/ha-update-callback"):
+        return True
     if method == "GET" and suffix.endswith("/jobs"):
         return True
     if method == "POST" and "/jobs/" in suffix and suffix.endswith("/result"):
@@ -1111,6 +1113,32 @@ async def job_result(
     return {"status": "ok"}
 
 
+@app.post("/api/agents/{agent_id}/ha-update-callback")
+async def ha_update_callback(agent_id: str, request: Request, x_token: str = Header(...)):
+    agent_id = _resolve_alias(agent_id)
+    verify_agent(agent_id, x_token)
+    data = await request.json()
+    batch = re.sub(r'[^a-fA-F0-9]', '', str(data.get("batch", "") or ""))
+    agent_version = str(data.get("agent_version", "") or "")
+    if not batch:
+        raise HTTPException(status_code=422, detail="batch is required")
+    output = f"HA add-on restart callback received. Agent version: {agent_version or 'unknown'}"
+    batch_filter = f'%"batch": "{batch}"%'
+    with get_db_ctx() as conn:
+        row = conn.execute("""
+            SELECT id FROM jobs
+            WHERE agent_id=? AND type='ha_trigger_agent_update' AND params LIKE ?
+            ORDER BY id DESC LIMIT 1
+        """, (agent_id, batch_filter)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Matching HA update job not found")
+        conn.execute(
+            "UPDATE jobs SET output=? WHERE id=? AND agent_id=?",
+            (output, row["id"], agent_id),
+        )
+    return {"status": "ok"}
+
+
 @app.post("/api/agents/{agent_id}/jobs/{job_id}/cancel", dependencies=[Depends(require_role("admin","user"))])
 def cancel_job(agent_id: str, job_id: int):
     """Cancel a pending or running job."""
@@ -2014,9 +2042,11 @@ async def api_ssl_enable(request: Request):
         raise HTTPException(status_code=422, detail=f"Key file not found: {keyfile}")
 
     _update_env_ssl(certfile, keyfile)
+    _update_env_key("AGENT_SSL", "1")
     with get_db_ctx() as conn:
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ssl_certfile', ?)", (str(certfile),))
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ssl_keyfile', ?)", (str(keyfile),))
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('agent_ssl', '1')")
 
     _schedule_restart(delay=2.0)
     info = _get_cert_info(certfile)
@@ -2377,8 +2407,10 @@ def api_deploy_ssl_status(batch: str = ""):
         online_map = {r["id"]: bool(r["is_online"]) for r in online_rows}
 
     agents = []
+    seen_agent_ids: set[str] = set()
     for r in upd_rows:
         aid = r["agent_id"]
+        seen_agent_ids.add(aid)
         is_online = online_map.get(aid, False)
         if aid in ssl_map:
             sr = ssl_map[aid]
@@ -2401,11 +2433,24 @@ def api_deploy_ssl_status(batch: str = ""):
                 "finished": r["finished"],
                 "online": is_online,
             })
+    for aid, sr in ssl_map.items():
+        if aid in seen_agent_ids:
+            continue
+        phase = "done" if sr["status"] == "done" else "failed" if sr["status"] == "failed" else "deploying"
+        agents.append({
+            "agent_id": aid,
+            "hostname": sr["hostname"],
+            "status": sr["status"],
+            "phase": phase,
+            "output": sr["output"] or "",
+            "finished": sr["finished"],
+            "online": online_map.get(aid, False),
+        })
     # Sort: online first, then by hostname
     agents.sort(key=lambda a: (not a["online"], a["hostname"]))
     total_online = sum(1 for a in agents if a["online"])
     total = len(agents)
-    done = sum(1 for a in agents if a["status"] in ("done", "failed"))
+    done = sum(1 for a in agents if a["online"] and a["status"] in ("done", "failed"))
     # Consider deployment "complete" when all online agents are done
     # Offline agents will pick up jobs when they reconnect
     return {"agents": agents, "total": total, "total_online": total_online, "completed": done}
@@ -2448,10 +2493,18 @@ def api_update_agents_batch_status(batch: str = ""):
                 phase = "waiting"
                 status = "running"
         else:
-            phase = "updating" if r["status"] in ("pending", "running") else (
-                "failed" if r["status"] == "failed" else "done"
-            )
-            status = r["status"]
+            if r["status"] == "failed":
+                phase = "failed"
+                status = "failed"
+            elif (r["agent_version"] or "").strip() == _AGENT_TARGET_VERSION:
+                phase = "done"
+                status = "done"
+            elif r["status"] in ("pending", "running"):
+                phase = "updating"
+                status = r["status"]
+            else:
+                phase = "waiting"
+                status = "running"
         agents.append({
             "agent_id": r["agent_id"],
             "hostname": r["hostname"],
@@ -2466,7 +2519,7 @@ def api_update_agents_batch_status(batch: str = ""):
     agents.sort(key=lambda a: (not a["online"], a["hostname"]))
     total_online = sum(1 for a in agents if a["online"])
     total = len(agents)
-    done = sum(1 for a in agents if a["status"] in ("done", "failed"))
+    done = sum(1 for a in agents if a["online"] and a["status"] in ("done", "failed"))
     return {"agents": agents, "total": total, "total_online": total_online, "completed": done}
 
 

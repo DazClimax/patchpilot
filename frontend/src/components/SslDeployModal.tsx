@@ -55,9 +55,16 @@ export function SslDeployModal({
   const onlineTotal = deployStatus ? (deployStatus.total_online ?? deployStatus.total) : 0
   const allOnlineDone = deployStatus != null && onlineTotal > 0 && deployStatus.completed >= onlineTotal
   const isDone = allOnlineDone || (deployStatus != null && !busy)
+  const offlineHiddenCount = deployStatus
+    ? deployStatus.agents.filter(a => hideOfflinePending && !a.online && a.status !== 'failed').length
+    : 0
   const visibleAgents = deployStatus
     ? deployStatus.agents.filter(a => !(hideOfflinePending && !a.online && a.status !== 'failed'))
     : []
+  const progressDenominator = onlineTotal || deployStatus?.total || 1
+  const progressPercent = deployStatus
+    ? Math.min(100, (deployStatus.completed / progressDenominator) * 100)
+    : 0
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -138,7 +145,7 @@ export function SslDeployModal({
                 <div style={{ height: '4px', background: `${colors.border}44`, borderRadius: '2px', overflow: 'hidden' }}>
                   <div style={{
                     height: '100%', borderRadius: '2px', transition: 'width 0.5s ease',
-                    width: `${(deployStatus.completed / (onlineTotal || deployStatus.total)) * 100}%`,
+                    width: `${progressPercent}%`,
                     background: barColor,
                     boxShadow: glow(barColor, 4),
                   }} />
@@ -147,7 +154,7 @@ export function SslDeployModal({
                   fontSize: '10px', color: colors.textMuted, marginTop: '6px',
                   fontFamily: "'Electrolize', monospace", textAlign: 'right',
                 }}>
-                  {deployStatus.completed} / {onlineTotal} online{deployStatus.total > onlineTotal ? ` (${deployStatus.total - onlineTotal} offline)` : ''}
+                  {deployStatus.completed} / {onlineTotal} online{offlineHiddenCount > 0 ? ` (${offlineHiddenCount} offline hidden)` : deployStatus.total > onlineTotal ? ` (${deployStatus.total - onlineTotal} offline)` : ''}
                 </div>
               </div>
             )}
@@ -173,7 +180,7 @@ export function SslDeployModal({
                 const label = a.status === 'done' ? (isHaAutoUpdate ? 'HA UPDATE COMPLETED' : doneLabel)
                   : a.status === 'failed' ? 'FAILED'
                   : phase === 'triggering' ? 'TRIGGERING HA UPDATE...'
-                  : isHaAutoUpdate && phase === 'waiting' ? 'WAITING FOR HA RESTART...'
+                  : isHaAutoUpdate && phase === 'waiting' ? 'WEBHOOK TRIGGERED - WAITING FOR NEW VERSION'
                   : phase === 'updating' ? 'UPDATING AGENT...'
                   : phase === 'waiting' ? waitingLabel
                   : phase === 'deploying' ? activePhaseLabel
@@ -242,7 +249,7 @@ export function SslDeployModal({
                   }}>
                     {deployStatus.agents.filter(a => a.status === 'done').length} {summaryVerb}
                     {hasFailed ? ` · ${deployStatus.agents.filter(a => a.status === 'failed').length} failed` : ''}
-                    {hideOfflinePending && deployStatus.total > onlineTotal ? ` · ${deployStatus.total - onlineTotal} offline hidden` : ''}
+                    {offlineHiddenCount > 0 ? ` · ${offlineHiddenCount} offline hidden` : ''}
                   </span>
                 )}
                 {hasFailed && (

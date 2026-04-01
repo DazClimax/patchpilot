@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import { api, Settings, auth } from '../api/client'
+import { api, Settings } from '../api/client'
 import { colors, glow, glowText, glassBg, controlStyles } from '../theme'
 import { Card } from '../components/Card'
 import { ConfirmModal } from '../components/ConfirmModal'
@@ -37,6 +37,38 @@ const labelStyle: React.CSSProperties = {
   color: colors.textMuted,
   marginBottom: '6px',
   fontFamily: "'Orbitron', sans-serif",
+}
+
+function decodePemFromBase64(value: string): string {
+  if (!value) return ''
+  try {
+    return atob(value)
+  } catch {
+    return ''
+  }
+}
+
+function buildHaSslRecoveryConfig(serverUrl: string, caPemB64: string, caRolloverPubPemB64: string): string {
+  const lines: string[] = []
+  const pem = decodePemFromBase64(caPemB64).trim()
+  if (pem) {
+    lines.push('ca_pem: |')
+    for (const line of pem.split('\n')) {
+      lines.push(`  ${line}`)
+    }
+  } else {
+    lines.push('ca_pem: ""')
+  }
+  const rolloverPem = decodePemFromBase64(caRolloverPubPemB64).trim()
+  if (rolloverPem) {
+    lines.push('ca_rollover_pub_pem: |')
+    for (const line of rolloverPem.split('\n')) {
+      lines.push(`  ${line}`)
+    }
+  } else {
+    lines.push('ca_rollover_pub_pem: ""')
+  }
+  return lines.join('\n')
 }
 
 // ---------------------------------------------------------------------------
@@ -272,7 +304,8 @@ const EMPTY: Settings = {
   telegram_notify_success: '1',
   server_port: '8443',
   agent_port: '8050',
-  agent_ssl: '0',
+  agent_ssl: '1',
+  internal_url: '',
   ui_audio_enabled: '1',
   ui_audio_volume: '70',
   ui_login_animation_enabled: '1',
@@ -303,7 +336,7 @@ export function SettingsPage() {
   const load = useCallback(async () => {
     try {
       const data = await api.settings()
-      const merged = { ...EMPTY, ...data }
+      const merged = { ...EMPTY, ...data, agent_ssl: '1' }
       setForm(merged)
       setSavedForm(merged)
       persistUiEffectsSettings({
@@ -346,6 +379,7 @@ export function SettingsPage() {
     try {
       // Strip computed/non-DB fields before saving
       const { ssl_enabled, ssl_certfile, ssl_keyfile, internal_url, agent_url, ...saveable } = form as any
+      saveable.agent_ssl = '1'
       const result = await api.saveSettings(saveable)
       persistUiEffectsSettings({
         audioEnabled: form.ui_audio_enabled === '1',
@@ -801,14 +835,6 @@ export function SettingsPage() {
                 placeholder="8050"
               />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', paddingTop: '22px' }}>
-              <Toggle
-                label="Agent SSL"
-                name="agent_ssl"
-                value={form.agent_ssl}
-                onChange={handleChange}
-              />
-            </div>
             <p style={{
               margin: '14px 0 0',
               fontSize: '11px',
@@ -818,8 +844,8 @@ export function SettingsPage() {
               lineHeight: 1.6,
               whiteSpace: 'normal',
             }}>
-              UI port supports HTTPS via SSL section below. Agent SSL uses the same certificate.<br />
-              Agents migrate automatically on their next heartbeat.
+              UI HTTPS is configured in the SSL section below. When HTTPS is enabled, the agent port uses the same certificate automatically.<br />
+              Existing agents may still need the new CA trust deployed before they can reconnect.
             </p>
           </div>
         </Card>
@@ -903,6 +929,8 @@ function SslSection() {
   const [customCert, setCustomCert] = useState('')
   const [customKey, setCustomKey] = useState('')
   const [certYears, setCertYears] = useState('3')
+  const [caPemB64, setCaPemB64] = useState('')
+  const [caRolloverPubPemB64, setCaRolloverPubPemB64] = useState('')
   const [busy, setBusy] = useState(false)
   const [deployModal, setDeployModal] = useState(false)
   const [deployStatus, setDeployStatus] = useState<DeployStatus | null>(null)
@@ -914,8 +942,13 @@ function SslSection() {
 
   const load = useCallback(async () => {
     try {
-      const res = await api.sslInfo()
-      setSsl(res)
+      const [sslRes, bootstrapRes] = await Promise.all([
+        api.sslInfo(),
+        api.deployBootstrap(),
+      ])
+      setSsl(sslRes)
+      setCaPemB64(bootstrapRes.ca_pem_b64 || '')
+      setCaRolloverPubPemB64(bootstrapRes.ca_rollover_pub_pem_b64 || '')
     } catch { /* ignore */ }
   }, [])
 
@@ -925,7 +958,7 @@ function SslSection() {
     setBusy(true)
     try {
       const res = await api.generateCert(parseInt(certYears))
-      showToast(`Self-signed certificate generated (${certYears}y) — deploy to agents then enable HTTPS`, 'success')
+      showToast(`Self-signed certificate generated (${certYears}y) — first deploy trust to agents, then enable HTTPS`, 'success')
       setSsl({ enabled: false, certfile: res.certfile, keyfile: res.keyfile, info: res.info })
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to generate certificate', 'error')
@@ -1025,6 +1058,16 @@ function SslSection() {
   }
 
   const statusColor = ssl?.enabled ? colors.success : colors.textMuted
+  const haRecoveryConfig = buildHaSslRecoveryConfig('', caPemB64, caRolloverPubPemB64)
+
+  const copyHaRecoveryConfig = async () => {
+    try {
+      await navigator.clipboard.writeText(haRecoveryConfig)
+      showToast('HA add-on recovery config copied', 'success')
+    } catch {
+      showToast('Failed to copy HA add-on config', 'error')
+    }
+  }
 
   return (
     <Card style={{ marginBottom: '20px' }}>
@@ -1072,7 +1115,7 @@ function SslSection() {
         </>
       ) : (
         <>
-          {/* Existing cert — enable directly or deploy first */}
+          {/* Existing cert — deploy trust first, then enable */}
           {ssl?.certfile && ssl?.keyfile && (
             <div style={{ marginBottom: '16px', padding: '12px', border: `1px solid ${colors.border}`, background: `${colors.success}06` }}>
               <div style={{ fontSize: '10px', letterSpacing: '0.15em', color: colors.textMuted, fontFamily: "'Orbitron', sans-serif", marginBottom: '8px' }}>
@@ -1084,11 +1127,14 @@ function SslSection() {
               </div>
               <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                 <Button onClick={() => handleDeploySsl()} disabled={busy}>
-                  {busy ? 'Deploying...' : 'Deploy to Agents'}
+                  {busy ? 'Deploying...' : 'Deploy Trust to Agents'}
                 </Button>
                 <Button onClick={() => handleEnable(ssl.certfile, ssl.keyfile)} disabled={busy}>
                   Enable HTTPS
                 </Button>
+              </div>
+              <div style={{ marginTop: '10px', fontSize: '10px', color: colors.textMuted, fontFamily: "'Electrolize', monospace", lineHeight: 1.6 }}>
+                Recommended order: 1. deploy the new CA/trust to agents, 2. enable HTTPS on the server, 3. verify that agents reconnect with the new certificate.
               </div>
             </div>
           )}
@@ -1132,8 +1178,37 @@ function SslSection() {
       )}
 
       <p style={{ margin: '14px 0 0', fontSize: '10px', color: colors.textMuted, fontFamily: "'Electrolize', monospace", lineHeight: 1.6 }}>
-        Enabling SSL restarts the server on HTTPS. Agents migrate automatically via canonical_url.
+        Enabling HTTPS restarts the server immediately. Existing agents do not blindly trust a new certificate, so deploy trust first if the CA or certificate chain changed.
       </p>
+
+      <div style={{ marginTop: '18px', paddingTop: '16px', borderTop: `1px solid ${colors.border}` }}>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', marginBottom: '10px' }}>
+          <div style={{ fontSize: '10px', letterSpacing: '0.15em', color: colors.textMuted, fontFamily: "'Orbitron', sans-serif" }}>
+            HOME ASSISTANT RECOVERY
+          </div>
+          <Button type="button" variant="ghost" size="sm" onClick={copyHaRecoveryConfig}>
+            Copy HA Config
+          </Button>
+        </div>
+        <div style={{ fontSize: '11px', color: colors.textMuted, fontFamily: "'Electrolize', monospace", lineHeight: 1.6, marginBottom: '10px' }}>
+          Certificate for the HA add-on. Replace only `ca_pem` and `ca_rollover_pub_pem` in the existing YAML, then save and restart the add-on.
+        </div>
+        <div style={{
+          background: glassBg(0.92),
+          border: `1px solid ${colors.border}`,
+          padding: '14px 16px',
+          fontFamily: "'Courier New', Courier, monospace",
+          fontSize: '11px',
+          color: colors.text,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          lineHeight: 1.6,
+          maxHeight: '260px',
+          overflowY: 'auto',
+        }}>
+          {haRecoveryConfig}
+        </div>
+      </div>
 
       {confirmDisable && (
         <ConfirmModal

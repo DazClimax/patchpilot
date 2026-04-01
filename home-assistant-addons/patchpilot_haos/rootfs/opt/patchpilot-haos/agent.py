@@ -24,7 +24,7 @@ CA_ROLLOVER_PUB_FILE = Path("/data/patchpilot_ca_rollover_public.pem")
 SUPERVISOR_URL = "http://supervisor"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 SELF_ADDON_HINT = "patchpilot_haos"
-AGENT_VERSION = "1.6"
+AGENT_VERSION = "1.7"
 AUTO_UPDATE_CAPABILITY = "ha_agent_auto_update"
 WEBHOOK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 BASE_CAPABILITIES = (
@@ -567,6 +567,16 @@ def report_result(server: str, agent_id: str, token: str, job_id: int, status: s
     )
 
 
+def report_ha_update_callback(server: str, agent_id: str, token: str, batch: str, ssl_ctx):
+    request_json(
+        "POST",
+        f"{server}/api/agents/{agent_id}/ha-update-callback",
+        data={"batch": batch, "agent_version": AGENT_VERSION},
+        headers={"x-token": token},
+        ssl_ctx=ssl_ctx,
+    )
+
+
 def run_job(job: dict) -> tuple[str, str]:
     jtype = job["type"]
     params = job.get("params") or {}
@@ -603,6 +613,10 @@ def run_job(job: dict) -> tuple[str, str]:
         webhook_id = normalize_webhook_id(str(opts.get("agent_update_webhook_id") or "").strip())
         if not webhook_id:
             return "failed", "Home Assistant auto-update is not configured correctly. Set a webhook ID with 8-128 characters using only letters, numbers, dash, or underscore."
+        batch = str(params.get("batch") or "").strip()
+        if batch:
+            state["pending_ha_update_batch"] = batch
+            save_state(state)
         homeassistant_request("POST", f"/webhook/{webhook_id}")
         return "done", "Triggered Home Assistant automation webhook for PatchPilot HAOS Agent update."
     if jtype == "ha_backup":
@@ -698,6 +712,12 @@ def main():
         try:
             if last_heartbeat <= 0:
                 heartbeat(server, agent_id, token, advertise_ip, ssl_ctx)
+                state = load_state()
+                pending_batch = str(state.get("pending_ha_update_batch") or "").strip()
+                if pending_batch:
+                    report_ha_update_callback(server, agent_id, token, pending_batch, ssl_ctx)
+                    state.pop("pending_ha_update_batch", None)
+                    save_state(state)
                 last_heartbeat = poll_interval
             jobs = poll_jobs(server, agent_id, token, ssl_ctx)
             for job in jobs:

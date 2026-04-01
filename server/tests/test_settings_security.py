@@ -2,6 +2,8 @@
 test_settings_security.py — authorization tests for settings endpoints.
 """
 
+import os
+
 import app as app_module
 
 
@@ -56,3 +58,44 @@ class TestSettingsAuthorization:
 
         assert resp.status_code == 403
         assert resp.json()["detail"] == "Insufficient permissions"
+
+
+class TestSslSettings:
+    def test_ssl_enable_forces_agent_ssl(self, client, db_conn, monkeypatch, tmp_path):
+        ssl_dir = tmp_path / "ssl"
+        ssl_dir.mkdir()
+        certfile = ssl_dir / "cert.pem"
+        keyfile = ssl_dir / "key.pem"
+        certfile.write_text("-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n")
+        keyfile.write_text("-----BEGIN PRIVATE KEY-----\nTEST\n-----END PRIVATE KEY-----\n")
+
+        monkeypatch.setattr(app_module, "_SSL_DIR", ssl_dir)
+        monkeypatch.setattr(app_module, "_schedule_restart", lambda delay=0: None)
+        monkeypatch.setattr(app_module, "_get_cert_info", lambda path: {"subject": "test", "expires": "never", "path": path})
+
+        updates: list[tuple[str, str]] = []
+        original_env = os.environ.copy()
+
+        def fake_update_env_ssl(cert: str, key: str):
+            updates.append(("ssl", f"{cert}|{key}"))
+
+        def fake_update_env_key(key: str, value: str):
+            updates.append((key, value))
+
+        monkeypatch.setattr(app_module, "_update_env_ssl", fake_update_env_ssl)
+        monkeypatch.setattr(app_module, "_update_env_key", fake_update_env_key)
+
+        try:
+            resp = client.post(
+                "/api/settings/ssl-enable",
+                json={"certfile": str(certfile), "keyfile": str(keyfile)},
+            )
+        finally:
+            os.environ.clear()
+            os.environ.update(original_env)
+
+        assert resp.status_code == 200
+        assert ("AGENT_SSL", "1") in updates
+        row = db_conn.execute("SELECT value FROM settings WHERE key='agent_ssl'").fetchone()
+        assert row is not None
+        assert row["value"] == "1"

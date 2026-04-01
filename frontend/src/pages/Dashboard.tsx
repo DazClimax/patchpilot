@@ -849,12 +849,12 @@ export function Dashboard() {
             size="sm"
             disabled={bulkBusy || patchableAgents.length === 0}
             onClick={() => setConfirm({
-              title: 'Patch All VMs',
+              title: 'Update All VMs',
               message: `Install pending updates on ${patchableAgents.length} VM${patchableAgents.length === 1 ? '' : 's'}? This runs the system package upgrade on each.`,
               onConfirm: () => { setConfirm(null); patchAll() },
             })}
           >
-            {bulkBusy ? '⟳ Patching…' : `⟳ Patch All (${patchableAgents.length})`}
+            {bulkBusy ? '⟳ Updating…' : `⟳ Update All (${patchableAgents.length})`}
           </Button>}
           {loading && (
             <span style={{

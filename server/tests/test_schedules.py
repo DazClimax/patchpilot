@@ -149,6 +149,7 @@ class TestPortRouting:
     def test_helper_marks_only_agent_runtime_routes_as_agent_only(self):
         assert app_module._is_agent_only_request("/api/agents/register", "POST") is True
         assert app_module._is_agent_only_request("/api/agents/demo/heartbeat", "POST") is True
+        assert app_module._is_agent_only_request("/api/agents/demo/ha-update-callback", "POST") is True
         assert app_module._is_agent_only_request("/api/agents/demo/jobs", "GET") is True
         assert app_module._is_agent_only_request("/api/agents/demo/jobs/1/result", "POST") is True
         assert app_module._is_agent_only_request("/api/agents/demo", "GET") is False
