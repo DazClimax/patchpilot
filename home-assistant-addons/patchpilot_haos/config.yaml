@@ -21,6 +21,7 @@ options:
   agent_update_webhook_id: ""
   poll_interval: 30
   ca_pem: ""
+  ca_rollover_pub_pem: ""
 schema:
   patchpilot_server: str
   register_key: password
@@ -29,3 +30,4 @@ schema:
   agent_update_webhook_id: str?
   poll_interval: int(10,300)?
   ca_pem: str?
+  ca_rollover_pub_pem: str?

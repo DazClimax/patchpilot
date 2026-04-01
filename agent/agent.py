@@ -20,6 +20,7 @@ import socket
 import subprocess
 import sys
 import time
+import tempfile
 from pathlib import Path
 
 try:
@@ -75,9 +76,11 @@ def _reload_ssl_context():
 CONFIG_DIR = Path("/etc/patchpilot")
 CONFIG_FILE = CONFIG_DIR / "agent.conf"
 STATE_FILE = CONFIG_DIR / "state.json"
+CA_ROLLOVER_PUBKEY_FILE = CONFIG_DIR / "ca_rollover_public.pem"
 
 DEFAULT_INTERVAL = 60
 AGENT_VERSION = "1.1"
+_CURRENT_JOB_PARAMS: dict = {}
 
 
 def load_config():
@@ -125,6 +128,70 @@ def _set_config_review(required: bool, note: str = ""):
 def _get_config_review() -> tuple[bool, str]:
     state = load_state()
     return bool(state.get("config_review_required")), str(state.get("config_review_note", ""))
+
+
+def _install_ca_rollover_public_key(pem_text: str) -> None:
+    pem_bytes = pem_text.encode("utf-8")
+    if b"-----BEGIN PUBLIC KEY-----" not in pem_bytes:
+        raise ValueError("Invalid rollover public key")
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(CA_ROLLOVER_PUBKEY_FILE), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    try:
+        os.write(fd, pem_bytes)
+    finally:
+        os.close(fd)
+    _update_config_key("PATCHPILOT_CA_ROLLOVER_PUBKEY", str(CA_ROLLOVER_PUBKEY_FILE))
+
+
+def _resolve_ca_rollover_pubkey_path() -> Path | None:
+    env_path = os.environ.get("PATCHPILOT_CA_ROLLOVER_PUBKEY", "").strip()
+    if env_path:
+        path = Path(env_path)
+        if path.is_file():
+            return path
+    cfg = load_config()
+    cfg_path = str(cfg.get("PATCHPILOT_CA_ROLLOVER_PUBKEY", "")).strip()
+    if cfg_path:
+        path = Path(cfg_path)
+        if path.is_file():
+            return path
+    if CA_ROLLOVER_PUBKEY_FILE.is_file():
+        return CA_ROLLOVER_PUBKEY_FILE
+    return None
+
+
+def _verify_ca_signature(cert_data: bytes, signature_b64: str) -> bool:
+    pubkey_path = _resolve_ca_rollover_pubkey_path()
+    if not pubkey_path:
+        raise RuntimeError("No CA rollover public key installed")
+    sig_data = __import__("base64").b64decode(signature_b64)
+    with tempfile.NamedTemporaryFile(dir=str(CONFIG_DIR), delete=False) as cert_tmp, \
+         tempfile.NamedTemporaryFile(dir=str(CONFIG_DIR), delete=False) as sig_tmp:
+        cert_tmp.write(cert_data)
+        cert_tmp.flush()
+        sig_tmp.write(sig_data)
+        sig_tmp.flush()
+        cert_path = cert_tmp.name
+        sig_path = sig_tmp.name
+    try:
+        result = subprocess.run(
+            [
+                "openssl", "dgst", "-sha256",
+                "-verify", str(pubkey_path),
+                "-signature", sig_path,
+                cert_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return result.returncode == 0 and "Verified OK" in result.stdout
+    finally:
+        for path in (cert_path, sig_path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -411,29 +478,8 @@ def _request(method: str, url: str, data=None, headers=None):
     except _TokenInvalid:
         raise
     except Exception as e:
-        # Protocol fallback: if HTTP fails, try HTTPS and vice versa.
-        # This handles the transition when the server switches protocol
-        # (e.g. SSL enabled/disabled) and the agent hasn't migrated yet.
-        alt_url = _protocol_fallback(url)
-        if alt_url:
-            try:
-                alt_req = urlreq.Request(alt_url, data=body, headers=headers, method=method)
-                with urlreq.urlopen(alt_req, timeout=30, context=_SSL_CTX) as resp:
-                    print(f"[agent] Fallback succeeded: {url} → {alt_url}")
-                    return json.loads(resp.read())
-            except Exception:
-                pass  # fallback also failed, report original error
         print(f"[agent] Request failed {url}: {e}", file=sys.stderr)
         return None
-
-
-def _protocol_fallback(url: str) -> str | None:
-    """Return the URL with swapped protocol (http↔https), or None."""
-    if url.startswith("http://"):
-        return "https://" + url[7:]
-    elif url.startswith("https://"):
-        return "http://" + url[8:]
-    return None
 
 
 class _TokenInvalid(Exception):
@@ -593,6 +639,8 @@ def execute_job(job: dict) -> tuple:
         return "failed", f"Malformed job dict: missing 'type' or 'id' key"
     jtype = job["type"]
     params = job.get("params", {})
+    global _CURRENT_JOB_PARAMS
+    _CURRENT_JOB_PARAMS = dict(params or {})
 
     if jtype in {"patch", "dist_upgrade", "force_patch"}:
         raw_pkg_list = params.get("packages", [])
@@ -717,30 +765,48 @@ def _deploy_ssl_cert() -> tuple:
     import hashlib as _hashlib
     import tempfile as _tempfile
 
+    global _CURRENT_JOB_PARAMS
+    params = dict(_CURRENT_JOB_PARAMS or {})
     cfg = load_config()
     server_url = cfg.get("PATCHPILOT_SERVER", "").rstrip("/")
-    if not server_url:
-        return "failed", "PATCHPILOT_SERVER not set — cannot download certificate"
-
-    cert_url = f"{server_url}/agent/ca.pem"
-    hash_url = f"{server_url}/agent/ca.pem.sha256"
     ca_path = CONFIG_DIR / "ca.pem"
 
     try:
-        # Download SHA-256 checksum
-        req_hash = urlreq.Request(hash_url, method="GET")
-        with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
-            expected_hash = r.read().decode().split()[0].strip()
+        rollover_pubkey_pem = str(params.get("rollover_pubkey_pem", "") or "").strip()
+        if rollover_pubkey_pem:
+            _install_ca_rollover_public_key(rollover_pubkey_pem)
 
-        # Download certificate
-        req_cert = urlreq.Request(cert_url, method="GET")
-        with urlreq.urlopen(req_cert, timeout=30, context=_SSL_CTX) as r:
-            cert_data = r.read()
+        if params.get("ca_pem_b64"):
+            cert_data = __import__("base64").b64decode(params["ca_pem_b64"])
+            expected_hash = str(params.get("ca_sha256", "")).strip()
+            signature_b64 = str(params.get("ca_sig_b64", "")).strip()
+        else:
+            if not server_url:
+                return "failed", "PATCHPILOT_SERVER not set — cannot download certificate"
+            cert_url = f"{server_url}/agent/ca.pem"
+            hash_url = f"{server_url}/agent/ca.pem.sha256"
+            sig_url = f"{server_url}/agent/ca.pem.sig"
+
+            req_hash = urlreq.Request(hash_url, method="GET")
+            with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
+                expected_hash = r.read().decode().split()[0].strip()
+
+            req_sig = urlreq.Request(sig_url, method="GET")
+            with urlreq.urlopen(req_sig, timeout=30, context=_SSL_CTX) as r:
+                signature_b64 = r.read().decode().strip()
+
+            req_cert = urlreq.Request(cert_url, method="GET")
+            with urlreq.urlopen(req_cert, timeout=30, context=_SSL_CTX) as r:
+                cert_data = r.read()
 
         # Verify integrity
         actual_hash = _hashlib.sha256(cert_data).hexdigest()
         if actual_hash != expected_hash:
             return "failed", f"SHA-256 mismatch: expected {expected_hash[:16]}… got {actual_hash[:16]}…"
+        if not signature_b64:
+            return "failed", "Missing CA signature"
+        if not _verify_ca_signature(cert_data, signature_b64):
+            return "failed", "CA signature verification failed"
 
         # SEC: Validate PEM format before writing
         if not cert_data.strip().startswith(b"-----BEGIN CERTIFICATE-----"):
@@ -808,29 +874,31 @@ def _update_config_key(key: str, value: str):
 
 
 def _bootstrap_ca_cert(server_url: str):
-    """Re-download CA cert from server with SHA-256 integrity verification.
+    """Bootstrap a CA cert only from an explicit plain-HTTP server URL.
 
-    Uses an unverified TLS connection (bootstrap trust) which is inherent to
-    the chicken-and-egg problem of deploying a new CA cert.  The SHA-256 hash
-    is downloaded separately and must match — this doesn't prevent a full MITM
-    but does catch partial corruption and ensures both endpoints agree.
+    This path is intentionally limited to HTTP so the agent never accepts an
+    unverified HTTPS connection and treats it as trustworthy. HTTPS bootstrap
+    requires an out-of-band trust path instead.
     """
     import hashlib as _hl
     ca_url = f"{server_url}/agent/ca.pem"
     hash_url = f"{server_url}/agent/ca.pem.sha256"
     ca_path = CONFIG_DIR / "ca.pem"
     try:
-        nossl = ssl.create_default_context()
-        nossl.check_hostname = False
-        nossl.verify_mode = ssl.CERT_NONE
+        if not server_url.startswith("http://"):
+            print(
+                "[agent] WARNING: refusing insecure CA bootstrap over HTTPS without certificate validation; install the CA bundle out-of-band",
+                file=sys.stderr,
+            )
+            return
 
         # Download cert + hash in quick succession
         req_cert = urlreq.Request(ca_url, method="GET")
-        with urlreq.urlopen(req_cert, timeout=15, context=nossl) as r:
+        with urlreq.urlopen(req_cert, timeout=15) as r:
             cert_data = r.read()
 
         req_hash = urlreq.Request(hash_url, method="GET")
-        with urlreq.urlopen(req_hash, timeout=15, context=nossl) as r:
+        with urlreq.urlopen(req_hash, timeout=15) as r:
             expected_hash = r.read().decode().split()[0].strip()
 
         # PEM format check
@@ -888,20 +956,9 @@ def _update_self(params: dict) -> tuple:
         hash_url  = f"{server_url}/agent/agent.py.sha256"
 
         try:
-            # Download SHA-256 checksum (with SSL bootstrap fallback)
-            try:
-                req_hash = urlreq.Request(hash_url, method="GET")
-                with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
-                    expected_hash = r.read().decode().split()[0].strip()
-            except urllib.error.URLError as ssl_err:
-                if "SSL" in str(ssl_err) or "CERTIFICATE" in str(ssl_err).upper():
-                    print("[agent] SSL error — server cert may have changed, re-fetching CA cert...")
-                    _bootstrap_ca_cert(server_url)
-                    req_hash = urlreq.Request(hash_url, method="GET")
-                    with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
-                        expected_hash = r.read().decode().split()[0].strip()
-                else:
-                    raise
+            req_hash = urlreq.Request(hash_url, method="GET")
+            with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
+                expected_hash = r.read().decode().split()[0].strip()
 
             # Download new agent binary
             req_agent = urlreq.Request(agent_url, method="GET")
@@ -912,6 +969,14 @@ def _update_self(params: dict) -> tuple:
             actual_hash = _hashlib.sha256(new_code).hexdigest()
             if actual_hash != expected_hash:
                 return "failed", f"SHA-256 mismatch: expected {expected_hash[:16]}… got {actual_hash[:16]}…"
+        except urllib.error.URLError as e:
+            if "SSL" in str(e) or "CERTIFICATE" in str(e).upper():
+                return (
+                    "failed",
+                    "Update failed: TLS validation error while contacting the server. "
+                    "Install the new CA bundle out-of-band or use an explicit HTTP bootstrap before retrying.",
+                )
+            return "failed", f"Update failed: {e}"
         except Exception as e:
             return "failed", f"Update failed: {e}"
 

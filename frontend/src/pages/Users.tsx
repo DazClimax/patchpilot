@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useContext } from 'react'
 import { api, User } from '../api/client'
 import { colors, glassBg, controlStyles } from '../theme'
 import { Card } from '../components/Card'
@@ -7,6 +7,7 @@ import { Dropdown } from '../components/Dropdown'
 import { PageHeader, SectionHeader } from '../components/SectionHeader'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { useToast } from '../components/Toast'
+import { UserContext } from '../App'
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
@@ -34,7 +35,10 @@ const labelStyle: React.CSSProperties = {
 }
 
 export function UsersPage() {
+  const { username: currentUsername } = useContext(UserContext)
   const [users, setUsers] = useState<User[]>([])
+  const [resolvedCurrentUsername, setResolvedCurrentUsername] = useState(currentUsername)
+  const [identityLoading, setIdentityLoading] = useState(true)
   const [newUser, setNewUser] = useState({ username: '', password: '', role: 'user' })
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string>('')
@@ -58,6 +62,37 @@ export function UsersPage() {
   }, [showToast])
 
   useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    let cancelled = false
+
+    if (currentUsername) {
+      setResolvedCurrentUsername(currentUsername)
+      setIdentityLoading(false)
+      return () => {
+        cancelled = true
+      }
+    }
+
+    setIdentityLoading(true)
+    api.me()
+      .then(res => {
+        if (cancelled) return
+        setResolvedCurrentUsername(res.username)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setResolvedCurrentUsername('')
+      })
+      .finally(() => {
+        if (cancelled) return
+        setIdentityLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentUsername])
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -131,6 +166,12 @@ export function UsersPage() {
     { value: 'readonly', label: 'readonly' },
   ]
 
+  const isCurrentUser = (user: User) => !!resolvedCurrentUsername && user.username === resolvedCurrentUsername
+  const adminCount = users.filter(user => user.role === 'admin').length
+  const isLastAdmin = (user: User) => user.role === 'admin' && adminCount <= 1
+  const isRoleLocked = (user: User) => identityLoading || isCurrentUser(user) || isLastAdmin(user)
+  const isDeleteLocked = (user: User) => identityLoading || isCurrentUser(user) || isLastAdmin(user)
+
   return (
     <div style={{ padding: 'clamp(16px, 4vw, 32px)', maxWidth: '1400px', animation: 'pp-fadein 0.4s ease both' }}>
       {deleteUser && (
@@ -192,7 +233,13 @@ export function UsersPage() {
                           value={u.role}
                           onChange={value => handleRoleChange(u, value)}
                           options={roleOptions}
+                          disabled={isRoleLocked(u)}
                         />
+                        {!isCurrentUser(u) && isLastAdmin(u) && (
+                          <div style={{ marginTop: '6px', color: colors.textDim, fontSize: '10px', lineHeight: 1.4 }}>
+                            The last admin user cannot be demoted.
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td style={{ padding: '10px 10px', color: colors.textMuted, fontSize: '11px' }}>
@@ -220,9 +267,20 @@ export function UsersPage() {
                       )}
                     </td>
                     <td style={{ padding: '10px 10px', textAlign: 'right' }}>
-                      <Button variant="danger" size="sm" style={{ minHeight: '39px', minWidth: '60px' }} onClick={() => setDeleteUser(u)}>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        style={{ minHeight: '39px', minWidth: '60px' }}
+                        disabled={isDeleteLocked(u)}
+                        onClick={() => setDeleteUser(u)}
+                      >
                         Delete
                       </Button>
+                      {!isCurrentUser(u) && isLastAdmin(u) && (
+                        <div style={{ marginTop: '6px', color: colors.textDim, fontSize: '10px', lineHeight: 1.4, textAlign: 'right' }}>
+                          The last admin user cannot be deleted.
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

@@ -157,6 +157,7 @@ export interface User {
 
 export interface DeployBootstrap {
   ca_pem_b64: string
+  ca_rollover_pub_pem_b64: string
 }
 
 export const api = {

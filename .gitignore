@@ -35,6 +35,11 @@ Thumbs.db
 # Claude Code
 .claude/
 
+# Local AI / agent tooling
+.agents/
+AGENTS.md
+CLAUDE.md
+
 # Deployment (contains host-specific config)
 deploy.sh
 CLAUDE.md

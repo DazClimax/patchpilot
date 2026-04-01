@@ -1085,9 +1085,8 @@ async def job_result(
                 params = json.loads(job_row["params"] or "{}")
                 chain_type = params.get("chain")
                 if chain_type and chain_type in ALLOWED_JOB_TYPES:
-                    # Forward batch id to chained job for tracking
-                    chain_params = {}
-                    if params.get("batch"):
+                    chain_params = dict(params.get("chain_params") or {})
+                    if params.get("batch") and "batch" not in chain_params:
                         chain_params["batch"] = params["batch"]
                     conn.execute(
                         "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, ?, ?, datetime('now','localtime'))",
@@ -1224,8 +1223,10 @@ def api_deploy_bootstrap():
     ca_pem_b64 = ""
     if cert.exists():
         ca_pem_b64 = base64.b64encode(cert.read_bytes()).decode()
+    ca_rollover_pub_pem_b64 = base64.b64encode(_get_ca_rollover_public_pem()).decode()
     return {
         "ca_pem_b64": ca_pem_b64,
+        "ca_rollover_pub_pem_b64": ca_rollover_pub_pem_b64,
     }
 
 
@@ -1636,6 +1637,73 @@ _SETTINGS_ALLOWED_KEYS = {
 }
 
 _SSL_DIR = Path(os.environ.get("PATCHPILOT_SSL_DIR", str(Path(__file__).parent.parent / "ssl")))
+_CA_ROLLOVER_PRIVATE_KEY = _SSL_DIR / "ca_rollover_private.pem"
+_CA_ROLLOVER_PUBLIC_KEY = _SSL_DIR / "ca_rollover_public.pem"
+
+
+def _ensure_ca_rollover_keypair() -> None:
+    if _CA_ROLLOVER_PRIVATE_KEY.exists() and _CA_ROLLOVER_PUBLIC_KEY.exists():
+        return
+    _SSL_DIR.mkdir(parents=True, exist_ok=True)
+    private_tmp = _CA_ROLLOVER_PRIVATE_KEY.with_suffix(".tmp")
+    public_tmp = _CA_ROLLOVER_PUBLIC_KEY.with_suffix(".tmp")
+    gen = subprocess.run(
+        ["openssl", "genrsa", "-out", str(private_tmp), "3072"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if gen.returncode != 0:
+        raise RuntimeError(f"openssl genrsa failed: {gen.stderr[:200]}")
+    pub = subprocess.run(
+        ["openssl", "rsa", "-in", str(private_tmp), "-pubout", "-out", str(public_tmp)],
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if pub.returncode != 0:
+        try:
+            private_tmp.unlink()
+        except OSError:
+            pass
+        raise RuntimeError(f"openssl rsa -pubout failed: {pub.stderr[:200]}")
+    os.replace(private_tmp, _CA_ROLLOVER_PRIVATE_KEY)
+    os.replace(public_tmp, _CA_ROLLOVER_PUBLIC_KEY)
+    _CA_ROLLOVER_PRIVATE_KEY.chmod(0o600)
+    _CA_ROLLOVER_PUBLIC_KEY.chmod(0o644)
+
+
+def _get_ca_rollover_public_pem() -> bytes:
+    _ensure_ca_rollover_keypair()
+    return _CA_ROLLOVER_PUBLIC_KEY.read_bytes()
+
+
+def _sign_ca_rollover_payload(payload: bytes) -> bytes:
+    _ensure_ca_rollover_keypair()
+    payload_tmp = _SSL_DIR / "ca_rollover_payload.tmp"
+    sig_tmp = _SSL_DIR / "ca_rollover_payload.sig.tmp"
+    payload_tmp.write_bytes(payload)
+    try:
+        result = subprocess.run(
+            [
+                "openssl", "dgst", "-sha256",
+                "-sign", str(_CA_ROLLOVER_PRIVATE_KEY),
+                "-out", str(sig_tmp),
+                str(payload_tmp),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"openssl dgst -sign failed: {result.stderr[:200]}")
+        return sig_tmp.read_bytes()
+    finally:
+        for path in (payload_tmp, sig_tmp):
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 def _get_internal_ip() -> str:
@@ -1651,7 +1719,7 @@ def _get_internal_ip() -> str:
         return "127.0.0.1"
 
 
-@app.get("/api/settings", dependencies=[Depends(require_role("admin","user","readonly"))])
+@app.get("/api/settings", dependencies=[Depends(require_role("admin"))])
 def api_get_settings():
     """Return settings.  Sensitive values are replaced with '***'. Only saveable keys are returned."""
     with get_db_ctx() as conn:
@@ -2114,6 +2182,20 @@ def download_ca_hash():
     return Response(content=f"{sha}  ca.pem\n", media_type="text/plain")
 
 
+@app.get("/agent/ca.pem.sig", include_in_schema=False)
+def download_ca_signature():
+    f = _SSL_DIR / "cert.pem"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="CA certificate not generated yet")
+    sig_b64 = base64.b64encode(_sign_ca_rollover_payload(f.read_bytes())).decode()
+    return Response(content=f"{sig_b64}\n", media_type="text/plain")
+
+
+@app.get("/agent/ca-rollover.pub", include_in_schema=False)
+def download_ca_rollover_public_key():
+    return Response(content=_get_ca_rollover_public_pem(), media_type="application/x-pem-file")
+
+
 @app.post("/api/settings/deploy-ssl", dependencies=[Depends(require_role("admin"))])
 async def api_deploy_ssl_to_agents(request: Request):
     """Create update_agent + deploy_ssl jobs for agents.
@@ -2127,6 +2209,11 @@ async def api_deploy_ssl_to_agents(request: Request):
         raise HTTPException(status_code=400, detail="No certificate generated yet — generate one first")
     import uuid as _uuid
     batch_id = _uuid.uuid4().hex[:12]
+    cert_bytes = cert.read_bytes()
+    ca_pem_b64 = base64.b64encode(cert_bytes).decode()
+    ca_sig_b64 = base64.b64encode(_sign_ca_rollover_payload(cert_bytes)).decode()
+    rollover_pubkey_pem = _get_ca_rollover_public_pem().decode("utf-8")
+    ca_sha256 = hashlib.sha256(cert_bytes).hexdigest()
 
     data = {}
     try:
@@ -2146,17 +2233,34 @@ async def api_deploy_ssl_to_agents(request: Request):
             """, (batch_filter,)).fetchall()
             agents = failed_agents
         else:
-            agents = conn.execute("SELECT id AS agent_id, hostname FROM agents").fetchall()
+            agents = conn.execute("SELECT id AS agent_id, hostname, COALESCE(agent_type, 'linux') AS agent_type FROM agents").fetchall()
 
         if not agents:
             raise HTTPException(status_code=422, detail="No agents to deploy to")
         count = 0
         for a in agents:
             aid = a["agent_id"] if "agent_id" in a.keys() else a["id"]
-            params = json.dumps({"chain": "deploy_ssl", "batch": batch_id})
+            agent_type = a["agent_type"] if "agent_type" in a.keys() else "linux"
+            signed_ca_params = {
+                "batch": batch_id,
+                "ca_pem_b64": ca_pem_b64,
+                "ca_sig_b64": ca_sig_b64,
+                "ca_sha256": ca_sha256,
+                "rollover_pubkey_pem": rollover_pubkey_pem,
+            }
+            if agent_type == "haos":
+                params = json.dumps(signed_ca_params)
+                job_type = "deploy_ssl"
+            else:
+                params = json.dumps({
+                    "chain": "deploy_ssl",
+                    "batch": batch_id,
+                    "chain_params": signed_ca_params,
+                })
+                job_type = "update_agent"
             conn.execute(
-                'INSERT INTO jobs (agent_id, type, params, created) VALUES (?, \'update_agent\', ?, datetime(\'now\',\'localtime\'))',
-                (aid, params),
+                "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, ?, ?, datetime('now','localtime'))",
+                (aid, job_type, params),
             )
             count += 1
     _cache_invalidate("dashboard")
@@ -2456,14 +2560,21 @@ async def create_user(request: Request):
 @app.patch("/api/users/{user_id}", dependencies=[Depends(require_role("admin"))])
 async def update_user(user_id: int, request: Request):
     data = await request.json()
+    current_user = getattr(request.state, "user", {})
     with get_db_ctx() as conn:
-        row = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+        row = conn.execute("SELECT id, role FROM users WHERE id=?", (user_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="User not found")
         if "role" in data:
             role = str(data["role"])
             if role not in ("admin", "user", "readonly"):
                 raise HTTPException(status_code=422, detail="Invalid role")
+            if current_user.get("user_id") == user_id and row["role"] == "admin" and role != "admin":
+                raise HTTPException(status_code=400, detail="You cannot remove your own admin role")
+            if row["role"] == "admin" and role != "admin":
+                admin_count = conn.execute("SELECT COUNT(*) as c FROM users WHERE role='admin'").fetchone()["c"]
+                if admin_count <= 1:
+                    raise HTTPException(status_code=400, detail="Cannot demote the last admin user")
             conn.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
         if "password" in data:
             password = str(data["password"])

@@ -9,7 +9,7 @@ import { DeployPage } from './pages/Deploy'
 import { AboutPage } from './pages/About'
 import { UsersPage } from './pages/Users'
 import { LoginPage } from './pages/Login'
-import { auth, Role } from './api/client'
+import { api, auth, Role } from './api/client'
 import { ToastProvider } from './components/Toast'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { UiEffectsProvider } from './effects'
@@ -37,6 +37,37 @@ export default function App() {
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
   }, [])
+
+  useEffect(() => {
+    if (!authed) return
+
+    const hasToken = !!auth.getToken()
+    if (!hasToken) {
+      setRole(auth.getRole())
+      setUsername(auth.getUsername())
+      return
+    }
+
+    let cancelled = false
+
+    api.me()
+      .then(res => {
+        if (cancelled) return
+        sessionStorage.setItem('pp_role', res.role)
+        sessionStorage.setItem('pp_username', res.username)
+        setRole(res.role as Role)
+        setUsername(res.username)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setRole(auth.getRole())
+        setUsername(auth.getUsername())
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [authed])
 
   const handleLogin = () => {
     setAuthed(true)

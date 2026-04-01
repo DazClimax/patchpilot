@@ -7,6 +7,7 @@ import platform
 import re
 import socket
 import ssl
+import subprocess
 import sys
 import time
 import urllib.error
@@ -14,10 +15,12 @@ import urllib.request as urlreq
 from datetime import datetime
 from urllib.parse import urlparse
 from pathlib import Path
+import base64
 
 OPTIONS_FILE = Path("/data/options.json")
 STATE_FILE = Path("/data/patchpilot_state.json")
 CA_FILE = Path("/data/patchpilot_ca.pem")
+CA_ROLLOVER_PUB_FILE = Path("/data/patchpilot_ca_rollover_public.pem")
 SUPERVISOR_URL = "http://supervisor"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 SELF_ADDON_HINT = "patchpilot_haos"
@@ -54,11 +57,60 @@ def save_state(state: dict):
 
 def make_ssl_context(ca_pem: str) -> ssl.SSLContext:
     ctx = ssl.create_default_context()
-    if ca_pem.strip():
-        CA_FILE.write_text(ca_pem.strip() + "\n")
+    state = load_state()
+    effective_ca_pem = ca_pem.strip() or str(state.get("ca_pem_override") or "").strip()
+    if effective_ca_pem:
+        CA_FILE.write_text(effective_ca_pem + "\n")
         CA_FILE.chmod(0o600)
         ctx.load_verify_locations(cafile=str(CA_FILE))
     return ctx
+
+
+def install_rollover_public_key(pem_text: str):
+    pem = pem_text.strip()
+    if "-----BEGIN PUBLIC KEY-----" not in pem:
+        raise RuntimeError("Invalid rollover public key")
+    CA_ROLLOVER_PUB_FILE.write_text(pem + "\n")
+    CA_ROLLOVER_PUB_FILE.chmod(0o600)
+
+
+def resolve_rollover_public_key(opts: dict, state: dict) -> Path | None:
+    configured = str(opts.get("ca_rollover_pub_pem") or "").strip()
+    if configured:
+        install_rollover_public_key(configured)
+    if CA_ROLLOVER_PUB_FILE.exists():
+        return CA_ROLLOVER_PUB_FILE
+    return None
+
+
+def verify_ca_signature(cert_data: bytes, signature_b64: str, opts: dict, state: dict) -> bool:
+    pubkey_path = resolve_rollover_public_key(opts, state)
+    if not pubkey_path:
+        raise RuntimeError("Missing CA rollover public key")
+    sig_data = base64.b64decode(signature_b64)
+    cert_tmp = Path("/tmp/patchpilot_haos_ca.pem")
+    sig_tmp = Path("/tmp/patchpilot_haos_ca.sig")
+    cert_tmp.write_bytes(cert_data)
+    sig_tmp.write_bytes(sig_data)
+    try:
+        result = subprocess.run(
+            [
+                "openssl", "dgst", "-sha256",
+                "-verify", str(pubkey_path),
+                "-signature", str(sig_tmp),
+                str(cert_tmp),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return result.returncode == 0 and "Verified OK" in result.stdout
+    finally:
+        for path in (cert_tmp, sig_tmp):
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 def request_json(method: str, url: str, *, data=None, headers=None, ssl_ctx=None):
@@ -464,10 +516,34 @@ def run_job(job: dict) -> tuple[str, str]:
     jtype = job["type"]
     params = job.get("params") or {}
     opts = load_options()
+    state = load_state()
     if jtype == "refresh_updates":
         return "done", "Home Assistant update status refreshed."
     if jtype == "update_agent":
         return "failed", "PatchPilot HAOS Agent updates are installed through the Home Assistant Add-on Store."
+    if jtype == "deploy_ssl":
+        rollover_pubkey_pem = str(params.get("rollover_pubkey_pem") or "").strip()
+        if rollover_pubkey_pem:
+            install_rollover_public_key(rollover_pubkey_pem)
+        cert_b64 = str(params.get("ca_pem_b64") or "").strip()
+        cert_sig = str(params.get("ca_sig_b64") or "").strip()
+        expected_hash = str(params.get("ca_sha256") or "").strip()
+        if not cert_b64 or not cert_sig or not expected_hash:
+            return "failed", "Missing signed CA payload"
+        cert_data = base64.b64decode(cert_b64)
+        actual_hash = hashlib.sha256(cert_data).hexdigest()
+        if actual_hash != expected_hash:
+            return "failed", f"SHA-256 mismatch: expected {expected_hash[:16]} got {actual_hash[:16]}"
+        if not verify_ca_signature(cert_data, cert_sig, opts, state):
+            return "failed", "CA signature verification failed"
+        pem_text = cert_data.decode().strip()
+        if "-----BEGIN CERTIFICATE-----" not in pem_text:
+            return "failed", "Downloaded data is not a valid PEM certificate"
+        state["ca_pem_override"] = pem_text
+        save_state(state)
+        CA_FILE.write_text(pem_text + "\n")
+        CA_FILE.chmod(0o600)
+        return "done", "Signed CA certificate installed for HAOS agent"
     if jtype == "ha_trigger_agent_update":
         webhook_id = normalize_webhook_id(str(opts.get("agent_update_webhook_id") or "").strip())
         if not webhook_id:

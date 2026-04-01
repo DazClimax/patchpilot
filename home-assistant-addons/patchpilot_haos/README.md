@@ -28,6 +28,7 @@ Use these values in the add-on form:
 - `advertise_ip`: optional fixed LAN IP override if Home Assistant reports the wrong address
 - `poll_interval`: polling interval in seconds
 - `ca_pem`: optional PEM content for self-signed TLS servers
+- `ca_rollover_pub_pem`: optional PatchPilot rollover public key for signed CA rotations
 
 Example:
 
@@ -41,6 +42,10 @@ ca_pem: |
   -----BEGIN CERTIFICATE-----
   ...
   -----END CERTIFICATE-----
+ca_rollover_pub_pem: |
+  -----BEGIN PUBLIC KEY-----
+  ...
+  -----END PUBLIC KEY-----
 ```
 
 ## Optional Configuration

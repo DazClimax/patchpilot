@@ -12,13 +12,15 @@ interface DropdownProps {
   onChange: (v: string) => void
   options: DropdownOption[]
   placeholder?: string
+  disabled?: boolean
 }
 
-export function Dropdown({ value, onChange, options, placeholder }: DropdownProps) {
+export function Dropdown({ value, onChange, options, placeholder, disabled = false }: DropdownProps) {
   const [open, setOpen] = useState(false)
   const [focused, setFocused] = useState(false)
   const [menuStyle, setMenuStyle] = useState<React.CSSProperties | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   const selected = options.find(o => o.value === value)
 
@@ -50,7 +52,10 @@ export function Dropdown({ value, onChange, options, placeholder }: DropdownProp
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      const insideTrigger = !!ref.current?.contains(target)
+      const insideMenu = !!menuRef.current?.contains(target)
+      if (!insideTrigger && !insideMenu) setOpen(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -74,9 +79,13 @@ export function Dropdown({ value, onChange, options, placeholder }: DropdownProp
       {/* Trigger */}
       <button
         type="button"
+        disabled={disabled}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        onClick={() => setOpen(o => !o)}
+        onClick={() => {
+          if (disabled) return
+          setOpen(o => !o)
+        }}
         style={{
           width: '100%',
           minHeight: controlStyles.minHeight,
@@ -84,12 +93,13 @@ export function Dropdown({ value, onChange, options, placeholder }: DropdownProp
           boxSizing: 'border-box',
           background: colors.bg,
           border: `1px solid ${borderColor}`,
-          color: selected ? colors.text : colors.textMuted,
+          color: disabled ? colors.textMuted : (selected ? colors.text : colors.textMuted),
           fontFamily: "'Electrolize', monospace",
           fontSize: controlStyles.fontSize,
           lineHeight: controlStyles.lineHeight,
           letterSpacing: '0.05em',
-          cursor: 'pointer',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled ? 0.65 : 1,
           textAlign: 'left',
           outline: 'none',
           transition: 'border-color 0.15s, box-shadow 0.15s',
@@ -106,10 +116,10 @@ export function Dropdown({ value, onChange, options, placeholder }: DropdownProp
           top: '50%',
           transform: `translateY(-50%) rotate(${open ? '180deg' : '0deg'})`,
           transition: 'transform 0.18s',
-          color: open ? colors.primary : colors.textMuted,
+          color: disabled ? colors.textDim : (open ? colors.primary : colors.textMuted),
           fontSize: '10px',
           lineHeight: 1,
-          textShadow: open ? glow(colors.primary, 4) : 'none',
+          textShadow: disabled ? 'none' : (open ? glow(colors.primary, 4) : 'none'),
         }}>
           ▾
         </span>
@@ -117,16 +127,19 @@ export function Dropdown({ value, onChange, options, placeholder }: DropdownProp
 
       {/* Dropdown list */}
       {open && menuStyle && typeof document !== 'undefined' && createPortal((
-        <div style={{
-          ...menuStyle,
-          background: glassBg(0.98),
-          backdropFilter: 'blur(16px)',
-          WebkitBackdropFilter: 'blur(16px)',
-          border: `1px solid ${colors.primary}55`,
-          boxShadow: `0 8px 32px rgba(0,0,0,0.8), 0 0 20px ${colors.primary}10`,
-          animation: 'pp-fadein 0.12s ease both',
-          overflow: 'hidden',
-        }}>
+        <div
+          ref={menuRef}
+          style={{
+            ...menuStyle,
+            background: glassBg(0.98),
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            border: `1px solid ${colors.primary}55`,
+            boxShadow: `0 8px 32px rgba(0,0,0,0.8), 0 0 20px ${colors.primary}10`,
+            animation: 'pp-fadein 0.12s ease both',
+            overflow: 'hidden',
+          }}
+        >
           {/* Top glow line */}
           <div style={{
             position: 'absolute', top: 0, left: 0, right: 0,

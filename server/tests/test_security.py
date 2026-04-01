@@ -4,6 +4,27 @@ test_security.py — security and isolation tests.
 
 import secrets
 import pytest
+import app as app_module
+
+
+def _create_user(db_conn, username: str, role: str = "user", password: str = "secret123") -> int:
+    db_conn.execute(
+        "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+        (username, app_module.hash_password(password), role),
+    )
+    db_conn.commit()
+    row = db_conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+    return int(row["id"])
+
+
+def _login(client, username: str, password: str) -> str:
+    resp = client.post(
+        "/api/auth/login",
+        json={"username": username, "password": password},
+        headers={"x-admin-key": ""},
+    )
+    assert resp.status_code == 200
+    return resp.json()["token"]
 
 
 # ---------------------------------------------------------------------------
@@ -167,3 +188,50 @@ class TestWrongAgentId:
             headers={"x-token": token},
         )
         assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# User-management protection rules
+# ---------------------------------------------------------------------------
+
+class TestUserProtection:
+    def test_session_admin_cannot_delete_self(self, client, db_conn):
+        user_id = _create_user(db_conn, "self-admin", role="admin", password="secret123")
+        token = _login(client, "self-admin", "secret123")
+
+        resp = client.delete(
+            f"/api/users/{user_id}",
+            headers={"Authorization": f"Bearer {token}", "x-admin-key": ""},
+        )
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Cannot delete yourself"
+
+    def test_last_admin_cannot_be_deleted(self, client, db_conn):
+        user_id = _create_user(db_conn, "last-admin", role="admin", password="secret123")
+
+        resp = client.delete(f"/api/users/{user_id}")
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Cannot delete the last admin user"
+
+    def test_session_admin_cannot_remove_own_admin_role(self, client, db_conn):
+        user_id = _create_user(db_conn, "role-admin", role="admin", password="secret123")
+        token = _login(client, "role-admin", "secret123")
+
+        resp = client.patch(
+            f"/api/users/{user_id}",
+            json={"role": "user"},
+            headers={"Authorization": f"Bearer {token}", "x-admin-key": ""},
+        )
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "You cannot remove your own admin role"
+
+    def test_last_admin_cannot_be_demoted(self, client, db_conn):
+        user_id = _create_user(db_conn, "only-admin", role="admin", password="secret123")
+
+        resp = client.patch(f"/api/users/{user_id}", json={"role": "readonly"})
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Cannot demote the last admin user"

@@ -253,7 +253,7 @@ function decodePemFromBase64(value: string): string {
   }
 }
 
-function buildHaAddonConfig(serverUrl: string, agentId: string, registerKey: string, caPemB64: string, advertiseIp: string): string {
+function buildHaAddonConfig(serverUrl: string, agentId: string, registerKey: string, caPemB64: string, caRolloverPubPemB64: string, advertiseIp: string): string {
   const lines = [
     `patchpilot_server: ${JSON.stringify(serverUrl)}`,
     `register_key: ${JSON.stringify(registerKey || '<REGISTER_KEY>')}`,
@@ -270,10 +270,19 @@ function buildHaAddonConfig(serverUrl: string, agentId: string, registerKey: str
   } else {
     lines.push('ca_pem: ""')
   }
+  const rolloverPem = decodePemFromBase64(caRolloverPubPemB64).trim()
+  if (rolloverPem) {
+    lines.push('ca_rollover_pub_pem: |')
+    for (const line of rolloverPem.split('\n')) {
+      lines.push(`  ${line}`)
+    }
+  } else {
+    lines.push('ca_rollover_pub_pem: ""')
+  }
   return lines.join('\n')
 }
 
-function buildOneLiner(serverUrl: string, agentId: string, registerKey: string, caPemB64: string): string {
+function buildOneLiner(serverUrl: string, agentId: string, registerKey: string, caPemB64: string, caRolloverPubPemB64: string): string {
   const effectiveRegisterKey = registerKey || '<KEY>'
   const envParts = [
     `PATCHPILOT_SERVER=${shellSingleQuote(serverUrl)}`,
@@ -285,12 +294,14 @@ function buildOneLiner(serverUrl: string, agentId: string, registerKey: string, 
 
   if (serverUrl.toLowerCase().startsWith('https://')) {
     const ca = shellSingleQuote(caPemB64)
+    const rolloverPub = shellSingleQuote(caRolloverPubPemB64)
     const installUrl = shellSingleQuote(`${serverUrl}/agent/install.sh`)
     return [
       `PP_CA_B64=${ca}`,
+      `PP_CA_ROLLOVER_PUB_B64=${rolloverPub}`,
       'PP_CA_FILE=$(mktemp)',
       `printf '%s' "$PP_CA_B64" | base64 -d > "$PP_CA_FILE"`,
-      `curl -fsSL --cacert "$PP_CA_FILE" ${installUrl} | sudo ${envParts.join(' ')} PATCHPILOT_CA_PEM_B64="$PP_CA_B64" bash`,
+      `curl -fsSL --cacert "$PP_CA_FILE" ${installUrl} | sudo ${envParts.join(' ')} PATCHPILOT_CA_PEM_B64="$PP_CA_B64" PATCHPILOT_CA_ROLLOVER_PUB_B64="$PP_CA_ROLLOVER_PUB_B64" bash`,
       'rm -f "$PP_CA_FILE"',
     ].join(' && ')
   }
@@ -299,11 +310,12 @@ function buildOneLiner(serverUrl: string, agentId: string, registerKey: string, 
   return `curl -fsSL ${installUrl} | sudo ${envParts.join(' ')} bash`
 }
 
-function buildScript(serverUrl: string, agentId: string, registerKey: string, caPemB64: string): string {
+function buildScript(serverUrl: string, agentId: string, registerKey: string, caPemB64: string, caRolloverPubPemB64: string): string {
   // Build as array to avoid template-literal escaping nightmare with shell ${}
   const D = '$'  // shell dollar sign
   const effectiveRegisterKey = registerKey || '<KEY>'
   const caLine = caPemB64 ? `CA_PEM_B64=${shellSingleQuote(caPemB64)}` : "CA_PEM_B64=''"
+  const rolloverPubLine = caRolloverPubPemB64 ? `CA_ROLLOVER_PUB_B64=${shellSingleQuote(caRolloverPubPemB64)}` : "CA_ROLLOVER_PUB_B64=''"
   const lines = [
     '#!/bin/bash',
     '# PatchPilot Agent Installer',
@@ -314,6 +326,7 @@ function buildScript(serverUrl: string, agentId: string, registerKey: string, ca
     `SERVER_URL="${serverUrl}"`,
     `REGISTER_KEY="${effectiveRegisterKey}"`,
     caLine,
+    rolloverPubLine,
     'AGENT_DIR="/opt/patchpilot/agent"',
     'CONFIG_DIR="/etc/patchpilot"',
     'MISSING_PKGS=()',
@@ -355,6 +368,7 @@ function buildScript(serverUrl: string, agentId: string, registerKey: string, ca
     '',
     'check_pkg python3   python3',
     'check_pkg systemctl systemd',
+    'check_pkg openssl   openssl',
     '',
     'if ! command -v curl &>/dev/null && ! command -v wget &>/dev/null; then',
     '  echo "[patchpilot] Missing: curl (no curl or wget found)"',
@@ -378,6 +392,10 @@ function buildScript(serverUrl: string, agentId: string, registerKey: string, ca
     '',
     '# ── Create directories ────────────────────────────────────────────────────────',
     `mkdir -p "${D}AGENT_DIR" "${D}CONFIG_DIR"`,
+    `if [ -n "${D}CA_ROLLOVER_PUB_B64" ]; then`,
+    `  printf '%s' "${D}CA_ROLLOVER_PUB_B64" | base64 -d > "${D}CONFIG_DIR/ca_rollover_public.pem"`,
+    `  chmod 644 "${D}CONFIG_DIR/ca_rollover_public.pem"`,
+    'fi',
     '',
     '# ── SSL bootstrap ────────────────────────────────────────────────────────────',
     'CURL_OPTS=""',
@@ -432,6 +450,9 @@ function buildScript(serverUrl: string, agentId: string, registerKey: string, ca
     `if [ -s "${D}CONFIG_DIR/ca.pem" ]; then`,
     `  echo "PATCHPILOT_CA_BUNDLE=${D}CONFIG_DIR/ca.pem" >> "${D}CONFIG_DIR/agent.conf"`,
     'fi',
+    `if [ -s "${D}CONFIG_DIR/ca_rollover_public.pem" ]; then`,
+    `  echo "PATCHPILOT_CA_ROLLOVER_PUBKEY=${D}CONFIG_DIR/ca_rollover_public.pem" >> "${D}CONFIG_DIR/agent.conf"`,
+    'fi',
     `chmod 600 "${D}CONFIG_DIR/agent.conf"`,
     '',
     '# ── Create systemd service ────────────────────────────────────────────────────',
@@ -479,6 +500,7 @@ export function DeployPage() {
   const [registerKey, setRegisterKey] = useState('')
   const [expiresIn, setExpiresIn] = useState(0)
   const [caPemB64, setCaPemB64] = useState('')
+  const [caRolloverPubPemB64, setCaRolloverPubPemB64] = useState('')
 
   // Load settings + active key in parallel on mount
   useEffect(() => {
@@ -516,6 +538,7 @@ export function DeployPage() {
       }).catch(() => {}),
       api.deployBootstrap().then(r => {
         setCaPemB64(r.ca_pem_b64 || '')
+        setCaRolloverPubPemB64(r.ca_rollover_pub_pem_b64 || '')
       }).catch(() => {}),
     ]).finally(() => setPageReady(true))
   }, [])
@@ -540,10 +563,10 @@ export function DeployPage() {
 
   const urlValid = SERVER_URL_RE.test(effectiveUrl)
   const script = urlValid && keyUsable
-    ? buildScript(effectiveUrl, safeAgentId, registerKey, caPemB64)
+    ? buildScript(effectiveUrl, safeAgentId, registerKey, caPemB64, caRolloverPubPemB64)
     : ''
-  const oneliner = urlValid && keyUsable ? buildOneLiner(effectiveUrl, safeAgentId, registerKey, caPemB64) : ''
-  const haAddonConfig = urlValid && keyUsable ? buildHaAddonConfig(effectiveUrl, safeAgentId, registerKey, caPemB64, haAdvertiseIp.trim()) : ''
+  const oneliner = urlValid && keyUsable ? buildOneLiner(effectiveUrl, safeAgentId, registerKey, caPemB64, caRolloverPubPemB64) : ''
+  const haAddonConfig = urlValid && keyUsable ? buildHaAddonConfig(effectiveUrl, safeAgentId, registerKey, caPemB64, caRolloverPubPemB64, haAdvertiseIp.trim()) : ''
   const haRepoUrl = 'https://github.com/DazClimax/patchpilot'
 
   const downloadScript = () => {

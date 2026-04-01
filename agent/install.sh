@@ -10,6 +10,7 @@ AGENT_ID="${PATCHPILOT_AGENT_ID:-$(hostname)}"
 SERVER_URL="${PATCHPILOT_SERVER}"
 REGISTER_KEY="${PATCHPILOT_REGISTER_KEY}"
 CA_PEM_B64="${PATCHPILOT_CA_PEM_B64}"
+CA_ROLLOVER_PUB_B64="${PATCHPILOT_CA_ROLLOVER_PUB_B64}"
 INSECURE_BOOTSTRAP="${PATCHPILOT_INSECURE_BOOTSTRAP:-0}"
 AGENT_DIR="/opt/patchpilot/agent"
 CONFIG_DIR="/etc/patchpilot"
@@ -63,6 +64,7 @@ check_pkg() {
 
 check_pkg python3   python3
 check_pkg systemctl systemd
+check_pkg openssl   openssl
 
 # For downloading: need curl or wget
 if ! command -v curl &>/dev/null && ! command -v wget &>/dev/null; then
@@ -88,6 +90,11 @@ fi
 
 # ── Create directories ────────────────────────────────────────────────────────
 mkdir -p "$AGENT_DIR" "$CONFIG_DIR"
+
+if [ -n "$CA_ROLLOVER_PUB_B64" ]; then
+  printf '%s' "$CA_ROLLOVER_PUB_B64" | base64 -d > "$CONFIG_DIR/ca_rollover_public.pem"
+  chmod 644 "$CONFIG_DIR/ca_rollover_public.pem"
+fi
 
 # ── SSL: fetch CA certificate if server uses HTTPS ───────────────────────────
 CURL_OPTS=""
@@ -163,6 +170,10 @@ PATCHPILOT_REGISTER_KEY=${REGISTER_KEY}"
 if [ -s "$CONFIG_DIR/ca.pem" ]; then
   CONFIG_CONTENT="${CONFIG_CONTENT}
 PATCHPILOT_CA_BUNDLE=${CONFIG_DIR}/ca.pem"
+fi
+if [ -s "$CONFIG_DIR/ca_rollover_public.pem" ]; then
+  CONFIG_CONTENT="${CONFIG_CONTENT}
+PATCHPILOT_CA_ROLLOVER_PUBKEY=${CONFIG_DIR}/ca_rollover_public.pem"
 fi
 
 echo "$CONFIG_CONTENT" > "$CONFIG_DIR/agent.conf"
