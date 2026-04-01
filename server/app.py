@@ -269,7 +269,7 @@ STATIC_DIR = Path(os.environ.get("PATCHPILOT_STATIC_DIR", str(Path(__file__).par
 # ---------------------------------------------------------------------------
 _AGENT_ID_RE = re.compile(r'^[a-zA-Z0-9._-]{1,64}$')
 _TG_TOKEN_RE  = re.compile(r'^\d+:[A-Za-z0-9_-]{35,}$')
-ALLOWED_JOB_TYPES = {"patch", "dist_upgrade", "force_patch", "refresh_updates", "reboot", "update_agent", "autoremove", "deploy_ssl", "ack_config_review", "ha_backup", "ha_core_update", "ha_backup_update", "ha_supervisor_update", "ha_os_update", "ha_addon_update", "ha_addons_update", "ha_trigger_agent_update"}
+ALLOWED_JOB_TYPES = {"patch", "dist_upgrade", "force_patch", "refresh_updates", "reboot", "update_agent", "autoremove", "deploy_ssl", "ack_config_review", "ha_backup", "ha_core_update", "ha_backup_update", "ha_supervisor_update", "ha_os_update", "ha_addon_update", "ha_addons_update", "ha_entity_update", "ha_trigger_agent_update"}
 
 def _validate_agent_id(agent_id: str):
     if not _AGENT_ID_RE.match(agent_id):
@@ -1007,10 +1007,12 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
         conn.execute("DELETE FROM packages WHERE agent_id=?", (agent_id,))
         # SEC M-1: Truncate package fields to prevent storage bloat from compromised agents
         conn.executemany(
-            "INSERT OR REPLACE INTO packages (agent_id, name, current_ver, new_ver) VALUES (?,?,?,?)",
+            "INSERT OR REPLACE INTO packages (agent_id, name, current_ver, source_kind, source_id, new_ver) VALUES (?,?,?,?,?,?)",
             [(agent_id,
               str(p.get("name", ""))[:256],
               str(p.get("current", ""))[:128] if p.get("current") else None,
+              str(p.get("source_kind", ""))[:64] if p.get("source_kind") else None,
+              str(p.get("source_id", ""))[:256] if p.get("source_id") else None,
               str(p.get("new", ""))[:128] if p.get("new") else None,
               ) for p in packages],
         )
@@ -1186,7 +1188,8 @@ def api_dashboard():
 
     with get_db_ctx() as conn:
         agents = conn.execute(
-            """SELECT *,
+            """SELECT agents.*,
+               (SELECT COUNT(*) FROM packages p WHERE p.agent_id = agents.id) AS live_pending_count,
                (julianday('now','localtime') - julianday(last_seen)) * 86400 as seconds_ago
                FROM agents ORDER BY hostname"""
         ).fetchall()
@@ -1204,6 +1207,7 @@ def api_dashboard():
     result = []
     for a in agents:
         row = _redact_agent_record(dict(a))
+        row["pending_count"] = row.pop("live_pending_count", row.get("pending_count", 0))
         lj = last_job_map.get(row["id"])
         if lj:
             row["last_job_type"] = lj["type"]
@@ -1294,7 +1298,8 @@ def api_agent(agent_id: str, days: int = 7, limit: int = 10, offset: int = 0):
 
     with get_db_ctx() as conn:
         agent = conn.execute(
-            """SELECT *,
+            """SELECT agents.*,
+               (SELECT COUNT(*) FROM packages p WHERE p.agent_id = agents.id) AS live_pending_count,
                (julianday('now','localtime') - julianday(last_seen)) * 86400 as seconds_ago
                FROM agents WHERE id=?""",
             (agent_id,),
@@ -1320,6 +1325,7 @@ def api_agent(agent_id: str, days: int = 7, limit: int = 10, offset: int = 0):
         jobs = conn.execute(jobs_query, jobs_params).fetchall()
     now_local = datetime.now()
     agent_dict = _redact_agent_record(dict(agent))
+    agent_dict["pending_count"] = agent_dict.pop("live_pending_count", agent_dict.get("pending_count", 0))
     agent_last_seen_raw = agent_dict.get("last_seen")
     agent_last_seen_dt = None
     if agent_last_seen_raw:
@@ -1341,6 +1347,7 @@ def api_agent(agent_id: str, days: int = 7, limit: int = 10, offset: int = 0):
         "ha_os_update",
         "ha_addon_update",
         "ha_addons_update",
+        "ha_entity_update",
     }
     jobs_payload = []
     for j in jobs:
@@ -1399,6 +1406,7 @@ async def create_job(agent_id: str, request: Request):
                 "ha_os_update": "ha_os_update",
                 "ha_addon_update": "ha_addon_update",
                 "ha_addons_update": "ha_addons_update",
+                "ha_entity_update": "ha_entity_update",
             }.get(job_type)
             if job_type == "ha_backup_update" and not {"ha_backup", "ha_core_update"}.issubset(capabilities):
                 raise HTTPException(status_code=422, detail="Agent does not support ha_backup_update")

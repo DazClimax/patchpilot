@@ -24,7 +24,7 @@ CA_ROLLOVER_PUB_FILE = Path("/data/patchpilot_ca_rollover_public.pem")
 SUPERVISOR_URL = "http://supervisor"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 SELF_ADDON_HINT = "patchpilot_haos"
-AGENT_VERSION = "1.7"
+AGENT_VERSION = "1.8"
 AUTO_UPDATE_CAPABILITY = "ha_agent_auto_update"
 WEBHOOK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 BASE_CAPABILITIES = (
@@ -34,6 +34,7 @@ BASE_CAPABILITIES = (
     "ha_os_update",
     "ha_addon_update",
     "ha_addons_update",
+    "ha_entity_update",
 )
 BUILTIN_UPDATE_ENTITY_MARKERS = (
     "home_assistant_core",
@@ -236,6 +237,8 @@ def get_homeassistant_entity_updates() -> list[dict]:
             "name": title,
             "current": installed,
             "new": latest,
+            "source_kind": "ha_entity_update",
+            "source_id": entity_id,
         })
     return updates
 
@@ -648,12 +651,21 @@ def run_job(job: dict) -> tuple[str, str]:
         return "done", f"Home Assistant Supervisor update started. Response: {json.dumps(data)}"
     if jtype == "ha_os_update":
         version = params.get("version")
+        backup_result = supervisor_json("POST", "/backups/new/full", {
+            "name": f"PatchPilot backup before HA OS update {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            "background": False,
+        })
+        backup_data = backup_result.get("data", {})
         payload = {}
         if version:
             payload["version"] = version
         result = supervisor_json("POST", "/os/update", payload)
         data = result.get("data", {})
-        return "done", f"Home Assistant OS update started{f' -> {version}' if version else ''}. Response: {json.dumps(data)}"
+        return "done", (
+            f"Backup created: {backup_data.get('slug', 'unknown')}. "
+            f"Home Assistant OS update started{f' -> {version}' if version else ''}. "
+            f"Response: {json.dumps(data)}"
+        )
     if jtype == "ha_addon_update":
         slug = str(params.get("slug") or "").strip()
         if not slug:
@@ -682,6 +694,14 @@ def run_job(job: dict) -> tuple[str, str]:
             "updated_addons": updated,
             "skipped_addons": skipped,
         })
+    if jtype == "ha_entity_update":
+        entity_id = str(params.get("entity_id") or "").strip()
+        if not entity_id.startswith("update."):
+            return "failed", "Missing or invalid update entity_id"
+        result = homeassistant_request("POST", "/services/update/install", {
+            "entity_id": entity_id,
+        })
+        return "done", f"Home Assistant update triggered for {entity_id}. Response: {json.dumps(result)}"
     return "failed", f"Unknown job type: {jtype}"
 
 

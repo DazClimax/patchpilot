@@ -35,8 +35,18 @@ function jobTypeColor(t: string) {
     ha_os_update: colors.warn,
     ha_addon_update: colors.warn,
     ha_addons_update: colors.warn,
+    ha_entity_update: colors.warn,
   }
   return map[t] ?? colors.textDim
+}
+
+function inferHaEntityIdFromPackageName(name: string): string | null {
+  const normalized = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  return normalized ? `update.${normalized}` : null
 }
 
 // ─── Loading skeleton ─────────────────────────────────────────────────────────
@@ -331,8 +341,10 @@ export function VmDetail() {
   const hasHaOsUpdate = capabilityList.includes('ha_os_update')
   const hasHaAddonUpdate = capabilityList.includes('ha_addon_update')
   const hasHaAddonsUpdate = capabilityList.includes('ha_addons_update')
+  const hasHaEntityUpdate = capabilityList.includes('ha_entity_update')
   const hasHaAgentAutoUpdate = capabilityList.includes('ha_agent_auto_update')
   const effectiveAgentTargetVersion = isHaos ? haAgentTargetVersion : agentTargetVersion
+  const supportsHaEntityUpdate = hasHaEntityUpdate || (isHaos && (agent?.agent_version ?? '') === haAgentTargetVersion)
   const agentVersionAccent = isHaos && !hasHaAgentAutoUpdate
     ? colors.primaryDim
     : agent?.agent_version === effectiveAgentTargetVersion
@@ -454,14 +466,14 @@ export function VmDetail() {
               size="sm"
               variant="ghost"
               onClick={() => setConfirm({
-                title: 'Home Assistant OS Update',
-                message: `Update Home Assistant OS on "${agent.hostname}"?`,
+                title: 'Home Assistant OS Backup + Update',
+                message: `Create a backup and then update Home Assistant OS on "${agent.hostname}"?`,
                 onConfirm: () => { setConfirm(null); triggerJob('ha_os_update') },
               })}
               disabled={busy}
               style={{ color: colors.warn }}
             >
-              ⇪ HA OS
+              ⇪ HA OS + Backup
             </Button>
           )}
           {isHaos && hasHaBackup && hasHaCoreUpdate && (
@@ -810,13 +822,40 @@ export function VmDetail() {
 
       {/* Pending updates */}
       <div style={{ marginBottom: '28px' }}>
-        <SectionHeader right={
-          packages.length > 0
-            ? <Badge color={colors.warn}>{packages.length} Pending</Badge>
-            : undefined
-        }>
-          Pending Updates
-        </SectionHeader>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: '14px',
+          gap: '12px',
+          flexWrap: 'wrap',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+            <div style={{
+              width: '2px',
+              height: '14px',
+              background: `linear-gradient(180deg, ${colors.primary}, ${colors.primaryDim}44)`,
+              boxShadow: glow(colors.primary, 4),
+              flexShrink: 0,
+            }} />
+            <h2 style={{
+              margin: 0,
+              fontFamily: "'Orbitron', sans-serif",
+              fontSize: '11px',
+              fontWeight: 600,
+              letterSpacing: '0.28em',
+              textTransform: 'uppercase',
+              color: colors.primary,
+              textShadow: glowText(colors.primary, 4),
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}>
+              Pending Updates
+            </h2>
+          </div>
+          {packages.length > 0 ? <Badge color={colors.warn}>{packages.length} Pending</Badge> : null}
+        </div>
 
         <div style={{
           border: `1px solid ${colors.border}`,
@@ -855,40 +894,66 @@ export function VmDetail() {
                 </tr>
               </thead>
               <tbody>
-                {packages.map((pkg, i) => (
-                  <PackageRow
-                    key={pkg.id}
-                    pkg={pkg}
-                    index={i}
-                    onPatch={pkg.name === 'home-assistant-addon-patchpilot' ? undefined : () => {
-                      if (isHaos) {
-                        if (pkg.name === 'home-assistant-core') {
-                          return triggerJob('ha_core_update')
-                        }
-                        if (pkg.name === 'home-assistant-supervisor') {
-                          return triggerJob('ha_supervisor_update')
-                        }
-                        if (pkg.name === 'home-assistant-os') {
-                          return triggerJob('ha_os_update')
-                        }
-                        if (pkg.name.startsWith('addon:') && hasHaAddonUpdate) {
-                          return triggerJob('ha_addon_update', { slug: pkg.name.slice('addon:'.length) })
+                {packages.map((pkg, i) => {
+                  const haAction = (() => {
+                    if (!isHaos) {
+                      return {
+                        type: 'patch',
+                        params: { packages: [pkg.name] } as Record<string, unknown>,
+                      }
+                    }
+                    if (pkg.name === 'home-assistant-core' && hasHaCoreUpdate) {
+                      return { type: 'ha_core_update', params: undefined }
+                    }
+                    if (pkg.name === 'home-assistant-supervisor' && hasHaSupervisorUpdate) {
+                      return { type: 'ha_supervisor_update', params: undefined }
+                    }
+                    if (pkg.name === 'home-assistant-os' && hasHaOsUpdate) {
+                      return { type: 'ha_os_update', params: undefined }
+                    }
+                    if (pkg.name === 'home-assistant-addon-patchpilot' && hasHaAgentAutoUpdate) {
+                      return { type: 'ha_trigger_agent_update', params: undefined }
+                    }
+                    if (pkg.name.startsWith('addon:') && hasHaAddonUpdate) {
+                      return {
+                        type: 'ha_addon_update',
+                        params: { slug: pkg.name.slice('addon:'.length) } as Record<string, unknown>,
+                      }
+                    }
+                    if (supportsHaEntityUpdate) {
+                      const entityId = pkg.source_kind === 'ha_entity_update' && pkg.source_id
+                        ? pkg.source_id
+                        : inferHaEntityIdFromPackageName(pkg.name)
+                      if (entityId) {
+                        return {
+                          type: 'ha_entity_update',
+                          params: { entity_id: entityId } as Record<string, unknown>,
                         }
                       }
-                      return triggerJob('patch', { packages: [pkg.name] })
-                    }}
-                    patchLabel={pkg.name === 'home-assistant-addon-patchpilot' ? 'Update in HA' : 'Update'}
-                    onForcePatch={!isHaos && isRpmSystem ? () => setConfirm({
-                      title: 'Force Update',
-                      message: `Run a forced RPM update for "${pkg.name}" on "${agent.hostname}"? This uses a transient systemd service as a Fedora compatibility fallback.`,
-                      onConfirm: () => {
-                        setConfirm(null)
-                        triggerJob('force_patch', { packages: [pkg.name] })
-                      },
-                    }) : undefined}
-                    busy={busy}
-                  />
-                ))}
+                    }
+                    return null
+                  })()
+                  const onPatch = haAction ? () => triggerJob(haAction.type, haAction.params) : undefined
+
+                  return (
+                    <PackageRow
+                      key={pkg.id}
+                      pkg={pkg}
+                      index={i}
+                      onPatch={onPatch}
+                      patchLabel="Update"
+                      onForcePatch={!isHaos && isRpmSystem ? () => setConfirm({
+                        title: 'Force Update',
+                        message: `Run a forced RPM update for "${pkg.name}" on "${agent.hostname}"? This uses a transient systemd service as a Fedora compatibility fallback.`,
+                        onConfirm: () => {
+                          setConfirm(null)
+                          triggerJob('force_patch', { packages: [pkg.name] })
+                        },
+                      }) : undefined}
+                      busy={busy}
+                    />
+                  )
+                })}
               </tbody>
             </table>
           )}

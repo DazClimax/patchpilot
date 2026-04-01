@@ -127,6 +127,27 @@ class TestHeartbeat:
         detail = client.get(f"/api/agents/{agent_id}")
         assert detail.json()["agent"]["pending_count"] == 5
 
+    def test_dashboard_uses_live_package_count_not_stale_agent_counter(self, client, db_conn):
+        db_conn.execute(
+            """
+            INSERT INTO agents (id, hostname, token, pending_count, last_seen)
+            VALUES (?, ?, ?, ?, datetime('now','localtime'))
+            """,
+            ("ha-agent", "homeassistant", "token", 0),
+        )
+        db_conn.execute(
+            "INSERT INTO packages (agent_id, name, current_ver, new_ver) VALUES (?, ?, ?, ?)",
+            ("ha-agent", "Power Flow Card Plus update", "0.2.6", "0.2.7"),
+        )
+        db_conn.commit()
+
+        dash = client.get("/api/dashboard")
+        assert dash.status_code == 200
+        payload = dash.json()
+        row = next(a for a in payload["agents"] if a["id"] == "ha-agent")
+        assert row["pending_count"] == 1
+        assert payload["stats"]["total_pending"] == 1
+
 
 # ---------------------------------------------------------------------------
 # Job polling
@@ -366,6 +387,29 @@ class TestCreateJob:
         detail = client.get(f"/api/agents/{agent_id}").json()
         job_types = [j["type"] for j in detail["jobs"]]
         assert "refresh_updates" in job_types
+
+    def test_ha_entity_update_job_allowed_for_haos_with_capability(self, client, db_conn):
+        db_conn.execute(
+            """
+            INSERT INTO agents (id, hostname, token, agent_type, capabilities)
+            VALUES (?, ?, ?, 'haos', ?)
+            """,
+            ("ha-agent", "homeassistant", "token", "ha_backup,ha_core_update,ha_supervisor_update,ha_os_update,ha_addon_update,ha_addons_update,ha_entity_update"),
+        )
+        db_conn.commit()
+
+        resp = client.post(
+            "/api/agents/ha-agent/jobs",
+            json={"type": "ha_entity_update", "params": {"entity_id": "update.power_flow_card_plus_update"}},
+        )
+
+        assert resp.status_code == 200
+        row = db_conn.execute(
+            "SELECT type, params FROM jobs WHERE agent_id='ha-agent' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        assert row["type"] == "ha_entity_update"
+        assert "update.power_flow_card_plus_update" in row["params"]
 
 
 # ---------------------------------------------------------------------------
