@@ -70,6 +70,8 @@ def init_db():
                 agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
                 name        TEXT NOT NULL,
                 current_ver TEXT,
+                source_kind TEXT,
+                source_id   TEXT,
                 new_ver     TEXT,
                 UNIQUE(agent_id, name)
             );
@@ -178,6 +180,16 @@ def init_db():
             conn.execute("ALTER TABLE agents ADD COLUMN capabilities TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass  # column already present — nothing to do
+
+        try:
+            conn.execute("ALTER TABLE packages ADD COLUMN source_kind TEXT")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            conn.execute("ALTER TABLE packages ADD COLUMN source_id TEXT")
+        except sqlite3.OperationalError:
+            pass
 
         # Insert default settings rows (skip if key already exists)
         _defaults = [

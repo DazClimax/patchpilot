@@ -6,7 +6,7 @@ This add-on:
 
 - registers a Home Assistant OS instance as its own PatchPilot agent
 - reports available Core, Supervisor, OS, and Add-on updates as pending updates
-- supports the job types `ha_backup`, `ha_core_update`, `ha_backup_update`, `ha_supervisor_update`, `ha_os_update`, `ha_addon_update`, and `ha_addons_update`
+- supports the job types `ha_backup`, `ha_core_update`, `ha_backup_update`, `ha_supervisor_update`, `ha_os_update`, `ha_addon_update`, `ha_addons_update`, and `ha_entity_update`
 
 ## Installation
 
@@ -57,7 +57,7 @@ If you do not set `agent_update_webhook_id`, everything still works normally. Yo
 ## Status
 
 Home Assistant OS is the supported scope for this add-on. Deprecated installation methods are intentionally not covered here.
-Update the PatchPilot HAOS add-on itself through the Home Assistant Add-on Store, not through the `HA Add-ons` action in PatchPilot.
+Without the optional webhook automation below, update the PatchPilot HAOS add-on itself through the Home Assistant Add-on Store. With the webhook configured, PatchPilot can trigger that Home Assistant update flow for you.
 
 ## Optional: Automatic Add-on Update Trigger
 
@@ -94,3 +94,12 @@ agent_update_webhook_id: "patchpilot-ha-agent-update"
 ```
 
 Accepted format: 8 to 128 characters using only letters, numbers, `-`, or `_`.
+
+## Signed Certificate Rotation
+
+For HTTPS deployments and later certificate changes, include both of these values in the add-on config:
+
+- `ca_pem`
+- `ca_rollover_pub_pem`
+
+PatchPilot uses them during **Deploy Trust to Agents** so the add-on can verify signed CA rollover payloads before the server switches to a new certificate.

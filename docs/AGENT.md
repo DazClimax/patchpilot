@@ -80,9 +80,7 @@ When the agent receives an `update_agent` job:
 4. Calls `os.fork()` + `sys.exit(0)` after 4 seconds, allowing the job result to be posted first
 5. systemd's `Restart=always` relaunches with the new code
 
-The server can also inline the agent code in the job payload (base64-encoded with SHA-256), which is used during the SSL bootstrap flow to update agents before they have the CA certificate.
-
-If an SSL error occurs during the download (e.g., the server certificate has changed), the agent automatically calls `_bootstrap_ca_cert` to re-fetch the CA certificate before retrying.
+The server can also inline the agent code in the job payload (base64-encoded with SHA-256), which is used during trust deployment so agents can move onto the current secure CA handling path before a certificate switch.
 
 ---
 
@@ -94,15 +92,15 @@ The agent enforces a minimum of TLS 1.2 for all HTTPS connections. This is set v
 
 ### CA Certificate Trust
 
-For HTTPS deployments with self-signed certificates, the agent needs the server's CA certificate. This is managed automatically:
+For HTTPS deployments with self-signed certificates, the agent needs the server's CA certificate. This is managed in these supported ways:
 
-1. **Via `deploy_ssl` job:** The server pushes the CA cert to all agents through the job system. The agent downloads `ca.pem` and `ca.pem.sha256` from the server, verifies integrity, and installs to `/etc/patchpilot/ca.pem`.
+1. **Via `deploy_ssl` job:** The server sends a signed CA rollover payload. The agent verifies the SHA-256 hash and the server-issued rollover signature before installing the CA to `/etc/patchpilot/ca.pem`.
 
-2. **Via `_bootstrap_ca_cert`:** If the agent encounters an SSL error (e.g., after a certificate change), it automatically re-downloads the CA cert using an unverified TLS connection. Both the certificate and its SHA-256 hash are downloaded and compared. PEM format is validated before writing.
+2. **Via environment variable:** Set `PATCHPILOT_CA_BUNDLE` in `agent.conf` or as an environment variable to point to a custom CA certificate file.
 
-3. **Via environment variable:** Set `PATCHPILOT_CA_BUNDLE` in `agent.conf` or as an environment variable to point to a custom CA certificate file.
+3. **Via local recovery:** If an agent missed a trust rollout while offline, copy the new CA to `/etc/patchpilot/ca.pem`, set `PATCHPILOT_CA_BUNDLE`, and restart the agent.
 
-After installing a new CA cert, the agent reloads its global SSL context in-process without requiring a restart.
+The previous unverified TLS CA bootstrap path is intentionally no longer used. After installing a new CA cert, the agent reloads its global SSL context in-process without requiring a restart.
 
 ### HTTP Warning
 
@@ -183,9 +181,9 @@ The server runs on two separate ports:
 | UI port | 8443 | Web dashboard, settings, auth, static files |
 | Agent port | 8050 | Agent registration, heartbeat, jobs, file downloads |
 
-The agent communicates exclusively with the **agent port**. Each port can independently have SSL enabled or disabled, controlled by the `AGENT_SSL` environment variable on the server. If both ports are set to the same value, the server runs in single-port mode.
+The agent communicates exclusively with the **agent port**. PatchPilot normally serves that port over HTTPS. If both ports are set to the same value, the server runs in single-port mode.
 
-The heartbeat response includes `canonical_url` which always points to the agent port with the correct protocol (HTTP or HTTPS). This allows agents to automatically migrate when the server's port or protocol changes.
+The heartbeat response still includes `canonical_url`, but certificate rotation now depends on trust being deployed first. Agents do not blindly accept a new CA just because the canonical URL changed.
 
 ---
 

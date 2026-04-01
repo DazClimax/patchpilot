@@ -43,13 +43,13 @@ PatchPilot server installation currently targets Debian/Ubuntu-style hosts and u
 Versioned one-liner:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.4/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh | sudo bash
 ```
 
 Inspect before running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.4/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```
@@ -57,7 +57,7 @@ sudo bash setup.sh
 With custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.4/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
 ```
 
 The bootstrap script will:
@@ -213,15 +213,23 @@ Stores `agent_id`, `token`, and `server` URL. Permissions: `chmod 600`. Do not d
 
 ### SSL / HTTPS
 
-SSL is enabled by default with a self-signed certificate generated during installation. Both the UI port and agent port can independently have SSL enabled.
+SSL is enabled by default with a self-signed certificate generated during installation. PatchPilot expects HTTPS on both the UI port and the agent port as the normal operating mode.
 
 From the **Settings** page in the web UI you can:
 
 1. **Generate Certificate** — creates a self-signed cert (1-10 year validity) under `/opt/patchpilot/ssl/`
-2. **Deploy to Agents** — pushes the CA cert to all agents via the job system (agents are auto-updated first)
-3. **Enable/Disable HTTPS** — activates or deactivates SSL; agents migrate automatically via `canonical_url`
+2. **Deploy Trust to Agents** — distributes the CA trust bundle for the currently configured certificate
+3. **Enable/Disable HTTPS** — activates or deactivates HTTPS on the server after trust has been deployed
 
-No SSH access to VMs required. The agent stores the CA bundle at `/etc/patchpilot/ca.pem` and trusts HTTPS connections automatically. The agent enforces TLS 1.2 as the minimum protocol version.
+No SSH access to VMs required. Linux agents store the CA bundle at `/etc/patchpilot/ca.pem`, and the HAOS add-on stores the same trust material in its local add-on state. The agent enforces TLS 1.2 as the minimum protocol version.
+
+For certificate rotation, use this order:
+
+1. Generate or install the new certificate on the PatchPilot server.
+2. Run **Deploy Trust to Agents** from Settings so Linux agents and HAOS receive the signed CA rollover payload.
+3. Only then switch or re-enable HTTPS with the new certificate.
+
+Agents no longer auto-trust a brand-new CA after an arbitrary TLS failure. This is intentional hardening against MITM during certificate rollover.
 
 ### Dual-Port Architecture
 
@@ -268,13 +276,13 @@ The container runtime prepares the mounted `/data` volume as root and then drops
 Use this path if you want to run the PatchPilot server with Docker instead of a native systemd service install.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.4/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/docker-compose.yml -o docker-compose.yml
 ```
 
 Adjust the file if needed, then start it with:
 
 ```bash
-docker pull ghcr.io/dazclimax/patchpilot:v1.6.4
+docker pull ghcr.io/dazclimax/patchpilot:v1.6.5
 ```
 
 Then launch it with:
@@ -338,7 +346,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: patchpilot:1.6.4
+    image: patchpilot:1.6.5
 ```
 
 and then run:
@@ -403,7 +411,7 @@ journalctl -u patchpilot-agent -n 30 --no-pager
 Common causes:
 - Wrong server URL in `/etc/patchpilot/agent.conf` (should point to the agent port, e.g., `https://192.168.1.10:8050`)
 - Registration key expired — generate a new one from the Deploy page
-- Firewall blocking the connection: `curl -k https://<server-ip>:<agent-port>/api/ping`
+- Firewall blocking the connection: `curl --cacert /etc/patchpilot/ca.pem https://<server-ip>:<agent-port>/api/ping`
 - SSL certificate not trusted: Check `/etc/patchpilot/ca.pem` exists and `PATCHPILOT_CA_BUNDLE` is set in `agent.conf`
 
 ### Agent re-registering with new ID on every restart

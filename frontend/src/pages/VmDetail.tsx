@@ -344,7 +344,7 @@ export function VmDetail() {
   const hasHaEntityUpdate = capabilityList.includes('ha_entity_update')
   const hasHaAgentAutoUpdate = capabilityList.includes('ha_agent_auto_update')
   const effectiveAgentTargetVersion = isHaos ? haAgentTargetVersion : agentTargetVersion
-  const supportsHaEntityUpdate = hasHaEntityUpdate || (isHaos && (agent?.agent_version ?? '') === haAgentTargetVersion)
+  const supportsHaEntityUpdate = isHaos
   const agentVersionAccent = isHaos && !hasHaAgentAutoUpdate
     ? colors.primaryDim
     : agent?.agent_version === effectiveAgentTargetVersion
@@ -735,7 +735,7 @@ export function VmDetail() {
       <div style={{ marginBottom: '12px' }} />
 
       {/* Reboot warning */}
-      {agent.reboot_required && (
+      {Boolean(agent.reboot_required) && (
         <div style={{
           border: `1px solid ${colors.danger}55`,
           background: `${colors.danger}0a`,

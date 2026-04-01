@@ -632,7 +632,7 @@ Return current SSL status and certificate info.
 
 ### POST /api/settings/deploy-ssl
 
-Deploy the CA certificate to all agents via the job system. Creates chained `update_agent` + `deploy_ssl` jobs per agent. Returns a batch ID for tracking progress.
+Deploy the CA trust bundle to all agents via the job system. Linux agents receive chained `update_agent` + `deploy_ssl` jobs. HAOS agents receive a direct `deploy_ssl` job with the signed CA rollover payload. Returns a batch ID for tracking progress.
 
 **Auth:** admin
 

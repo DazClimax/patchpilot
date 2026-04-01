@@ -88,6 +88,8 @@ export interface Package {
   agent_id: string
   name: string
   current_ver: string | null
+  source_kind?: string | null
+  source_id?: string | null
   new_ver: string | null
 }
 

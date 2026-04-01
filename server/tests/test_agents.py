@@ -411,6 +411,37 @@ class TestCreateJob:
         assert row["type"] == "ha_entity_update"
         assert "update.power_flow_card_plus_update" in row["params"]
 
+    def test_running_ha_core_job_is_shown_done_after_heartbeat_without_pending_package(self, client, db_conn):
+        db_conn.execute(
+            """
+            INSERT INTO agents (id, hostname, token, agent_type, capabilities, last_seen)
+            VALUES (?, ?, ?, 'haos', ?, ?)
+            """,
+            (
+                "ha-agent",
+                "homeassistant",
+                "token",
+                "ha_backup,ha_core_update,ha_supervisor_update,ha_os_update,ha_addon_update,ha_addons_update,ha_entity_update",
+                "2026-04-02 12:05:00",
+            ),
+        )
+        db_conn.execute(
+            """
+            INSERT INTO jobs (agent_id, type, status, started, params, created)
+            VALUES (?, 'ha_core_update', 'running', '2026-04-02 12:00:00', '{}', '2026-04-02 12:00:00')
+            """,
+            ("ha-agent",),
+        )
+        db_conn.commit()
+
+        detail = client.get("/api/agents/ha-agent")
+        assert detail.status_code == 200
+        assert detail.json()["jobs"][0]["status"] == "done"
+
+        dash = client.get("/api/dashboard")
+        row = next(a for a in dash.json()["agents"] if a["id"] == "ha-agent")
+        assert row["last_job_status"] == "done"
+
 
 # ---------------------------------------------------------------------------
 # Delete agent

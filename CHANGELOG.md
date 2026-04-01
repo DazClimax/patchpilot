@@ -7,6 +7,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.5] - 2026-04-02
+
+### Added
+- Home Assistant detail views can now trigger individual `update.*` entities such as `Power Flow Card Plus` instead of falling back to unsupported generic patch jobs
+- Home Assistant package records now persist `source_kind` and `source_id` metadata so targeted HA entity updates can be mapped safely
+
+### Changed
+- Version bumped to `1.6.5`
+- Docker, compose, installer, and release references now point consistently at the `v1.6.5` release
+- HA OS updates now always create a backup before the OS update is started
+- Dashboard and VM detail screens show running jobs more consistently instead of only highlighting package patch jobs
+
+### Fixed
+- Pending update counts now come from the live `packages` table instead of stale cached agent counters
+- Home Assistant update jobs that already completed on the HA side no longer stay stuck as `running` in PatchPilot after the next heartbeat
+- Home Assistant agent/add-on update feedback is more accurate across dashboard and detail flows
+- VM detail pages no longer leak numeric `0` values into the UI when boolean-like backend flags are unset
+
 ## [1.6.3] - 2026-03-29
 
 ### Added

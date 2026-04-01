@@ -54,6 +54,8 @@ def _make_in_memory_conn():
             agent_id    TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
             name        TEXT NOT NULL,
             current_ver TEXT,
+            source_kind TEXT,
+            source_id   TEXT,
             new_ver     TEXT,
             UNIQUE(agent_id, name)
         );

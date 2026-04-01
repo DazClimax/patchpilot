@@ -8,6 +8,7 @@ This is separate from the regular Linux server installer. The current RPM/Fedora
 
 - register Home Assistant OS as a `haos` agent in PatchPilot
 - show available Core, Supervisor, OS, and Add-on updates as pending updates
+- show Home Assistant `update.*` entities such as HACS/frontend updates as pending updates
 - run the following jobs from PatchPilot:
   - `HA Backup`
   - `HA Core Update`
@@ -16,6 +17,7 @@ This is separate from the regular Linux server installer. The current RPM/Fedora
   - `HA OS Update`
   - `HA Add-on Update`
   - `HA Add-ons Update`
+  - targeted `update.*` entity installs
 
 ## Add-on Repository
 
@@ -37,7 +39,7 @@ The add-on lives in this repository under:
    - optional `agent_update_webhook_id`
    - optional `ca_pem`
 5. Start the add-on.
-6. Update the PatchPilot HAOS add-on itself through the Home Assistant Add-on Store, not through `HA Add-ons` inside PatchPilot.
+6. If you keep `agent_update_webhook_id` empty, update the PatchPilot HAOS add-on manually through the Home Assistant Add-on Store. If you configure the webhook flow below, PatchPilot can trigger that update for you.
 
 Example add-on configuration:
 
@@ -70,6 +72,15 @@ If you want PatchPilot to trigger the HA add-on update flow for this Home Assist
 3. Put the same value into the add-on option `agent_update_webhook_id`.
 4. Save and restart the add-on.
 5. PatchPilot can then include this HA instance in normal `Update Agents` runs.
+
+## Signed Trust Rotation
+
+For HTTPS certificate changes, include both of these values in the add-on config:
+
+- `ca_pem`
+- `ca_rollover_pub_pem`
+
+PatchPilot uses them to deliver signed CA rollover payloads during **Deploy Trust to Agents**. If the HAOS add-on is online during that rollout, it can accept the new trust bundle automatically before the server certificate is switched.
 
 Automation example:
 

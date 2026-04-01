@@ -801,6 +801,70 @@ def _redact_agent_record(row: dict) -> dict:
     return row
 
 
+def _ha_job_pending_target(job: dict) -> tuple[str | None, str | None]:
+    params_raw = job.get("params")
+    params: dict[str, object] = {}
+    if isinstance(params_raw, str) and params_raw:
+        try:
+            decoded = json.loads(params_raw)
+            if isinstance(decoded, dict):
+                params = decoded
+        except json.JSONDecodeError:
+            params = {}
+    elif isinstance(params_raw, dict):
+        params = params_raw
+
+    jtype = str(job.get("type") or "")
+    if jtype in {"ha_core_update", "ha_backup_update"}:
+        return "home-assistant-core", None
+    if jtype == "ha_supervisor_update":
+        return "home-assistant-supervisor", None
+    if jtype == "ha_os_update":
+        return "home-assistant-os", None
+    if jtype == "ha_addon_update":
+        slug = str(params.get("slug") or "").strip()
+        if not slug:
+            return None, None
+        if slug.endswith("patchpilot_haos"):
+            return "home-assistant-addon-patchpilot", None
+        return f"addon:{slug}", None
+    if jtype == "ha_entity_update":
+        entity_id = str(params.get("entity_id") or "").strip()
+        return None, entity_id or None
+    return None, None
+
+
+def _resolve_ha_job_display_status(job: dict, package_state: dict[str, set[str]], agent_last_seen: str | None) -> dict:
+    if str(job.get("status") or "") != "running":
+        return {"status": job.get("status"), "finished": job.get("finished")}
+
+    name_target, source_target = _ha_job_pending_target(job)
+    if not name_target and not source_target:
+        return {"status": job.get("status"), "finished": job.get("finished")}
+
+    started_raw = str(job.get("started") or "").strip()
+    if not started_raw or not agent_last_seen:
+        return {"status": job.get("status"), "finished": job.get("finished")}
+
+    try:
+        started_dt = datetime.strptime(started_raw, "%Y-%m-%d %H:%M:%S")
+        last_seen_dt = datetime.strptime(agent_last_seen, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return {"status": job.get("status"), "finished": job.get("finished")}
+
+    if last_seen_dt < started_dt:
+        return {"status": job.get("status"), "finished": job.get("finished")}
+
+    pending_names = package_state.get("names", set())
+    pending_source_ids = package_state.get("source_ids", set())
+    if name_target and name_target in pending_names:
+        return {"status": job.get("status"), "finished": job.get("finished")}
+    if source_target and source_target in pending_source_ids:
+        return {"status": job.get("status"), "finished": job.get("finished")}
+
+    return {"status": "done", "finished": agent_last_seen}
+
+
 def verify_agent(agent_id: str, x_token: str):
     """Verify agent token against the stored SHA-256 hash."""
     with get_db_ctx() as conn:
@@ -1195,7 +1259,7 @@ def api_dashboard():
         ).fetchall()
         # Last finished job per agent (type + status)
         last_jobs = conn.execute(
-            """SELECT j.agent_id, j.type, j.status, j.finished
+            """SELECT j.agent_id, j.type, j.status, j.finished, j.started, j.params
                FROM jobs j
                INNER JOIN (
                    SELECT agent_id, MAX(id) as max_id
@@ -1203,6 +1267,16 @@ def api_dashboard():
                    GROUP BY agent_id
                ) latest ON j.id = latest.max_id"""
         ).fetchall()
+        package_rows = conn.execute(
+            "SELECT agent_id, name, source_id FROM packages"
+        ).fetchall()
+    package_state_by_agent: dict[str, dict[str, set[str]]] = {}
+    for row in package_rows:
+        state = package_state_by_agent.setdefault(row["agent_id"], {"names": set(), "source_ids": set()})
+        if row["name"]:
+            state["names"].add(str(row["name"]))
+        if row["source_id"]:
+            state["source_ids"].add(str(row["source_id"]))
     last_job_map = {r["agent_id"]: dict(r) for r in last_jobs}
     result = []
     for a in agents:
@@ -1210,9 +1284,14 @@ def api_dashboard():
         row["pending_count"] = row.pop("live_pending_count", row.get("pending_count", 0))
         lj = last_job_map.get(row["id"])
         if lj:
+            display = _resolve_ha_job_display_status(
+                dict(lj),
+                package_state_by_agent.get(row["id"], {"names": set(), "source_ids": set()}),
+                row.get("last_seen"),
+            )
             row["last_job_type"] = lj["type"]
-            row["last_job_status"] = lj["status"]
-            row["last_job_finished"] = lj["finished"]
+            row["last_job_status"] = display["status"]
+            row["last_job_finished"] = display["finished"]
         result.append(row)
     online = sum(1 for a in result if (a.get("seconds_ago") or 9999) < 120)
     reboot_needed = sum(1 for a in result if a.get("reboot_required"))
@@ -1349,9 +1428,14 @@ def api_agent(agent_id: str, days: int = 7, limit: int = 10, offset: int = 0):
         "ha_addons_update",
         "ha_entity_update",
     }
+    package_state = {
+        "names": {str(p["name"]) for p in packages if p["name"]},
+        "source_ids": {str(p["source_id"]) for p in packages if p["source_id"]},
+    }
     jobs_payload = []
     for j in jobs:
         job = dict(j)
+        job.update(_resolve_ha_job_display_status(job, package_state, agent_dict.get("last_seen")))
         health_status = None
         if job.get("status") == "done" and job.get("type") in health_job_types:
             finished_raw = job.get("finished")

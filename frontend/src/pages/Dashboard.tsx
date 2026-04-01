@@ -328,6 +328,10 @@ function AgentRow({
   }
 
   const tagList = (agent.tags ?? '').split(',').map(t => t.trim()).filter(Boolean)
+  const jobInProgress = agent.last_job_status === 'pending' || agent.last_job_status === 'running'
+  const jobInProgressLabel = agent.last_job_type
+    ? `${agent.last_job_type.replace(/_/g, ' ')} in progress…`
+    : 'Job in progress…'
 
   return (
     <tr
@@ -456,7 +460,7 @@ function AgentRow({
         </div>
       </td>
       <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-        {agent.last_job_type === 'patch' && (agent.last_job_status === 'pending' || agent.last_job_status === 'running') ? (
+        {jobInProgress ? (
           <span style={{
             display: 'inline-block',
             width: '14px', height: '14px',
@@ -464,7 +468,7 @@ function AgentRow({
             borderTopColor: colors.warn,
             borderRadius: '50%',
             animation: 'pp-spin 0.8s linear infinite',
-          }} title="Patching in progress…" />
+          }} title={jobInProgressLabel} />
         ) : (agent.pending_count ?? 0) > 0 ? (
           <Badge color={colors.warn}>{agent.pending_count}</Badge>
         ) : agent.config_review_required ? (
