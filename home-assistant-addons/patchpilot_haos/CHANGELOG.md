@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.20
+
+- Added detection of Home Assistant `update.*` entities so HACS and frontend-style updates such as custom cards can appear in PatchPilot.
+- Bumped the HAOS-reported PatchPilot agent version to `1.6`.
+
 ## 0.2.18
 
 - Enlarged the visible PatchPilot logo inside the Home Assistant add-on icon and logo assets so it appears bigger in the Add-on Store.

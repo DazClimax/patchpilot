@@ -24,7 +24,7 @@ CA_ROLLOVER_PUB_FILE = Path("/data/patchpilot_ca_rollover_public.pem")
 SUPERVISOR_URL = "http://supervisor"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 SELF_ADDON_HINT = "patchpilot_haos"
-AGENT_VERSION = "1.5"
+AGENT_VERSION = "1.6"
 AUTO_UPDATE_CAPABILITY = "ha_agent_auto_update"
 WEBHOOK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 BASE_CAPABILITIES = (
@@ -34,6 +34,12 @@ BASE_CAPABILITIES = (
     "ha_os_update",
     "ha_addon_update",
     "ha_addons_update",
+)
+BUILTIN_UPDATE_ENTITY_MARKERS = (
+    "home_assistant_core",
+    "home_assistant_supervisor",
+    "home_assistant_operating_system",
+    "patchpilot_haos_agent",
 )
 
 
@@ -182,9 +188,56 @@ def get_addons_info() -> list[dict]:
     return supervisor_json("GET", "/addons").get("data", {}).get("addons", [])
 
 
+def get_homeassistant_states() -> list[dict]:
+    data = homeassistant_request("GET", "/states")
+    return data if isinstance(data, list) else []
+
+
 def is_self_addon(slug: str) -> bool:
     normalized = (slug or "").strip().lower()
     return normalized.endswith(SELF_ADDON_HINT)
+
+
+def _looks_like_builtin_update_entity(entity_id: str, attrs: dict) -> bool:
+    text = " ".join(
+        filter(
+            None,
+            [
+                entity_id.lower(),
+                str(attrs.get("friendly_name") or "").lower(),
+                str(attrs.get("title") or "").lower(),
+            ],
+        )
+    )
+    return any(marker in text for marker in BUILTIN_UPDATE_ENTITY_MARKERS)
+
+
+def get_homeassistant_entity_updates() -> list[dict]:
+    updates: list[dict] = []
+    for state in get_homeassistant_states():
+        entity_id = str(state.get("entity_id") or "")
+        if not entity_id.startswith("update."):
+            continue
+        if str(state.get("state") or "").lower() != "on":
+            continue
+        attrs = state.get("attributes") if isinstance(state.get("attributes"), dict) else {}
+        if _looks_like_builtin_update_entity(entity_id, attrs):
+            continue
+        latest = attrs.get("latest_version") or attrs.get("latest")
+        installed = attrs.get("installed_version") or attrs.get("current_version") or attrs.get("version")
+        title = str(
+            attrs.get("title")
+            or attrs.get("friendly_name")
+            or entity_id.removeprefix("update.").replace("_", " ")
+        ).strip()
+        if not title:
+            continue
+        updates.append({
+            "name": title,
+            "current": installed,
+            "new": latest,
+        })
+    return updates
 
 
 def build_capabilities(opts: dict) -> str:
@@ -442,6 +495,8 @@ def get_pending_updates() -> list[dict]:
                 "current": addon.get("version"),
                 "new": addon.get("version_latest"),
             })
+
+    updates.extend(get_homeassistant_entity_updates())
 
     return updates
 
