@@ -11,6 +11,7 @@ server/patchpilot.db
 server/patchpilot.db-shm
 server/patchpilot.db-wal
 /etc/patchpilot/
+ssl/
 
 # Environment
 .env
