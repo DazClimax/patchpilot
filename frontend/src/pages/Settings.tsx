@@ -305,6 +305,7 @@ const EMPTY: Settings = {
   server_port: '8443',
   agent_port: '8050',
   agent_ssl: '1',
+  scheduler_timezone: 'Europe/Berlin',
   internal_url: '',
   ui_audio_enabled: '1',
   ui_audio_volume: '70',
@@ -835,6 +836,15 @@ export function SettingsPage() {
                 placeholder="8050"
               />
             </div>
+            <div style={{ width: '220px', flexShrink: 0 }}>
+              <Field
+                label="Scheduler Timezone"
+                name="scheduler_timezone"
+                value={form.scheduler_timezone}
+                onChange={handleChange}
+                placeholder="Europe/Berlin"
+              />
+            </div>
             <p style={{
               margin: '14px 0 0',
               fontSize: '11px',
@@ -845,7 +855,8 @@ export function SettingsPage() {
               whiteSpace: 'normal',
             }}>
               UI HTTPS is configured in the SSL section below. When HTTPS is enabled, the agent port uses the same certificate automatically.<br />
-              Existing agents may still need the new CA trust deployed before they can reconnect.
+              Existing agents may still need the new CA trust deployed before they can reconnect.<br />
+              Timezone uses IANA format, e.g. <span style={{ color: colors.primary }}>Europe/Berlin</span>, <span style={{ color: colors.primary }}>America/New_York</span>, <span style={{ color: colors.primary }}>Asia/Tokyo</span>.
             </p>
           </div>
         </Card>

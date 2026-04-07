@@ -139,6 +139,7 @@ export interface Settings {
   server_port: string
   agent_port: string
   agent_ssl: string
+  scheduler_timezone: string
   agent_url: string
   internal_url: string
   ssl_certfile: string
