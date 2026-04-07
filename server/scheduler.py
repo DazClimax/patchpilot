@@ -9,7 +9,36 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 log = logging.getLogger(__name__)
 
-scheduler = BackgroundScheduler(timezone="Europe/Berlin")
+_DEFAULT_TIMEZONE = "Europe/Berlin"
+
+scheduler = BackgroundScheduler(timezone=_DEFAULT_TIMEZONE)
+
+
+def get_scheduler_timezone() -> str:
+    """Read the configured scheduler timezone from the DB, fall back to default."""
+    try:
+        from db import db as get_db_ctx
+        with get_db_ctx() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key='scheduler_timezone'"
+            ).fetchone()
+        if row and row["value"]:
+            return row["value"]
+    except Exception:
+        pass
+    return _DEFAULT_TIMEZONE
+
+
+def configure_timezone(tz: str):
+    """Reconfigure the scheduler timezone (call before scheduler.start())."""
+    try:
+        import zoneinfo
+        zoneinfo.ZoneInfo(tz)  # validate
+    except Exception:
+        log.warning("Invalid scheduler_timezone %r — keeping %r", tz, _DEFAULT_TIMEZONE)
+        return
+    scheduler.configure(timezone=tz)
+    log.info("Scheduler timezone set to %s", tz)
 
 # Tracks agents already notified as offline to avoid repeated notifications.
 # Key: agent_id  — value: True (currently offline-notified)
@@ -169,7 +198,7 @@ def schedule_job(schedule_id: int, name: str, cron: str, action: str, target: st
             day=day,
             month=month,
             day_of_week=day_of_week,
-            timezone="Europe/Berlin",
+            timezone=get_scheduler_timezone(),
         )
         scheduler.add_job(
             _run_scheduled_job,

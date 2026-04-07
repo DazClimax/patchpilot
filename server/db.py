@@ -236,6 +236,7 @@ def init_db():
             ("ssl_keyfile",            ""),
             ("webhook_url",            "https://push.jacques-hien.com"),
             ("webhook_secret",         ""),
+            ("scheduler_timezone",     "Europe/Berlin"),
         ]
         conn.executemany(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",

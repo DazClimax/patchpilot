@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.security import APIKeyHeader
 
 from db import init_db, db as get_db_ctx, hash_password, verify_password
-from scheduler import scheduler, schedule_job, register_system_jobs
+from scheduler import scheduler, schedule_job, register_system_jobs, get_scheduler_timezone, configure_timezone
 from notifications import notification_manager
 import metrics as metrics_module
 
@@ -394,7 +394,7 @@ def _validate_cron(cron: str):
     minute, hour, day, month, dow = parts
     try:
         _CronTrigger(minute=minute, hour=hour, day=day, month=month,
-                     day_of_week=dow, timezone="Europe/Berlin")
+                     day_of_week=dow, timezone=get_scheduler_timezone())
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Invalid cron expression: {exc}") from exc
 
@@ -822,6 +822,7 @@ def _startup_app():
         if stale_pending:
             print(f"[startup] Cleaned up {stale_pending} stale pending job(s)")
     _load_sessions_from_db()
+    configure_timezone(get_scheduler_timezone())
     scheduler.start()
     _load_schedules()
     register_system_jobs()
@@ -1436,9 +1437,9 @@ def api_ping():
 @app.get("/api/server-time")
 def api_server_time():
     """Return current server local time — cron expressions are evaluated
-    in the server's timezone (Europe/Berlin)."""
+    in the configured scheduler timezone."""
     import zoneinfo
-    tz = zoneinfo.ZoneInfo("Europe/Berlin")
+    tz = zoneinfo.ZoneInfo(get_scheduler_timezone())
     now = datetime.now(tz)
     tz_abbr = now.strftime("%Z")  # CET or CEST
     return {
@@ -1839,6 +1840,7 @@ _SETTINGS_ALLOWED_KEYS = {
     "smtp_host", "smtp_port", "smtp_security", "smtp_user", "smtp_password", "smtp_to",
     "notify_offline", "notify_offline_minutes", "notify_patches", "notify_failures",
     "webhook_url", "webhook_secret",
+    "scheduler_timezone",
     "server_port", "agent_port", "agent_ssl",
     "ui_audio_enabled", "ui_audio_volume", "ui_login_animation_enabled", "ui_login_background_animation_enabled", "ui_login_background_opacity",
 }
@@ -1993,6 +1995,13 @@ async def api_save_settings(request: Request):
                 raise ValueError
         except (ValueError, TypeError):
             raise HTTPException(status_code=422, detail="notify_offline_minutes must be an integer between 1 and 10080")
+    tz_val = data.get("scheduler_timezone")
+    if tz_val is not None and str(tz_val) != "***":
+        try:
+            import zoneinfo
+            zoneinfo.ZoneInfo(str(tz_val))
+        except Exception:
+            raise HTTPException(status_code=422, detail=f"Invalid timezone: {tz_val!r}")
     ui_audio_volume = data.get("ui_audio_volume")
     if ui_audio_volume is not None and str(ui_audio_volume) != "***":
         try:
@@ -2063,6 +2072,13 @@ async def api_save_settings(request: Request):
     notification_manager.reload()
     from telegram_bot import telegram_bot
     telegram_bot.reload_settings()
+
+    # Timezone changed → reconfigure scheduler immediately (no restart needed).
+    if tz_val and str(tz_val) != "***":
+        configure_timezone(str(tz_val))
+        # Reload all user-defined schedules so CronTriggers use the new timezone.
+        from scheduler import load_schedules_from_db
+        load_schedules_from_db()
 
     # Port changed → update .env and restart service.
     restart_pending = False
