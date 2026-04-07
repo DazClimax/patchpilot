@@ -1,6 +1,6 @@
 """
 PatchPilot Notification System
-Supports Telegram (via Bot API) and Email (via SMTP).
+Supports Telegram (via Bot API), Email (via SMTP), and APNs Relay (via HTTP webhook).
 All external I/O uses stdlib only — no requests, no httpx.
 """
 
@@ -208,6 +208,58 @@ class EmailNotifier:
 
 
 # ---------------------------------------------------------------------------
+# APNs Relay Webhook
+# ---------------------------------------------------------------------------
+
+class WebhookNotifier:
+    """Sends JSON events to a PatchPilot APNs relay server (stdlib urllib).
+
+    Each PatchPilot instance has its own secret; the relay routes pushes
+    only to devices registered with the matching secret hash.
+    No third-party dependencies — uses only stdlib urllib and threading.
+    """
+
+    def __init__(self):
+        self._url: str = ""
+        self._secret: str = ""
+
+    def reload(self, settings: dict):
+        self._url    = settings.get("webhook_url", "").rstrip("/")
+        self._secret = settings.get("webhook_secret", "")
+
+    def send(self, event: str, hostname: str, details: str = ""):
+        """Fire-and-forget: POST /notify to the relay in a daemon thread."""
+        if not self._url or not self._secret:
+            return
+        url    = self._url
+        secret = self._secret
+        import json
+        import threading
+        import urllib.request
+
+        def _post():
+            try:
+                body = json.dumps(
+                    {"event": event, "hostname": hostname, "details": details}
+                ).encode()
+                req = urllib.request.Request(
+                    url + "/notify",
+                    data=body,
+                    headers={
+                        "X-PP-Secret":   secret,
+                        "Content-Type":  "application/json",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5):
+                    pass
+            except Exception as exc:
+                log.debug("WebhookNotifier: send failed: %s", exc)
+
+        threading.Thread(target=_post, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
 # Notification Manager
 # ---------------------------------------------------------------------------
 
@@ -221,6 +273,7 @@ class NotificationManager:
     def __init__(self):
         self._telegram: TelegramNotifier | None = None
         self._email: EmailNotifier | None = None
+        self._webhook = WebhookNotifier()
         self._notify_offline = True
         self._notify_patches = True
         self._notify_failures = True
@@ -279,6 +332,10 @@ class NotificationManager:
         self._telegram = TelegramNotifier(tg_token, tg_chat) if (tg_token and self._telegram_enabled) else None
         self._email    = EmailNotifier(smtp_host, smtp_port, smtp_user, smtp_pass, smtp_to, smtp_security) \
                          if (smtp_host and self._email_enabled) else None
+        self._webhook.reload({
+            "webhook_url":    _get("webhook_url"),
+            "webhook_secret": _get("webhook_secret", sensitive=True),
+        })
         self._loaded = True
 
     def reload(self):
@@ -339,6 +396,7 @@ class NotificationManager:
             f"for {minutes} minutes.\nLast seen: {last_seen_str}",
             telegram=self._tg_notify_offline,
         )
+        self._webhook.send("agent_offline", hostname)
 
     def notify_patch_available(self, agent: dict, count: int):
         """New package updates are available on a VM."""
@@ -351,6 +409,7 @@ class NotificationManager:
             f"{count} package update(s) available on {hostname} ({agent.get('ip', 'n/a')}).",
             telegram=self._tg_notify_patches,
         )
+        self._webhook.send("updates_available", hostname, str(count))
 
     def notify_job_failed(self, agent: dict, job: dict):
         """A patch job finished with status 'failed'."""
@@ -366,6 +425,7 @@ class NotificationManager:
             f"Job #{job_id} ({job_type}) failed on {hostname}.\n\nOutput:\n{output}",
             telegram=self._tg_notify_failures,
         )
+        self._webhook.send("job_failed", hostname, job_type)
 
     def notify_job_success(self, agent: dict, job: dict):
         """A job finished successfully."""
@@ -393,6 +453,7 @@ class NotificationManager:
             f"after applying patches.",
             telegram=self._tg_notify_patches,
         )
+        self._webhook.send("reboot_required", hostname)
 
 
 # Module-level singleton

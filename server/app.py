@@ -529,6 +529,9 @@ def _cache_invalidate(*keys: str):
 # frequently than every 30 seconds.
 _HEARTBEAT_MIN_INTERVAL = 30   # seconds
 _last_heartbeat: dict[str, float] = {}
+# Tracks agents already notified about updates/reboot to avoid repeated alerts.
+_updates_notified: set[str] = set()
+_reboot_notified:  set[str] = set()
 
 
 # ---------------------------------------------------------------------------
@@ -1038,10 +1041,12 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
     protocol = "https" if request.url.scheme == "https" else "http"
     with get_db_ctx() as conn:
         current = conn.execute(
-            "SELECT hostname FROM agents WHERE id=?",
+            "SELECT hostname, pending_count, reboot_required FROM agents WHERE id=?",
             (agent_id,),
         ).fetchone()
         hostname = fields["hostname"] or (current["hostname"] if current else "unknown")
+        prev_pending  = current["pending_count"]  if current else 0
+        prev_reboot   = current["reboot_required"] if current else 0
         conn.execute(
             """UPDATE agents SET
                 hostname=?, ip=?, os_pretty=?, kernel=?, arch=?, package_manager=?, agent_version=?, agent_type=?, capabilities=?,
@@ -1080,6 +1085,22 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
               str(p.get("new", ""))[:128] if p.get("new") else None,
               ) for p in packages],
         )
+    # Notify on new updates or newly required reboot — once per episode.
+    new_pending = len(packages)
+    new_reboot  = 1 if data.get("reboot_required") else 0
+    if new_pending > 0:
+        if agent_id not in _updates_notified:
+            notification_manager.notify_patch_available({"hostname": hostname, "id": agent_id}, new_pending)
+            _updates_notified.add(agent_id)
+    else:
+        _updates_notified.discard(agent_id)
+    if new_reboot:
+        if agent_id not in _reboot_notified:
+            notification_manager.notify_reboot_required({"hostname": hostname, "id": agent_id})
+            _reboot_notified.add(agent_id)
+    else:
+        _reboot_notified.discard(agent_id)
+
     # Agent canonical URL always points to the agent port (HTTP, no SSL)
     return {"status": "ok", "canonical_port": str(_AGENT_PORT), "canonical_url": f"{_AGENT_SCHEME}://{_get_internal_ip()}:{_AGENT_PORT}", "canonical_id": agent_id}
 
@@ -1531,6 +1552,8 @@ def delete_agent(agent_id: str):
         conn.execute("DELETE FROM agents WHERE id=?", (agent_id,))
     # L-2: Clear stale in-memory state so the ID can be cleanly re-registered
     _last_heartbeat.pop(agent_id, None)
+    _updates_notified.discard(agent_id)
+    _reboot_notified.discard(agent_id)
     from scheduler import _offline_notified
     _offline_notified.discard(agent_id)
     _cache_invalidate("dashboard", f"agent:{agent_id}")
@@ -1578,6 +1601,12 @@ async def rename_agent(agent_id: str, request: Request):
     with get_db_ctx() as conn2:
         conn2.execute("UPDATE rename_aliases SET new_id=? WHERE new_id=?", (new_id, agent_id))
     _store_alias(agent_id, new_id)  # persist so heartbeats from old ID get routed
+    if agent_id in _updates_notified:
+        _updates_notified.discard(agent_id)
+        _updates_notified.add(new_id)
+    if agent_id in _reboot_notified:
+        _reboot_notified.discard(agent_id)
+        _reboot_notified.add(new_id)
     from scheduler import _offline_notified
     if agent_id in _offline_notified:
         _offline_notified.discard(agent_id)
@@ -1736,7 +1765,7 @@ def delete_schedule(sid: int):
 # ===========================================================================
 
 # Keys that contain sensitive data — masked in GET, encrypted in DB
-_SENSITIVE_KEYS = {"smtp_password", "telegram_token"}
+_SENSITIVE_KEYS = {"smtp_password", "telegram_token", "webhook_secret"}
 
 try:
     from crypto import encrypt as _encrypt_secret, decrypt as _decrypt_secret
@@ -1752,6 +1781,7 @@ _SETTINGS_ALLOWED_KEYS = {
     "email_enabled",
     "smtp_host", "smtp_port", "smtp_security", "smtp_user", "smtp_password", "smtp_to",
     "notify_offline", "notify_offline_minutes", "notify_patches", "notify_failures",
+    "webhook_url", "webhook_secret",
     "server_port", "agent_port", "agent_ssl",
     "ui_audio_enabled", "ui_audio_volume", "ui_login_animation_enabled", "ui_login_background_animation_enabled", "ui_login_background_opacity",
 }
@@ -1839,6 +1869,19 @@ def _get_internal_ip() -> str:
         return "127.0.0.1"
 
 
+@app.get("/api/push-config", dependencies=[Depends(require_role("readonly", "user", "admin"))])
+def api_get_push_config():
+    """Return the webhook secret in plaintext for APNs relay registration."""
+    with get_db_ctx() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key='webhook_secret'").fetchone()
+    if not row or not row["value"]:
+        return {"webhookSecret": None}
+    try:
+        return {"webhookSecret": _decrypt_secret(row["value"])}
+    except Exception:
+        return {"webhookSecret": None}
+
+
 @app.get("/api/settings", dependencies=[Depends(require_role("admin"))])
 def api_get_settings():
     """Return settings.  Sensitive values are replaced with '***'. Only saveable keys are returned."""
@@ -1850,6 +1893,16 @@ def api_get_settings():
         if k not in _SETTINGS_ALLOWED_KEYS:
             continue  # Don't expose internal keys (register_key, etc.)
         result[k] = "***" if (k in _SENSITIVE_KEYS and v) else v
+    # Auto-generate webhook_secret on first access so admins can copy it
+    if not result.get("webhook_secret"):
+        import secrets as _sec
+        new_secret = _sec.token_hex(32)
+        with get_db_ctx() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('webhook_secret', ?)",
+                (_encrypt_secret(new_secret),),
+            )
+        result["webhook_secret"] = new_secret  # return plaintext once for copying
     # Provide computed URLs for the Deploy page
     _scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
     _ip = _get_internal_ip()

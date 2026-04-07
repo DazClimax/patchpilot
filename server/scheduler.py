@@ -23,7 +23,7 @@ def _get_offline_threshold() -> int:
             return max(1, int(row["value"])) * 60
     except Exception:
         pass
-    return 600  # default 10 minutes
+    return 120  # default 2 minutes
 
 
 def _check_offline_vms():

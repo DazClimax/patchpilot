@@ -216,6 +216,8 @@ def init_db():
             ("ui_login_background_opacity", "20"),
             ("ssl_certfile",           ""),
             ("ssl_keyfile",            ""),
+            ("webhook_url",            "https://push.jacques-hien.com"),
+            ("webhook_secret",         ""),
         ]
         conn.executemany(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
