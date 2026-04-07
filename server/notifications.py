@@ -383,11 +383,13 @@ class NotificationManager:
             return last_seen  # fallback to raw value
 
     def notify_vm_offline(self, agent: dict):
-        """VM has been offline for > 10 minutes."""
+        """VM has been offline for > threshold minutes."""
         self._load()
+        hostname = agent.get("hostname", agent.get("id", "unknown"))
+        # Webhook (push) always fires regardless of email/telegram toggles
+        self._webhook.send("agent_offline", hostname)
         if not self._notify_offline:
             return
-        hostname = agent.get("hostname", agent.get("id", "unknown"))
         minutes = int((agent.get("seconds_ago") or 0) / 60)
         last_seen_str = self._fmt_last_seen(agent.get("last_seen"))
         self._send(
@@ -396,36 +398,37 @@ class NotificationManager:
             f"for {minutes} minutes.\nLast seen: {last_seen_str}",
             telegram=self._tg_notify_offline,
         )
-        self._webhook.send("agent_offline", hostname)
 
     def notify_patch_available(self, agent: dict, count: int):
         """New package updates are available on a VM."""
         self._load()
+        hostname = agent.get("hostname", agent.get("id", "unknown"))
+        # Webhook (push) always fires regardless of email/telegram toggles
+        self._webhook.send("updates_available", hostname, str(count))
         if not self._notify_patches:
             return
-        hostname = agent.get("hostname", agent.get("id", "unknown"))
         self._send(
             f"Updates Available: {hostname}",
             f"{count} package update(s) available on {hostname} ({agent.get('ip', 'n/a')}).",
             telegram=self._tg_notify_patches,
         )
-        self._webhook.send("updates_available", hostname, str(count))
 
     def notify_job_failed(self, agent: dict, job: dict):
         """A patch job finished with status 'failed'."""
         self._load()
-        if not self._notify_failures:
-            return
         hostname = agent.get("hostname", agent.get("id", "unknown"))
         job_type = job.get("type", "unknown")
         job_id   = job.get("id", "?")
         output   = (job.get("output") or "")[:500]
+        # Webhook (push) always fires regardless of email/telegram toggles
+        self._webhook.send("job_failed", hostname, job_type)
+        if not self._notify_failures:
+            return
         self._send(
             f"Job Failed: {hostname}",
             f"Job #{job_id} ({job_type}) failed on {hostname}.\n\nOutput:\n{output}",
             telegram=self._tg_notify_failures,
         )
-        self._webhook.send("job_failed", hostname, job_type)
 
     def notify_job_success(self, agent: dict, job: dict):
         """A job finished successfully."""
@@ -444,16 +447,17 @@ class NotificationManager:
     def notify_reboot_required(self, agent: dict):
         """A reboot is required after patching."""
         self._load()
+        hostname = agent.get("hostname", agent.get("id", "unknown"))
+        # Webhook (push) always fires regardless of email/telegram toggles
+        self._webhook.send("reboot_required", hostname)
         if not self._notify_patches:
             return
-        hostname = agent.get("hostname", agent.get("id", "unknown"))
         self._send(
             f"Reboot Required: {hostname}",
             f"Host {hostname} ({agent.get('ip', 'n/a')}) requires a reboot "
             f"after applying patches.",
             telegram=self._tg_notify_patches,
         )
-        self._webhook.send("reboot_required", hostname)
 
 
 # Module-level singleton
