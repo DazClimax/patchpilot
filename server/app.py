@@ -204,7 +204,7 @@ def require_admin(x_admin_key: str = Depends(_admin_key_header)):
 # ---------------------------------------------------------------------------
 # Session-based auth (username + password)
 # ---------------------------------------------------------------------------
-_sessions: dict[str, dict] = {}  # token → {user_id, username, role, created}
+_sessions: dict[str, dict] = {}  # token → {user_id, username, role, created_ts}
 _SESSION_MAX_AGE = 86400  # 24h
 
 _auth_header = APIKeyHeader(name="authorization", auto_error=False)
@@ -213,16 +213,69 @@ _auth_header = APIKeyHeader(name="authorization", auto_error=False)
 _session_last_cleanup = 0.0
 
 
+def _load_sessions_from_db():
+    """Load persisted sessions from DB into memory on startup."""
+    now = time.time()
+    try:
+        with get_db_ctx() as conn:
+            rows = conn.execute("SELECT token, user_id, username, role, created_ts FROM sessions").fetchall()
+        for row in rows:
+            if now - row["created_ts"] < _SESSION_MAX_AGE:
+                _sessions[row["token"]] = {
+                    "user_id":    row["user_id"],
+                    "username":   row["username"],
+                    "role":       row["role"],
+                    "created_ts": row["created_ts"],
+                }
+    except Exception as exc:
+        log.warning("_load_sessions_from_db: %s", exc)
+
+
+def _persist_session(token: str, session: dict):
+    """Write a session to the DB for persistence across restarts."""
+    try:
+        with get_db_ctx() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO sessions (token, user_id, username, role, created_ts) VALUES (?,?,?,?,?)",
+                (token, session["user_id"], session["username"], session["role"], session["created_ts"]),
+            )
+    except Exception as exc:
+        log.warning("_persist_session: %s", exc)
+
+
+def _delete_session_from_db(token: str):
+    """Remove a single session from the DB."""
+    try:
+        with get_db_ctx() as conn:
+            conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+    except Exception as exc:
+        log.warning("_delete_session_from_db: %s", exc)
+
+
+def _delete_sessions_for_user(user_id: int):
+    """Remove all DB sessions for a user (on password change / deletion)."""
+    try:
+        with get_db_ctx() as conn:
+            conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+    except Exception as exc:
+        log.warning("_delete_sessions_for_user: %s", exc)
+
+
 def _cleanup_sessions():
     """Evict expired sessions periodically (every 5 min)."""
     global _session_last_cleanup
-    now = time.monotonic()
+    now = time.time()
     if now - _session_last_cleanup < 300:
         return
     _session_last_cleanup = now
-    expired = [t for t, s in _sessions.items() if now - s["created"] >= _SESSION_MAX_AGE]
+    expired = [t for t, s in _sessions.items() if now - s["created_ts"] >= _SESSION_MAX_AGE]
     for t in expired:
         _sessions.pop(t, None)
+    try:
+        with get_db_ctx() as conn:
+            conn.execute("DELETE FROM sessions WHERE created_ts < ?", (now - _SESSION_MAX_AGE,))
+    except Exception as exc:
+        log.warning("_cleanup_sessions DB error: %s", exc)
 
 
 def _get_session(request: Request) -> dict | None:
@@ -232,7 +285,7 @@ def _get_session(request: Request) -> dict | None:
     if auth_val.startswith("Bearer "):
         token = auth_val[7:]
         session = _sessions.get(token)
-        if session and (time.monotonic() - session["created"]) < _SESSION_MAX_AGE:
+        if session and (time.time() - session["created_ts"]) < _SESSION_MAX_AGE:
             return session
         _sessions.pop(token, None)  # expired
     return None
@@ -769,6 +822,7 @@ def _startup_app():
             print(f"[startup] Cleaned up {stale_running} stale running job(s)")
         if stale_pending:
             print(f"[startup] Cleaned up {stale_pending} stale pending job(s)")
+    _load_sessions_from_db()
     scheduler.start()
     _load_schedules()
     register_system_jobs()
@@ -2695,12 +2749,14 @@ async def auth_login(request: Request):
     if not row or not valid:
         raise HTTPException(status_code=401, detail="Invalid username or password")
     token = secrets.token_hex(32)
-    _sessions[token] = {
-        "user_id": row["id"],
-        "username": row["username"],
-        "role": row["role"],
-        "created": time.monotonic(),
+    session = {
+        "user_id":    row["id"],
+        "username":   row["username"],
+        "role":       row["role"],
+        "created_ts": time.time(),
     }
+    _sessions[token] = session
+    _persist_session(token, session)
     _remove_bootstrap_password_file()
     return {"token": token, "role": row["role"], "username": row["username"]}
 
@@ -2709,7 +2765,9 @@ async def auth_login(request: Request):
 async def auth_logout(request: Request):
     auth_val = request.headers.get("authorization", "")
     if auth_val.startswith("Bearer "):
-        _sessions.pop(auth_val[7:], None)
+        token = auth_val[7:]
+        _sessions.pop(token, None)
+        _delete_session_from_db(token)
     return {"status": "ok"}
 
 
@@ -2786,6 +2844,7 @@ async def update_user(user_id: int, request: Request):
     to_remove = [t for t, s in _sessions.items() if s.get("user_id") == user_id]
     for t in to_remove:
         _sessions.pop(t, None)
+    _delete_sessions_for_user(user_id)
     return {"status": "updated"}
 
 
@@ -2809,6 +2868,7 @@ def delete_user(user_id: int, request: Request):
     to_remove = [t for t, s in _sessions.items() if s.get("user_id") == user_id]
     for t in to_remove:
         _sessions.pop(t, None)
+    _delete_sessions_for_user(user_id)
     return {"status": "deleted"}
 
 

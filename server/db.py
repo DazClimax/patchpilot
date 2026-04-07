@@ -132,6 +132,14 @@ def init_db():
                 new_id   TEXT NOT NULL,
                 created  TEXT DEFAULT (datetime('now','localtime'))
             );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+                token      TEXT PRIMARY KEY,
+                user_id    INTEGER NOT NULL,
+                username   TEXT NOT NULL,
+                role       TEXT NOT NULL,
+                created_ts REAL NOT NULL
+            );
         """)
         # Migrate existing databases: add tags column if absent.
         # SQLite does not support IF NOT EXISTS on ALTER TABLE, so we catch
@@ -203,7 +211,7 @@ def init_db():
             ("smtp_to",          ""),
             ("telegram_enabled",       "1"),
             ("notify_offline",         "1"),
-            ("notify_offline_minutes", "10"),
+            ("notify_offline_minutes", "2"),
             ("notify_patches",         "1"),
             ("notify_failures",        "1"),
             ("server_port",            "8443"),
