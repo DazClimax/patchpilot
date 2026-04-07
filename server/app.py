@@ -582,9 +582,8 @@ def _cache_invalidate(*keys: str):
 # frequently than every 30 seconds.
 _HEARTBEAT_MIN_INTERVAL = 30   # seconds
 _last_heartbeat: dict[str, float] = {}
-# Tracks agents already notified about updates/reboot to avoid repeated alerts.
-_updates_notified: set[str] = set()
-_reboot_notified:  set[str] = set()
+# Note: update/reboot notification dedup is DB-based (agents.updates_notified /
+# agents.reboot_notified) so it survives server restarts and works across processes.
 
 
 # ---------------------------------------------------------------------------
@@ -1140,20 +1139,32 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
               ) for p in packages],
         )
     # Notify on new updates or newly required reboot — once per episode.
+    # Dedup state is persisted in DB (updates_notified / reboot_notified columns)
+    # so notifications are not repeated after server restarts or across processes.
     new_pending = len(packages)
     new_reboot  = 1 if data.get("reboot_required") else 0
-    if new_pending > 0:
-        if agent_id not in _updates_notified:
-            notification_manager.notify_patch_available({"hostname": hostname, "id": agent_id}, new_pending)
-            _updates_notified.add(agent_id)
-    else:
-        _updates_notified.discard(agent_id)
-    if new_reboot:
-        if agent_id not in _reboot_notified:
-            notification_manager.notify_reboot_required({"hostname": hostname, "id": agent_id})
-            _reboot_notified.add(agent_id)
-    else:
-        _reboot_notified.discard(agent_id)
+    with get_db_ctx() as conn:
+        flags = conn.execute(
+            "SELECT updates_notified, reboot_notified FROM agents WHERE id=?", (agent_id,)
+        ).fetchone()
+        already_updates = flags["updates_notified"] if flags else 0
+        already_reboot  = flags["reboot_notified"]  if flags else 0
+
+        if new_pending > 0:
+            if not already_updates:
+                notification_manager.notify_patch_available({"hostname": hostname, "id": agent_id}, new_pending)
+                conn.execute("UPDATE agents SET updates_notified=1 WHERE id=?", (agent_id,))
+        else:
+            if already_updates:
+                conn.execute("UPDATE agents SET updates_notified=0 WHERE id=?", (agent_id,))
+
+        if new_reboot:
+            if not already_reboot:
+                notification_manager.notify_reboot_required({"hostname": hostname, "id": agent_id})
+                conn.execute("UPDATE agents SET reboot_notified=1 WHERE id=?", (agent_id,))
+        else:
+            if already_reboot:
+                conn.execute("UPDATE agents SET reboot_notified=0 WHERE id=?", (agent_id,))
 
     # Agent canonical URL always points to the agent port (HTTP, no SSL)
     return {"status": "ok", "canonical_port": str(_AGENT_PORT), "canonical_url": f"{_AGENT_SCHEME}://{_get_internal_ip()}:{_AGENT_PORT}", "canonical_id": agent_id}
@@ -1606,8 +1617,6 @@ def delete_agent(agent_id: str):
         conn.execute("DELETE FROM agents WHERE id=?", (agent_id,))
     # L-2: Clear stale in-memory state so the ID can be cleanly re-registered
     _last_heartbeat.pop(agent_id, None)
-    _updates_notified.discard(agent_id)
-    _reboot_notified.discard(agent_id)
     from scheduler import _offline_notified
     _offline_notified.discard(agent_id)
     _cache_invalidate("dashboard", f"agent:{agent_id}")
@@ -1655,12 +1664,6 @@ async def rename_agent(agent_id: str, request: Request):
     with get_db_ctx() as conn2:
         conn2.execute("UPDATE rename_aliases SET new_id=? WHERE new_id=?", (new_id, agent_id))
     _store_alias(agent_id, new_id)  # persist so heartbeats from old ID get routed
-    if agent_id in _updates_notified:
-        _updates_notified.discard(agent_id)
-        _updates_notified.add(new_id)
-    if agent_id in _reboot_notified:
-        _reboot_notified.discard(agent_id)
-        _reboot_notified.add(new_id)
     from scheduler import _offline_notified
     if agent_id in _offline_notified:
         _offline_notified.discard(agent_id)

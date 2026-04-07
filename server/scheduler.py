@@ -1,5 +1,8 @@
+import fcntl
 import json
 import logging
+import os
+from pathlib import Path
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -11,6 +14,25 @@ scheduler = BackgroundScheduler(timezone="Europe/Berlin")
 # Tracks agents already notified as offline to avoid repeated notifications.
 # Key: agent_id  — value: True (currently offline-notified)
 _offline_notified: set[str] = set()
+
+# File lock: only the first process to acquire it runs the scheduled jobs.
+# This prevents duplicate notifications when UI and Agent port run as separate processes.
+_scheduler_lock_fd = None
+
+
+def _try_acquire_scheduler_lock() -> bool:
+    """Try to acquire an exclusive non-blocking file lock.
+    Returns True if this process should register and run scheduled jobs."""
+    global _scheduler_lock_fd
+    try:
+        data_dir = Path(os.environ.get("PATCHPILOT_DATA_DIR", "/opt/patchpilot/data"))
+        data_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = data_dir / "scheduler.lock"
+        _scheduler_lock_fd = open(lock_path, "w")
+        fcntl.flock(_scheduler_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except (IOError, OSError):
+        return False
 
 def _get_offline_threshold() -> int:
     try:
@@ -191,7 +213,12 @@ def load_schedules_from_db():
 
 def register_system_jobs():
     """Register internal background jobs (offline VM check, etc.).
-    Called once from app.py startup after the scheduler has been started."""
+    Called once from app.py startup after the scheduler has been started.
+    Only the first process to acquire the scheduler lock will register jobs;
+    additional processes (e.g. the agent-port uvicorn worker) skip this."""
+    if not _try_acquire_scheduler_lock():
+        log.info("Scheduler: another process holds the lock — skipping job registration")
+        return
     scheduler.add_job(
         _check_offline_vms,
         trigger=IntervalTrigger(minutes=2),

@@ -170,6 +170,16 @@ def init_db():
             pass  # column already present — nothing to do
 
         try:
+            conn.execute("ALTER TABLE agents ADD COLUMN updates_notified INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN reboot_notified INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
             conn.execute("ALTER TABLE agents ADD COLUMN package_manager TEXT")
         except sqlite3.OperationalError:
             pass  # column already present — nothing to do
