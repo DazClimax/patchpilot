@@ -270,6 +270,8 @@ class NotificationManager:
     channels.  All notification methods are silent-fail when not configured.
     """
 
+    _SETTINGS_TTL = 60  # Re-read settings from DB every 60 s (multi-process safe)
+
     def __init__(self):
         self._telegram: TelegramNotifier | None = None
         self._email: EmailNotifier | None = None
@@ -278,14 +280,17 @@ class NotificationManager:
         self._notify_patches = True
         self._notify_failures = True
         self._loaded = False
+        self._loaded_at: float = 0.0
 
     # ------------------------------------------------------------------
     # Config loading
     # ------------------------------------------------------------------
 
     def _load(self):
-        """Load settings lazily from DB (deferred import to avoid circular)."""
-        if self._loaded:
+        """Load settings from DB. Re-reads every _SETTINGS_TTL seconds so
+        changes in one process are picked up by all processes (scheduler, etc.)."""
+        import time as _time
+        if self._loaded and (_time.time() - self._loaded_at) < self._SETTINGS_TTL:
             return
         try:
             from db import db as get_db_ctx  # local import — avoids circular dep
@@ -337,6 +342,7 @@ class NotificationManager:
             "webhook_secret": _get("webhook_secret", sensitive=True),
         })
         self._loaded = True
+        self._loaded_at = _time.time()
 
     def reload(self):
         """Force-reload settings on next dispatch (call after settings save)."""
