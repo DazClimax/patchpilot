@@ -2,7 +2,10 @@ import fcntl
 import json
 import logging
 import os
+import platform
+import subprocess
 from pathlib import Path
+from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -12,6 +15,28 @@ log = logging.getLogger(__name__)
 _DEFAULT_TIMEZONE = "Europe/Berlin"
 
 scheduler = BackgroundScheduler(timezone=_DEFAULT_TIMEZONE)
+
+_ONLINE_WINDOW_SECONDS = 120
+_PENDING_JOB_GRACE_SECONDS = 180
+_RUNNING_JOB_GRACE_SECONDS = 900
+_CONNECTIVITY_GRACE_JOB_TYPES = {
+    "patch",
+    "dist_upgrade",
+    "force_patch",
+    "autoremove",
+    "reboot",
+    "update_agent",
+    "deploy_ssl",
+    "ha_backup",
+    "ha_core_update",
+    "ha_backup_update",
+    "ha_supervisor_update",
+    "ha_os_update",
+    "ha_addon_update",
+    "ha_addons_update",
+    "ha_entity_update",
+    "ha_trigger_agent_update",
+}
 
 
 def get_scheduler_timezone() -> str:
@@ -27,6 +52,82 @@ def get_scheduler_timezone() -> str:
     except Exception:
         pass
     return _DEFAULT_TIMEZONE
+
+
+def _parse_localtime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def agent_connectivity_state(seconds_ago: int | float | None, last_job: dict | None = None) -> str:
+    if seconds_ago is not None and seconds_ago < _ONLINE_WINDOW_SECONDS:
+        return "online"
+    if not last_job:
+        return "offline"
+    job_type = str(last_job.get("type") or "")
+    job_status = str(last_job.get("status") or "")
+    if job_type not in _CONNECTIVITY_GRACE_JOB_TYPES or job_status not in {"pending", "running"}:
+        return "offline"
+    reference_raw = last_job.get("started") if job_status == "running" else last_job.get("created")
+    reference_dt = _parse_localtime(str(reference_raw or ""))
+    if not reference_dt:
+        return "offline"
+    grace = _RUNNING_JOB_GRACE_SECONDS if job_status == "running" else _PENDING_JOB_GRACE_SECONDS
+    age = (datetime.now() - reference_dt).total_seconds()
+    return "busy" if age <= grace else "offline"
+
+
+def is_effectively_online(seconds_ago: int | float | None, last_job: dict | None = None) -> bool:
+    return agent_connectivity_state(seconds_ago, last_job) != "offline"
+
+
+def _ping_command(target: str) -> list[str]:
+    if platform.system().lower() == "darwin":
+        return ["ping", "-n", "-c", "1", "-W", "2000", target]
+    return ["ping", "-n", "-c", "1", "-W", "2", target]
+
+
+def _probe_ping_target(target: str) -> bool:
+    target = str(target or "").strip()
+    if not target:
+        return False
+    try:
+        result = subprocess.run(
+            _ping_command(target),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def trigger_ping_check_for_agent(agent_id: str) -> bool:
+    from db import db as get_db_ctx
+
+    with get_db_ctx() as conn:
+        row = conn.execute(
+            "SELECT id, hostname, ip, agent_type FROM agents WHERE id=?",
+            (agent_id,),
+        ).fetchone()
+        if not row or str(row["agent_type"] or "") != "ping":
+            return False
+        target = str(row["ip"] or row["hostname"] or "").strip()
+
+    reachable = _probe_ping_target(target)
+    if reachable:
+        with get_db_ctx() as conn:
+            conn.execute(
+                "UPDATE agents SET last_seen=datetime('now','localtime') WHERE id=?",
+                (agent_id,),
+            )
+    return reachable
 
 
 def configure_timezone(tz: str):
@@ -95,12 +196,25 @@ def _check_offline_vms():
                        as seconds_ago
                    FROM agents"""
             ).fetchall()
+            last_jobs = conn.execute(
+                """SELECT j.agent_id, j.type, j.status, j.created, j.started
+                   FROM jobs j
+                   INNER JOIN (
+                       SELECT agent_id, MAX(id) as max_id
+                       FROM jobs
+                       GROUP BY agent_id
+                   ) latest ON j.id = latest.max_id"""
+            ).fetchall()
+        last_job_map = {row["agent_id"]: dict(row) for row in last_jobs}
 
         threshold = _get_offline_threshold()
         for row in agents:
             agent = dict(row)
             agent_id = agent["id"]
             seconds_ago = agent.get("seconds_ago") or 0
+            if is_effectively_online(seconds_ago, last_job_map.get(agent_id)):
+                _offline_notified.discard(agent_id)
+                continue
 
             if seconds_ago > threshold:
                 # Only notify once per offline episode
@@ -117,6 +231,20 @@ def _check_offline_vms():
 
     except Exception as exc:
         log.warning("_check_offline_vms error: %s", exc)
+
+
+def _check_ping_targets():
+    try:
+        from db import db as get_db_ctx
+
+        with get_db_ctx() as conn:
+            rows = conn.execute(
+                "SELECT id FROM agents WHERE COALESCE(agent_type, 'linux')='ping'"
+            ).fetchall()
+        for row in rows:
+            trigger_ping_check_for_agent(row["id"])
+    except Exception as exc:
+        log.warning("_check_ping_targets error: %s", exc)
 
 
 _ALLOWED_JOB_TYPES = {"patch", "dist_upgrade", "refresh_updates", "reboot"}
@@ -261,6 +389,14 @@ def register_system_jobs():
         trigger=IntervalTrigger(minutes=5),
         id="__cleanup_stale_jobs__",
         name="Cleanup stale running jobs",
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
+        _check_ping_targets,
+        trigger=IntervalTrigger(minutes=2),
+        id="__check_ping_targets__",
+        name="Check ping-only targets",
         replace_existing=True,
     )
 

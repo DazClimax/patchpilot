@@ -24,7 +24,16 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.security import APIKeyHeader
 
 from db import init_db, db as get_db_ctx, hash_password, verify_password
-from scheduler import scheduler, schedule_job, register_system_jobs, get_scheduler_timezone, configure_timezone
+from scheduler import (
+    scheduler,
+    schedule_job,
+    register_system_jobs,
+    get_scheduler_timezone,
+    configure_timezone,
+    agent_connectivity_state,
+    is_effectively_online,
+    trigger_ping_check_for_agent,
+)
 from notifications import notification_manager
 import metrics as metrics_module
 
@@ -324,6 +333,7 @@ STATIC_DIR = Path(os.environ.get("PATCHPILOT_STATIC_DIR", str(Path(__file__).par
 _AGENT_ID_RE = re.compile(r'^[a-zA-Z0-9._-]{1,64}$')
 _TG_TOKEN_RE  = re.compile(r'^\d+:[A-Za-z0-9_-]{35,}$')
 ALLOWED_JOB_TYPES = {"patch", "dist_upgrade", "force_patch", "refresh_updates", "reboot", "update_agent", "autoremove", "deploy_ssl", "ack_config_review", "ha_backup", "ha_core_update", "ha_backup_update", "ha_supervisor_update", "ha_os_update", "ha_addon_update", "ha_addons_update", "ha_entity_update", "ha_trigger_agent_update"}
+_MANAGED_AGENT_TYPES = {"linux", "haos"}
 
 def _validate_agent_id(agent_id: str):
     if not _AGENT_ID_RE.match(agent_id):
@@ -364,7 +374,7 @@ def _infer_package_manager(fields: dict) -> str | None:
 
 def _infer_agent_type(fields: dict) -> str:
     agent_type = (fields.get("agent_type") or "").strip().lower()
-    if agent_type in {"linux", "haos"}:
+    if agent_type in {"linux", "haos", "ping"}:
         return agent_type
     os_pretty = (fields.get("os_pretty") or "").lower()
     if "home assistant os" in os_pretty:
@@ -446,6 +456,41 @@ def _validate_webhook_url(raw: str) -> str:
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise HTTPException(status_code=422, detail="Webhook URL must be a valid http(s) URL")
     return value.rstrip("/")
+
+
+def _validate_ping_target_fields(hostname: str, address: str) -> tuple[str, str]:
+    hostname = str(hostname or "").strip()
+    address = str(address or "").strip()
+    if not hostname:
+        raise HTTPException(status_code=422, detail="Hostname is required")
+    if not address:
+        raise HTTPException(status_code=422, detail="Address is required")
+    if len(hostname) > 64:
+        raise HTTPException(status_code=422, detail="Hostname must be 64 characters or less")
+    if len(address) > 255:
+        raise HTTPException(status_code=422, detail="Address must be 255 characters or less")
+    if any(ch in hostname for ch in "\r\n\t"):
+        raise HTTPException(status_code=422, detail="Hostname contains unsupported control characters")
+    if not re.search(r"[A-Za-z0-9]", hostname):
+        raise HTTPException(status_code=422, detail="Hostname contains unsupported characters")
+    return hostname, address
+
+
+def _slugify_agent_id(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9._-]+", "-", str(value or "").strip().lower())
+    slug = slug.strip(".-_")[:64]
+    return slug or "ping-target"
+
+
+def _allocate_agent_id(conn, desired: str) -> str:
+    base = _slugify_agent_id(desired)
+    candidate = base
+    suffix = 2
+    while conn.execute("SELECT 1 FROM agents WHERE id=?", (candidate,)).fetchone():
+        tail = f"-{suffix}"
+        candidate = f"{base[:max(1, 64 - len(tail))]}{tail}"
+        suffix += 1
+    return candidate
 
 # ---------------------------------------------------------------------------
 # On-demand registration key (generated when requested, valid 5 min)
@@ -933,6 +978,13 @@ def _resolve_ha_job_display_status(job: dict, package_state: dict[str, set[str]]
     return {"status": "done", "finished": agent_last_seen}
 
 
+def _agent_online_status(row: dict, last_job: dict | None = None) -> dict:
+    connectivity_state = agent_connectivity_state(row.get("seconds_ago"), last_job)
+    row["effective_online"] = connectivity_state != "offline"
+    row["connectivity_state"] = connectivity_state
+    return row
+
+
 def verify_agent(agent_id: str, x_token: str):
     """Verify agent token against the stored SHA-256 hash."""
     with get_db_ctx() as conn:
@@ -1390,8 +1442,10 @@ def api_dashboard():
             row["last_job_type"] = lj["type"]
             row["last_job_status"] = display["status"]
             row["last_job_finished"] = display["finished"]
+            lj = {**dict(lj), **display}
+        row = _agent_online_status(row, lj)
         result.append(row)
-    online = sum(1 for a in result if (a.get("seconds_ago") or 9999) < 120)
+    online = sum(1 for a in result if a.get("effective_online"))
     reboot_needed = sum(1 for a in result if a.get("reboot_required"))
     total_pending = sum(a.get("pending_count") or 0 for a in result)
     payload = {
@@ -1530,10 +1584,13 @@ def api_agent(agent_id: str, days: int = 7, limit: int = 10, offset: int = 0):
         "names": {str(p["name"]) for p in packages if p["name"]},
         "source_ids": {str(p["source_id"]) for p in packages if p["source_id"]},
     }
+    latest_job_for_connectivity: dict | None = None
     jobs_payload = []
     for j in jobs:
         job = dict(j)
         job.update(_resolve_ha_job_display_status(job, package_state, agent_dict.get("last_seen")))
+        if latest_job_for_connectivity is None:
+            latest_job_for_connectivity = dict(job)
         health_status = None
         if job.get("status") == "done" and job.get("type") in health_job_types:
             finished_raw = job.get("finished")
@@ -1552,6 +1609,7 @@ def api_agent(agent_id: str, days: int = 7, limit: int = 10, offset: int = 0):
                     health_status = "stale"
         job["health_status"] = health_status
         jobs_payload.append(job)
+    agent_dict = _agent_online_status(agent_dict, latest_job_for_connectivity)
     payload = {
         "agent": agent_dict,
         "agent_target_version": _AGENT_TARGET_VERSION,
@@ -1563,6 +1621,70 @@ def api_agent(agent_id: str, days: int = 7, limit: int = 10, offset: int = 0):
     }
     _cache_set(cache_key, payload, _CACHE_TTL_AGENT)
     return payload
+
+
+@app.post("/api/agents/ping-targets", dependencies=[Depends(require_role("admin"))])
+async def api_create_ping_target(request: Request):
+    data = await request.json()
+    hostname, address = _validate_ping_target_fields(
+        data.get("hostname"),
+        data.get("address") or data.get("ip"),
+    )
+    requested_id = str(data.get("id") or "").strip()
+    if requested_id:
+        _validate_agent_id(requested_id)
+    with get_db_ctx() as conn:
+        agent_id = requested_id or _allocate_agent_id(conn, hostname)
+        if requested_id and conn.execute("SELECT 1 FROM agents WHERE id=?", (agent_id,)).fetchone():
+            raise HTTPException(status_code=409, detail=f"Agent ID '{agent_id}' already exists")
+        conn.execute(
+            """
+            INSERT INTO agents (
+                id, hostname, ip, os_pretty, package_manager, agent_version,
+                agent_type, capabilities, protocol, token
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                agent_id,
+                hostname,
+                address,
+                "Ping monitor",
+                None,
+                "",
+                "ping",
+                "",
+                "icmp",
+                _hash_token(secrets.token_hex(32)),
+            ),
+        )
+    reachable = trigger_ping_check_for_agent(agent_id)
+    _cache_invalidate("dashboard", f"agent:{agent_id}")
+    with get_db_ctx() as conn:
+        row = conn.execute(
+            """
+            SELECT agents.*,
+                   0 AS live_pending_count,
+                   (julianday('now','localtime') - julianday(last_seen)) * 86400 as seconds_ago
+            FROM agents WHERE id=?
+            """,
+            (agent_id,),
+        ).fetchone()
+    agent_payload = _agent_online_status(_redact_agent_record(dict(row)))
+    agent_payload["pending_count"] = agent_payload.pop("live_pending_count", 0)
+    return {"status": "created", "reachable": reachable, "agent": agent_payload}
+
+
+@app.post("/api/agents/{agent_id}/ping-check", dependencies=[Depends(require_role("admin","user"))])
+def api_ping_check(agent_id: str):
+    with get_db_ctx() as conn:
+        row = conn.execute("SELECT agent_type FROM agents WHERE id=?", (agent_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if str(row["agent_type"] or "") != "ping":
+            raise HTTPException(status_code=422, detail="Ping checks are only available for ping-only targets")
+    reachable = trigger_ping_check_for_agent(agent_id)
+    _cache_invalidate("dashboard", f"agent:{agent_id}")
+    return {"status": "ok", "reachable": reachable}
 
 
 @app.post("/api/agents/{agent_id}/jobs", dependencies=[Depends(require_role("admin","user"))])
@@ -1577,6 +1699,8 @@ async def create_job(agent_id: str, request: Request):
         agent = conn.execute("SELECT id, agent_type, capabilities FROM agents WHERE id=?", (agent_id,)).fetchone()
         if not agent:
             raise HTTPException(status_code=404, detail="Agent not found")
+        if str(agent["agent_type"] or "linux") not in _MANAGED_AGENT_TYPES:
+            raise HTTPException(status_code=422, detail="This target is monitor-only and does not support jobs")
         capabilities = set(filter(None, str(agent["capabilities"] or "").split(",")))
         if job_type.startswith("ha_"):
             if agent["agent_type"] != "haos":
@@ -2371,13 +2495,27 @@ def api_alerts():
     """Return all VMs that have been offline for more than 5 minutes."""
     with get_db_ctx() as conn:
         rows = conn.execute(
-            """SELECT hostname, ip,
+            """SELECT id, hostname, ip,
                CAST((julianday('now','localtime') - julianday(last_seen)) * 86400 AS INTEGER) as offline_since_seconds
                FROM agents
                WHERE last_seen IS NOT NULL
-                 AND (julianday('now','localtime') - julianday(last_seen)) * 86400 > 300
-               ORDER BY offline_since_seconds DESC"""
+                 AND (julianday('now','localtime') - julianday(last_seen)) * 86400 > 300"""
         ).fetchall()
+        last_jobs = conn.execute(
+            """SELECT j.agent_id, j.type, j.status, j.created, j.started
+               FROM jobs j
+               INNER JOIN (
+                   SELECT agent_id, MAX(id) as max_id
+                   FROM jobs
+                   GROUP BY agent_id
+               ) latest ON j.id = latest.max_id"""
+        ).fetchall()
+    last_job_map = {row["agent_id"]: dict(row) for row in last_jobs}
+    rows = [
+        row for row in rows
+        if not is_effectively_online(row["offline_since_seconds"], last_job_map.get(row["id"]))
+    ]
+    rows.sort(key=lambda row: row["offline_since_seconds"], reverse=True)
     return [
         {
             "hostname": r["hostname"],
@@ -2394,13 +2532,22 @@ def api_status_badge():
     with get_db_ctx() as conn:
         agents = conn.execute(
             """SELECT
-               COUNT(*) as total,
-               SUM(CASE WHEN (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120 THEN 1 ELSE 0 END) as online
+               id,
+               CAST((julianday('now','localtime') - julianday(last_seen)) * 86400 AS INTEGER) as seconds_ago
                FROM agents"""
-        ).fetchone()
-
-    total = agents["total"] or 0
-    online = agents["online"] or 0
+        ).fetchall()
+        last_jobs = conn.execute(
+            """SELECT j.agent_id, j.type, j.status, j.created, j.started
+               FROM jobs j
+               INNER JOIN (
+                   SELECT agent_id, MAX(id) as max_id
+                   FROM jobs
+                   GROUP BY agent_id
+               ) latest ON j.id = latest.max_id"""
+        ).fetchall()
+    last_job_map = {row["agent_id"]: dict(row) for row in last_jobs}
+    total = len(agents)
+    online = sum(1 for row in agents if is_effectively_online(row["seconds_ago"], last_job_map.get(row["id"])))
 
     if total == 0 or online == 0:
         color = "#e05d44"  # red
@@ -2539,7 +2686,10 @@ async def api_deploy_ssl_to_agents(request: Request):
             """, (batch_filter,)).fetchall()
             agents = failed_agents
         else:
-            agents = conn.execute("SELECT id AS agent_id, hostname, COALESCE(agent_type, 'linux') AS agent_type FROM agents").fetchall()
+            agents = conn.execute(
+                "SELECT id AS agent_id, hostname, COALESCE(agent_type, 'linux') AS agent_type "
+                "FROM agents WHERE COALESCE(agent_type, 'linux') IN ('linux', 'haos')"
+            ).fetchall()
 
         if not agents:
             raise HTTPException(status_code=422, detail="No agents to deploy to")
@@ -2609,6 +2759,7 @@ async def api_update_agents_batch(request: Request):
                     SELECT id AS agent_id, hostname, COALESCE(agent_type, 'linux') AS agent_type, COALESCE(capabilities, '') AS capabilities
                     FROM agents
                     WHERE id IN ({placeholders})
+                      AND COALESCE(agent_type, 'linux') IN ('linux', 'haos')
                       AND last_seen IS NOT NULL
                       AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120
                 """, requested_agent_ids).fetchall()
@@ -2616,7 +2767,8 @@ async def api_update_agents_batch(request: Request):
                 agents = conn.execute("""
                     SELECT id AS agent_id, hostname, COALESCE(agent_type, 'linux') AS agent_type, COALESCE(capabilities, '') AS capabilities
                     FROM agents
-                    WHERE last_seen IS NOT NULL
+                    WHERE COALESCE(agent_type, 'linux') IN ('linux', 'haos')
+                      AND last_seen IS NOT NULL
                       AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120
                 """).fetchall()
 
@@ -2662,7 +2814,8 @@ def api_deploy_ssl_status(batch: str = ""):
     with get_db_ctx() as conn:
         # Get deploy_ssl jobs for this batch
         ssl_rows = conn.execute("""
-            SELECT j.agent_id, a.hostname, j.status, j.output, j.finished
+            SELECT j.agent_id, a.hostname, j.type, j.status, j.output, j.finished, j.created, j.started,
+                   CAST((julianday('now','localtime') - julianday(a.last_seen)) * 86400 AS INTEGER) AS seconds_ago
             FROM jobs j JOIN agents a ON a.id = j.agent_id
             WHERE j.type = 'deploy_ssl' AND j.params LIKE ?
         """, (batch_filter,)).fetchall()
@@ -2670,24 +2823,18 @@ def api_deploy_ssl_status(batch: str = ""):
 
         # Get the chained update_agent jobs for this batch
         upd_rows = conn.execute("""
-            SELECT j.agent_id, a.hostname, j.type, j.status, j.output, j.finished
+            SELECT j.agent_id, a.hostname, j.type, j.status, j.output, j.finished, j.created, j.started,
+                   CAST((julianday('now','localtime') - julianday(a.last_seen)) * 86400 AS INTEGER) AS seconds_ago
             FROM jobs j JOIN agents a ON a.id = j.agent_id
             WHERE j.type IN ('update_agent', 'ha_trigger_agent_update') AND j.params LIKE ?
         """, (batch_filter,)).fetchall()
-
-        # Get online status for all agents (seen within last 2 min)
-        online_rows = conn.execute("""
-            SELECT id, (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120 AS is_online
-            FROM agents WHERE last_seen IS NOT NULL
-        """).fetchall()
-        online_map = {r["id"]: bool(r["is_online"]) for r in online_rows}
 
     agents = []
     seen_agent_ids: set[str] = set()
     for r in upd_rows:
         aid = r["agent_id"]
         seen_agent_ids.add(aid)
-        is_online = online_map.get(aid, False)
+        is_online = is_effectively_online(r["seconds_ago"], dict(r))
         if aid in ssl_map:
             sr = ssl_map[aid]
             phase = "done" if sr["status"] == "done" else "failed" if sr["status"] == "failed" else "deploying"
@@ -2695,7 +2842,7 @@ def api_deploy_ssl_status(batch: str = ""):
                 "agent_id": aid, "hostname": sr["hostname"],
                 "status": sr["status"], "phase": phase,
                 "output": sr["output"] or "", "finished": sr["finished"],
-                "online": is_online,
+                "online": is_effectively_online(sr["seconds_ago"], dict(sr)),
             })
         else:
             phase = "updating" if r["status"] in ("pending", "running") else (
@@ -2720,7 +2867,7 @@ def api_deploy_ssl_status(batch: str = ""):
             "phase": phase,
             "output": sr["output"] or "",
             "finished": sr["finished"],
-            "online": online_map.get(aid, False),
+            "online": is_effectively_online(sr["seconds_ago"], dict(sr)),
         })
     # Sort: online first, then by hostname
     agents.sort(key=lambda a: (not a["online"], a["hostname"]))
@@ -2742,16 +2889,11 @@ def api_update_agents_batch_status(batch: str = ""):
     batch_filter = f'%"batch": "{batch}"%'
     with get_db_ctx() as conn:
         rows = conn.execute("""
-            SELECT j.agent_id, a.hostname, a.agent_version, j.type, j.status, j.output, j.finished
+            SELECT j.agent_id, a.hostname, a.agent_version, j.type, j.status, j.output, j.finished, j.created, j.started,
+                   CAST((julianday('now','localtime') - julianday(a.last_seen)) * 86400 AS INTEGER) AS seconds_ago
             FROM jobs j JOIN agents a ON a.id = j.agent_id
             WHERE j.type IN ('update_agent', 'ha_trigger_agent_update') AND j.params LIKE ?
         """, (batch_filter,)).fetchall()
-
-        online_rows = conn.execute("""
-            SELECT id, (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120 AS is_online
-            FROM agents WHERE last_seen IS NOT NULL
-        """).fetchall()
-        online_map = {r["id"]: bool(r["is_online"]) for r in online_rows}
 
     agents = []
     for r in rows:
@@ -2789,7 +2931,7 @@ def api_update_agents_batch_status(batch: str = ""):
             "phase": phase,
             "output": r["output"] or "",
             "finished": r["finished"],
-            "online": online_map.get(r["agent_id"], False),
+            "online": is_effectively_online(r["seconds_ago"], dict(r)),
         })
 
     agents.sort(key=lambda a: (not a["online"], a["hostname"]))

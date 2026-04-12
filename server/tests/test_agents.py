@@ -4,6 +4,7 @@ test_agents.py — tests for agent and job endpoints.
 from datetime import datetime
 import json
 import secrets
+from unittest.mock import patch
 import pytest
 
 
@@ -289,6 +290,43 @@ class TestUpdateBatchStatus:
         assert data["agents"][0]["phase"] == "deploying"
         assert data["agents"][0]["status"] == "running"
 
+    def test_running_update_counts_as_online_during_grace_window(self, client, db_conn):
+        agent_id = "busy-agent"
+        ten_minutes_ago = "2026-04-12 09:00:00"
+        two_minutes_ago = "2026-04-12 09:08:30"
+        now = "2026-04-12 09:10:40"
+        db_conn.execute(
+            """
+            INSERT INTO agents (id, hostname, token, last_seen)
+            VALUES (?, ?, ?, ?)
+            """,
+            (agent_id, "worker-1", "token", ten_minutes_ago),
+        )
+        db_conn.execute(
+            """
+            INSERT INTO jobs (agent_id, type, status, created, started, params)
+            VALUES (?, 'patch', 'running', ?, ?, '{}')
+            """,
+            (agent_id, two_minutes_ago, two_minutes_ago),
+        )
+        db_conn.commit()
+
+        with patch("app.datetime") as app_dt, patch("scheduler.datetime") as scheduler_dt:
+            real_datetime = datetime
+            frozen = real_datetime.strptime(now, "%Y-%m-%d %H:%M:%S")
+            app_dt.now.return_value = frozen
+            app_dt.strptime.side_effect = lambda *args, **kwargs: real_datetime.strptime(*args, **kwargs)
+            scheduler_dt.now.return_value = frozen
+            scheduler_dt.strptime.side_effect = lambda *args, **kwargs: real_datetime.strptime(*args, **kwargs)
+            dash = client.get("/api/dashboard")
+
+        assert dash.status_code == 200
+        data = dash.json()
+        assert data["stats"]["online"] == 1
+        row = data["agents"][0]
+        assert row["effective_online"] is True
+        assert row["connectivity_state"] == "busy"
+
 
 class TestHaUpdateCallback:
     def test_callback_updates_matching_ha_job_output(self, client, registered_agent, db_conn):
@@ -388,6 +426,24 @@ class TestCreateJob:
         job_types = [j["type"] for j in detail["jobs"]]
         assert "refresh_updates" in job_types
 
+    def test_monitor_only_ping_target_rejects_jobs(self, client, db_conn):
+        db_conn.execute(
+            """
+            INSERT INTO agents (id, hostname, ip, token, agent_type, protocol)
+            VALUES (?, ?, ?, ?, 'ping', 'icmp')
+            """,
+            ("fritzbox", "FRITZ!Box", "192.168.178.1", "token"),
+        )
+        db_conn.commit()
+
+        resp = client.post(
+            "/api/agents/fritzbox/jobs",
+            json={"type": "patch", "params": {}},
+        )
+
+        assert resp.status_code == 422
+        assert "monitor-only" in resp.json()["detail"]
+
     def test_ha_entity_update_job_allowed_for_haos_with_capability(self, client, db_conn):
         db_conn.execute(
             """
@@ -466,3 +522,43 @@ class TestDeleteAgent:
         # DELETE is idempotent — deleting a non-existent agent should not error
         resp = client.delete("/api/agents/ghost-agent")
         assert resp.status_code == 200
+
+
+class TestPingTargets:
+    def test_admin_can_create_ping_target(self, client, monkeypatch):
+        monkeypatch.setattr("app.trigger_ping_check_for_agent", lambda agent_id: True)
+
+        resp = client.post(
+            "/api/agents/ping-targets",
+            json={"hostname": "FRITZ!Box", "address": "192.168.178.1"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "created"
+        assert data["reachable"] is True
+        assert data["agent"]["agent_type"] == "ping"
+        assert data["agent"]["protocol"] == "icmp"
+
+    def test_ping_check_endpoint_triggers_probe(self, client, db_conn, monkeypatch):
+        db_conn.execute(
+            """
+            INSERT INTO agents (id, hostname, ip, token, agent_type, protocol)
+            VALUES (?, ?, ?, ?, 'ping', 'icmp')
+            """,
+            ("fritzbox", "FRITZ!Box", "192.168.178.1", "token"),
+        )
+        db_conn.commit()
+        called = {"agent_id": None}
+
+        def _fake_check(agent_id: str):
+            called["agent_id"] = agent_id
+            return True
+
+        monkeypatch.setattr("app.trigger_ping_check_for_agent", _fake_check)
+
+        resp = client.post("/api/agents/fritzbox/ping-check")
+
+        assert resp.status_code == 200
+        assert resp.json()["reachable"] is True
+        assert called["agent_id"] == "fritzbox"

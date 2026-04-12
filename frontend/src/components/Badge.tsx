@@ -35,8 +35,14 @@ export function Badge({ children, color = colors.primary, style, className }: Ba
 
 // ─── Status dot with animated pulse ──────────────────────────────────────────
 
-export function OnlineDot({ online }: { online: boolean }) {
-  const color = online ? colors.success : colors.danger
+export function OnlineDot({ online, state }: { online: boolean; state?: 'online' | 'busy' | 'offline' | null }) {
+  const effectiveState = state ?? (online ? 'online' : 'offline')
+  const color = effectiveState === 'online'
+    ? colors.success
+    : effectiveState === 'busy'
+      ? colors.warn
+      : colors.danger
+  const label = effectiveState === 'online' ? 'Online' : effectiveState === 'busy' ? 'Busy' : 'Offline'
 
   return (
     <span style={{
@@ -70,7 +76,7 @@ export function OnlineDot({ online }: { online: boolean }) {
         }} />
       </span>
       <span className="pp-hide-mobile" style={{ textTransform: 'uppercase' }}>
-        {online ? 'Online' : 'Offline'}
+        {label}
       </span>
     </span>
   )

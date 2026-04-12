@@ -331,9 +331,11 @@ export function VmDetail() {
     }
   }
 
-  const online = (agent?.seconds_ago ?? 9999) < 120
   const isRpmSystem = ['dnf', 'yum'].includes(agent?.package_manager ?? '')
   const isHaos = agent?.agent_type === 'haos'
+  const isPingTarget = agent?.agent_type === 'ping'
+  const online = agent?.effective_online ?? ((agent?.seconds_ago ?? 9999) < 120)
+  const connectivityState = agent?.connectivity_state ?? (online ? 'online' : 'offline')
   const capabilityList = (agent?.capabilities ?? '').split(',').map(item => item.trim()).filter(Boolean)
   const hasHaBackup = capabilityList.includes('ha_backup')
   const hasHaCoreUpdate = capabilityList.includes('ha_core_update')
@@ -345,7 +347,9 @@ export function VmDetail() {
   const hasHaAgentAutoUpdate = capabilityList.includes('ha_agent_auto_update')
   const effectiveAgentTargetVersion = isHaos ? haAgentTargetVersion : agentTargetVersion
   const supportsHaEntityUpdate = isHaos
-  const agentVersionAccent = isHaos && !hasHaAgentAutoUpdate
+  const agentVersionAccent = isPingTarget
+    ? colors.primaryDim
+    : isHaos && !hasHaAgentAutoUpdate
     ? colors.primaryDim
     : agent?.agent_version === effectiveAgentTargetVersion
       ? colors.success
@@ -356,6 +360,8 @@ export function VmDetail() {
       ? '↻ Dnf Refresh'
       : agent?.package_manager === 'yum'
         ? '↻ Yum Refresh'
+        : isPingTarget
+          ? '↻ Ping Check'
         : isHaos
           ? '↻ Refresh Status'
         : '↻ Refresh'
@@ -389,7 +395,7 @@ export function VmDetail() {
               animation: 'pp-spin 0.8s linear infinite',
             }} />
           )}
-          <Button
+          {!isPingTarget && <Button
             variant="danger"
             size="sm"
             loading={busy}
@@ -397,8 +403,8 @@ export function VmDetail() {
             disabled={busy}
           >
             ⟳ Reboot
-          </Button>
-          {packages.length > 0 && !isHaos && (
+          </Button>}
+          {packages.length > 0 && !isHaos && !isPingTarget && (
             <>
               <Button size="sm" onClick={() => triggerJob('patch')} loading={busy} disabled={busy}>
                 ↑ Patch All
@@ -505,13 +511,22 @@ export function VmDetail() {
           <Button
             variant="ghost"
             size="sm"
-            onClick={confirmRefreshUpdates}
+            onClick={isPingTarget ? async () => {
+              if (!id || busy) return
+              setBusy(true)
+              try {
+                await api.pingCheck(id)
+                setTimeout(load, 500)
+              } finally {
+                setBusy(false)
+              }
+            } : confirmRefreshUpdates}
             disabled={busy}
-            title="Refresh package metadata and update the pending package list"
+            title={isPingTarget ? 'Run an immediate reachability check' : 'Refresh package metadata and update the pending package list'}
           >
             {refreshLabel}
           </Button>
-          {!isHaos && (
+          {!isHaos && !isPingTarget && (
             <Button
               variant="ghost"
               size="sm"
@@ -523,7 +538,7 @@ export function VmDetail() {
               ⇪ Dist Upgrade
             </Button>
           )}
-          {!isHaos && (
+          {!isHaos && !isPingTarget && (
             <Button
               variant="ghost"
               size="sm"
@@ -538,7 +553,7 @@ export function VmDetail() {
               🧹 Clean
             </Button>
           )}
-          {!isHaos && (
+          {!isHaos && !isPingTarget && (
             <Button
               variant="ghost"
               size="sm"
@@ -597,9 +612,11 @@ export function VmDetail() {
 
       {/* Online status bar + Agent ID */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px', flexWrap: 'wrap' }}>
-        <OnlineDot online={online} />
+        <OnlineDot online={online} state={connectivityState} />
         <span style={{ color: colors.textMuted, fontSize: '11px', fontFamily: 'monospace' }}>
-          {online
+          {connectivityState === 'busy'
+            ? `Temporarily unreachable during active work · last seen ${fmtAgo(agent.seconds_ago)}`
+            : online
             ? `Last seen ${fmtAgo(agent.seconds_ago)}`
             : `Offline since ${fmtAgo(agent.seconds_ago)}`}
         </span>
@@ -646,11 +663,11 @@ export function VmDetail() {
       {/* Info cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px', marginBottom: '12px' }}>
         {[
-          { label: 'IP Address', value: agent.ip ?? '—', accent: colors.primary },
+          { label: isPingTarget ? 'Address' : 'IP Address', value: agent.ip ?? '—', accent: colors.primary },
           { label: 'OS',         value: agent.os_pretty ?? '—', accent: colors.primaryDim },
-          { label: 'Agent Ver',  value: agent.agent_version ?? 'unknown', accent: agentVersionAccent },
-          { label: 'Agent Type', value: agent.agent_type ?? 'linux', accent: isHaos ? colors.warn : colors.primaryDim },
-          { label: 'Pkg Manager', value: agent.package_manager ?? '—', accent: colors.primaryDim },
+          { label: isPingTarget ? 'Agent Ver' : 'Agent Ver',  value: isPingTarget ? 'n/a' : agent.agent_version ?? 'unknown', accent: agentVersionAccent },
+          { label: 'Agent Type', value: agent.agent_type ?? 'linux', accent: isHaos ? colors.warn : isPingTarget ? colors.warn : colors.primaryDim },
+          { label: isPingTarget ? 'Check Mode' : 'Pkg Manager', value: isPingTarget ? 'icmp' : agent.package_manager ?? '—', accent: colors.primaryDim },
           { label: 'Kernel',     value: agent.kernel ?? '—', accent: colors.primaryDim },
           { label: 'Arch',       value: agent.arch ?? '—', accent: colors.primaryDim },
           { label: 'Uptime',     value: fmtUptime(agent.uptime_seconds), accent: colors.primaryDim },
@@ -854,7 +871,7 @@ export function VmDetail() {
               Pending Updates
             </h2>
           </div>
-          {packages.length > 0 ? <Badge color={colors.warn}>{packages.length} Pending</Badge> : null}
+          {!isPingTarget && packages.length > 0 ? <Badge color={colors.warn}>{packages.length} Pending</Badge> : null}
         </div>
 
         <div style={{
@@ -864,7 +881,23 @@ export function VmDetail() {
           WebkitBackdropFilter: 'blur(8px)',
           overflowX: 'auto',
         }}>
-          {packages.length === 0 ? (
+          {isPingTarget ? (
+            <div style={{
+              padding: '44px',
+              textAlign: 'center',
+              animation: 'pp-fadein 0.4s ease both',
+            }}>
+              <div style={{ fontSize: '22px', color: colors.warn, textShadow: glowStrong(colors.warn), marginBottom: '10px' }}>
+                ◎
+              </div>
+              <div style={{ fontSize: '12px', color: colors.warn, letterSpacing: '0.18em', fontFamily: "'Orbitron', sans-serif", textShadow: glow(colors.warn, 4), marginBottom: '8px' }}>
+                Ping-Only Target
+              </div>
+              <div style={{ fontSize: '11px', color: colors.textMuted, fontFamily: "'Electrolize', monospace" }}>
+                This system is monitored for reachability only. Package and job actions are not available.
+              </div>
+            </div>
+          ) : packages.length === 0 ? (
             <div style={{
               padding: '44px',
               textAlign: 'center',

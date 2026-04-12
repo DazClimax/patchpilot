@@ -79,6 +79,8 @@ export interface Agent {
   last_job_status: string | null
   last_job_finished: string | null
   protocol: string | null
+  effective_online?: boolean | null
+  connectivity_state?: 'online' | 'busy' | 'offline' | null
   config_review_required: number
   config_review_note: string | null
 }
@@ -210,6 +212,12 @@ export const api = {
 
   createJob: (agentId: string, type: string, params?: Record<string, unknown>) =>
     req('POST', `/agents/${agentId}/jobs`, { type, params: params ?? {} }),
+
+  createPingTarget: (data: { hostname: string; address: string; id?: string }) =>
+    req<{ status: string; reachable: boolean; agent: Agent }>('POST', '/agents/ping-targets', data),
+
+  pingCheck: (id: string) =>
+    req<{ status: string; reachable: boolean }>('POST', `/agents/${id}/ping-check`),
 
   cancelJob: (agentId: string, jobId: number) =>
     req('POST', `/agents/${agentId}/jobs/${jobId}/cancel`),

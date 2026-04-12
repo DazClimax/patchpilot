@@ -65,7 +65,7 @@ function OfflineBanner({ hostnames, onDismiss }: { hostnames: string[]; onDismis
           textShadow: glowText(colors.danger, 3),
           flexShrink: 0,
         }}>
-          Offline VMs Detected
+          Offline Systems Detected
         </span>
 
         {/* Hostname pills */}
@@ -132,6 +132,9 @@ function OfflineBanner({ hostnames, onDismiss }: { hostnames: string[]; onDismis
 type SortKey = 'status' | 'conn' | 'hostname' | 'ip' | 'os' | 'updates' | 'reboot' | 'last_job' | 'uptime' | 'last_seen'
 type FilterKey = 'all' | 'online' | 'offline' | 'updates' | 'reboot' | 'outdated' | 'haos'
 
+const isAgentOnline = (agent: Agent) => agent.effective_online ?? ((agent.seconds_ago ?? 9999) < 120)
+const connectivityStateOf = (agent: Agent) => agent.connectivity_state ?? (isAgentOnline(agent) ? 'online' : 'offline')
+
 /** Map OS name to font-logos CSS class */
 function osIcon(os: string | null): string {
   if (!os) return 'fl-tux'
@@ -191,8 +194,8 @@ function sortAgents(agents: Agent[], key: SortKey, dir: SortDir): Agent[] {
   const sorted = [...agents].sort((a, b) => {
     let cmp = 0
     if (key === 'status') {
-      const ao = (a.seconds_ago ?? 9999) < 120 ? 0 : 1
-      const bo = (b.seconds_ago ?? 9999) < 120 ? 0 : 1
+      const ao = isAgentOnline(a) ? 0 : 1
+      const bo = isAgentOnline(b) ? 0 : 1
       cmp = ao - bo
     } else if (key === 'hostname') {
       cmp = (a.hostname ?? '').localeCompare(b.hostname ?? '')
@@ -296,7 +299,8 @@ function AgentRow({
   index: number
   onTagsChange: (id: string, tags: string) => void
 }) {
-  const online = (agent.seconds_ago ?? 9999) < 120
+  const online = isAgentOnline(agent)
+  const connectivityState = connectivityStateOf(agent)
   const [hover, setHover] = useState(false)
   const [editingTags, setEditingTags] = useState(false)
   const [tagInput, setTagInput] = useState(agent.tags ?? '')
@@ -350,18 +354,24 @@ function AgentRow({
       }}
     >
       <td style={{ padding: '12px 16px' }}>
-        <OnlineDot online={online} />
+        <OnlineDot online={online} state={connectivityState} />
       </td>
       <td className="pp-hide-mobile" style={{ padding: '12px 10px', textAlign: 'center' }}>
-        <span title={agent.protocol === 'https' ? 'Connected via HTTPS' : 'Connected via HTTP'} style={{
-          fontSize: '9px', letterSpacing: '0.1em',
-          padding: '1px 5px',
-          border: `1px solid ${!online ? colors.border : agent.protocol === 'https' ? colors.success : colors.textMuted}44`,
-          color: !online ? colors.textMuted : agent.protocol === 'https' ? colors.success : colors.textMuted,
-          opacity: !online ? 0.55 : 1,
-          fontFamily: "'Orbitron', sans-serif",
-        }}>
-          {agent.protocol === 'https' ? 'TLS' : 'HTTP'}
+          <span title={
+            agent.protocol === 'https'
+              ? 'Connected via HTTPS'
+              : agent.protocol === 'icmp'
+                ? 'Reachability monitored via ping'
+                : 'Connected via HTTP'
+          } style={{
+            fontSize: '9px', letterSpacing: '0.1em',
+            padding: '1px 5px',
+            border: `1px solid ${!online ? colors.border : agent.protocol === 'https' ? colors.success : agent.protocol === 'icmp' ? colors.warn : colors.textMuted}44`,
+            color: !online ? colors.textMuted : agent.protocol === 'https' ? colors.success : agent.protocol === 'icmp' ? colors.warn : colors.textMuted,
+            opacity: !online ? 0.55 : 1,
+            fontFamily: "'Orbitron', sans-serif",
+          }}>
+          {agent.protocol === 'https' ? 'TLS' : agent.protocol === 'icmp' ? 'PING' : 'HTTP'}
         </span>
       </td>
       <td style={{ padding: '12px 16px' }}>
@@ -378,13 +388,13 @@ function AgentRow({
               {agent.hostname}
             </span>
             <span style={{
-              color: agent.agent_version ? colors.textMuted : colors.warn,
+              color: agent.agent_type === 'ping' ? colors.warn : agent.agent_version ? colors.textMuted : colors.warn,
               fontSize: '10px',
               fontFamily: "'Electrolize', monospace",
               letterSpacing: '0.12em',
               textTransform: 'uppercase',
             }}>
-              Agent {agent.agent_version || 'unknown'}
+              {agent.agent_type === 'ping' ? 'Ping monitor' : `Agent ${agent.agent_version || 'unknown'}`}
             </span>
           </div>
           {/* Tag chips + editor — hidden on mobile */}
@@ -452,6 +462,8 @@ function AgentRow({
             }}>
               {agent.agent_type === 'haos'
                 ? 'Home Assistant OS'
+                : agent.agent_type === 'ping'
+                  ? 'Ping-only monitor'
                 : agent.package_manager
                   ? `${agent.package_manager} packages`
                   : 'Package manager unknown'}
@@ -613,6 +625,11 @@ export function Dashboard() {
   const [search, setSearch] = useState('')
   const [confirm, setConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null)
   const [bulkBusy, setBulkBusy] = useState(false)
+  const [creatingPingTarget, setCreatingPingTarget] = useState(false)
+  const [showPingTargetForm, setShowPingTargetForm] = useState(false)
+  const [pingHostname, setPingHostname] = useState('')
+  const [pingAddress, setPingAddress] = useState('')
+  const [pingTargetError, setPingTargetError] = useState('')
   const [agentUpdateBusy, setAgentUpdateBusy] = useState(false)
   const [agentUpdateModal, setAgentUpdateModal] = useState(false)
   const [agentUpdateStatus, setAgentUpdateStatus] = useState<DeployStatus | null>(null)
@@ -680,7 +697,7 @@ export function Dashboard() {
   }, [])
 
   const patchableAgents = (data?.agents ?? []).filter(
-    a => a.agent_type !== 'haos' && (a.seconds_ago ?? 9999) < 120 && (a.pending_count ?? 0) > 0
+    a => a.agent_type !== 'haos' && a.agent_type !== 'ping' && isAgentOnline(a) && (a.pending_count ?? 0) > 0
   )
 
   const patchAll = async () => {
@@ -729,12 +746,15 @@ export function Dashboard() {
   const agents = data?.agents ?? []
   const agentTargetVersion = data?.agent_target_version ?? '1.0'
   const haAgentTargetVersion = data?.ha_agent_target_version ?? agentTargetVersion
-  const onlineAgents = agents.filter(a => (a.seconds_ago ?? 9999) < 120)
+  const onlineAgents = agents.filter(isAgentOnline)
   const haAutoUpdateCap = 'ha_agent_auto_update'
   const capabilityListFor = (agent: Agent) => (agent.capabilities ?? '').split(',').map(item => item.trim()).filter(Boolean)
   const hasHaAutoUpdateEnabled = (agent: Agent) => capabilityListFor(agent).includes(haAutoUpdateCap)
   const targetVersionForAgent = (agent: Agent) => agent.agent_type === 'haos' ? haAgentTargetVersion : agentTargetVersion
-  const isManagedByAgentUpdate = (agent: Agent) => agent.agent_type !== 'haos' || hasHaAutoUpdateEnabled(agent)
+  const isManagedByAgentUpdate = (agent: Agent) => {
+    if (agent.agent_type === 'ping') return false
+    return agent.agent_type !== 'haos' || hasHaAutoUpdateEnabled(agent)
+  }
   const updatableOnlineAgents = onlineAgents.filter(
     a => {
       if (!isManagedByAgentUpdate(a)) return false
@@ -780,14 +800,14 @@ export function Dashboard() {
       : colors.warn
 
   // Offline VMs (seconds_ago > 120)
-  const offlineAgents = agents.filter(a => (a.seconds_ago ?? 9999) > 120)
+  const offlineAgents = agents.filter(a => !isAgentOnline(a))
   const showBanner = !bannerDismissed && offlineAgents.length > 0 && !loading
   const normalizedSearch = search.trim().toLowerCase()
   const filteredAgents = agents.filter(agent => {
-    const matchesFilter =
+      const matchesFilter =
       filterKey === 'all' ? true :
-      filterKey === 'online' ? (agent.seconds_ago ?? 9999) < 120 :
-      filterKey === 'offline' ? (agent.seconds_ago ?? 9999) >= 120 :
+      filterKey === 'online' ? isAgentOnline(agent) :
+      filterKey === 'offline' ? !isAgentOnline(agent) :
       filterKey === 'updates' ? (agent.pending_count ?? 0) > 0 :
       filterKey === 'reboot' ? !!agent.reboot_required :
       filterKey === 'outdated' ? isManagedByAgentUpdate(agent) && (agent.agent_version?.trim() || '') !== targetVersionForAgent(agent) :
@@ -836,6 +856,18 @@ export function Dashboard() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           {isAdmin && (
             <Button
+              variant={showPingTargetForm ? 'primary' : 'ghost'}
+              size="sm"
+              onClick={() => {
+                setShowPingTargetForm(current => !current)
+                setPingTargetError('')
+              }}
+            >
+              + Ping Target
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
               variant={updatableOnlineAgents.length > 0 ? 'primary' : 'ghost'}
               size="sm"
               disabled={agentUpdateBusy || updatableOnlineAgents.length === 0}
@@ -882,6 +914,102 @@ export function Dashboard() {
         System Dashboard
       </PageHeader>
 
+      {isAdmin && showPingTargetForm && (
+        <div style={{
+          border: `1px solid ${colors.warn}44`,
+          background: `${colors.warn}08`,
+          padding: '16px',
+          marginBottom: '20px',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+          gap: '12px',
+          alignItems: 'end',
+        }}>
+          <div>
+            <div style={{ fontSize: '10px', color: colors.textMuted, letterSpacing: '0.16em', textTransform: 'uppercase', marginBottom: '6px', fontFamily: "'Orbitron', sans-serif" }}>
+              Display Name
+            </div>
+            <input
+              value={pingHostname}
+              onChange={e => setPingHostname(e.target.value)}
+              placeholder="FRITZ!Box"
+              style={{
+                width: '100%',
+                background: `${colors.bg}cc`,
+                border: `1px solid ${colors.border}`,
+                color: colors.text,
+                fontSize: '12px',
+                fontFamily: "'Electrolize', monospace",
+                padding: '8px 12px',
+                outline: 'none',
+              }}
+            />
+          </div>
+          <div>
+            <div style={{ fontSize: '10px', color: colors.textMuted, letterSpacing: '0.16em', textTransform: 'uppercase', marginBottom: '6px', fontFamily: "'Orbitron', sans-serif" }}>
+              Address / IP
+            </div>
+            <input
+              value={pingAddress}
+              onChange={e => setPingAddress(e.target.value)}
+              placeholder="192.168.178.1"
+              style={{
+                width: '100%',
+                background: `${colors.bg}cc`,
+                border: `1px solid ${colors.border}`,
+                color: colors.text,
+                fontSize: '12px',
+                fontFamily: "'Electrolize', monospace",
+                padding: '8px 12px',
+                outline: 'none',
+              }}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <Button
+              size="sm"
+              disabled={creatingPingTarget || !pingHostname.trim() || !pingAddress.trim()}
+              onClick={async () => {
+                setCreatingPingTarget(true)
+                setPingTargetError('')
+                try {
+                  await api.createPingTarget({ hostname: pingHostname.trim(), address: pingAddress.trim() })
+                  setPingHostname('')
+                  setPingAddress('')
+                  setShowPingTargetForm(false)
+                  await load()
+                } catch (e: any) {
+                  setPingTargetError(e?.message || 'Failed to create ping target')
+                } finally {
+                  setCreatingPingTarget(false)
+                }
+              }}
+            >
+              {creatingPingTarget ? 'Creating…' : 'Add Ping Target'}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setShowPingTargetForm(false)
+                setPingTargetError('')
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+          <div style={{
+            gridColumn: '1 / -1',
+            fontSize: '11px',
+            color: pingTargetError ? colors.danger : colors.textMuted,
+            fontFamily: "'Electrolize', monospace",
+            letterSpacing: '0.06em',
+          }}>
+            {pingTargetError || 'Adds a reachability-only system that PatchPilot monitors via ping.'}
+          </div>
+        </div>
+      )}
+
       {/* Stat cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '16px', marginBottom: '32px' }}>
         {loading ? (
@@ -893,7 +1021,7 @@ export function Dashboard() {
         ) : (
           <>
             <StatCard
-              label="VMs Online"
+              label="Systems Online"
               value={stats?.online ?? 0}
               sub={`/ ${stats?.total ?? 0}`}
               accent={colors.success}
