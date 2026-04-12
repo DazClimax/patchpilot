@@ -366,8 +366,8 @@ function AgentRow({
           } style={{
             fontSize: '9px', letterSpacing: '0.1em',
             padding: '1px 5px',
-            border: `1px solid ${!online ? colors.border : agent.protocol === 'https' ? colors.success : agent.protocol === 'icmp' ? colors.warn : colors.textMuted}44`,
-            color: !online ? colors.textMuted : agent.protocol === 'https' ? colors.success : agent.protocol === 'icmp' ? colors.warn : colors.textMuted,
+            border: `1px solid ${!online ? colors.border : agent.protocol === 'https' ? colors.success : agent.protocol === 'icmp' ? colors.success : colors.textMuted}44`,
+            color: !online ? colors.textMuted : agent.protocol === 'https' ? colors.success : agent.protocol === 'icmp' ? colors.success : colors.textMuted,
             opacity: !online ? 0.55 : 1,
             fontFamily: "'Orbitron', sans-serif",
           }}>
