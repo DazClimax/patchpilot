@@ -954,11 +954,21 @@ def _update_self(params: dict) -> tuple:
 
         agent_url = f"{server_url}/agent/agent.py"
         hash_url  = f"{server_url}/agent/agent.py.sha256"
+        sig_url   = f"{server_url}/agent/agent.py.sig"
 
         try:
             req_hash = urlreq.Request(hash_url, method="GET")
             with urlreq.urlopen(req_hash, timeout=30, context=_SSL_CTX) as r:
                 expected_hash = r.read().decode().split()[0].strip()
+
+            # Try to download signature (may 404 on older servers)
+            agent_sig_b64 = ""
+            try:
+                req_sig = urlreq.Request(sig_url, method="GET")
+                with urlreq.urlopen(req_sig, timeout=15, context=_SSL_CTX) as r:
+                    agent_sig_b64 = r.read().decode().strip()
+            except Exception:
+                pass  # older server — fall back to SHA-256 only
 
             # Download new agent binary
             req_agent = urlreq.Request(agent_url, method="GET")
@@ -969,6 +979,24 @@ def _update_self(params: dict) -> tuple:
             actual_hash = _hashlib.sha256(new_code).hexdigest()
             if actual_hash != expected_hash:
                 return "failed", f"SHA-256 mismatch: expected {expected_hash[:16]}… got {actual_hash[:16]}…"
+
+            # CRIT-1: Verify authenticity via rollover-key signature when available.
+            # Prevents a MITM that controls the transport from serving malicious code
+            # paired with a matching SHA-256.  Falls back to SHA-256-only when no
+            # rollover public key is installed (e.g. fresh agent without SSL deploy).
+            pubkey_path = _resolve_ca_rollover_pubkey_path()
+            if pubkey_path:
+                if not agent_sig_b64:
+                    return "failed", "Server did not provide agent signature and rollover key is installed — refusing update"
+                try:
+                    if not _verify_ca_signature(new_code, agent_sig_b64):
+                        return "failed", "Agent signature verification failed — update rejected"
+                except RuntimeError as e:
+                    return "failed", f"Agent signature check error: {e}"
+                print("[agent] Agent signature verified via rollover key")
+            else:
+                if not server_url.startswith("https://"):
+                    print("[agent] WARNING: updating over plain HTTP without signature verification — install SSL for integrity guarantees", file=sys.stderr)
         except urllib.error.URLError as e:
             if "SSL" in str(e) or "CERTIFICATE" in str(e).upper():
                 return (

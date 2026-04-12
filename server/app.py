@@ -2616,6 +2616,24 @@ def download_agent_hash():
     sha256 = hashlib.sha256(f.read_bytes()).hexdigest()
     return Response(content=f"{sha256}  agent.py\n", media_type="text/plain")
 
+
+@app.get("/agent/agent.py.sig", include_in_schema=False)
+def download_agent_signature():
+    """CRIT-1: Serve a rollover-key signature over agent.py.
+    Agents with the rollover public key installed can verify authenticity,
+    not just integrity — a MITM that controls the server cannot substitute
+    malicious code + a matching hash without also owning the private key.
+    """
+    f = AGENT_DIR / "agent.py"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="Agent not found")
+    try:
+        sig_bytes = _sign_ca_rollover_payload(f.read_bytes())
+        sig_b64 = base64.b64encode(sig_bytes).decode()
+        return Response(content=f"{sig_b64}\n", media_type="text/plain")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Signing unavailable: {exc}")
+
 @app.get("/agent/install.sh", include_in_schema=False)
 def download_install_script():
     f = AGENT_DIR / "install.sh"
