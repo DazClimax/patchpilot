@@ -562,3 +562,79 @@ class TestPingTargets:
         assert resp.status_code == 200
         assert resp.json()["reachable"] is True
         assert called["agent_id"] == "fritzbox"
+
+    def test_ping_target_stays_busy_until_third_failed_check(self, client, db_conn):
+        db_conn.execute(
+            """
+            INSERT INTO agents (
+                id, hostname, ip, token, agent_type, protocol,
+                ping_failures, ping_last_checked, last_seen
+            )
+            VALUES (?, ?, ?, ?, 'ping', 'icmp', ?, ?, ?)
+            """,
+            ("fritzbox", "FRITZ!Box", "192.168.178.1", "token", 2, "2026-04-12 10:01:00", "2026-04-12 10:00:00"),
+        )
+        db_conn.commit()
+
+        dash = client.get("/api/dashboard")
+
+        assert dash.status_code == 200
+        row = next(a for a in dash.json()["agents"] if a["id"] == "fritzbox")
+        assert row["effective_online"] is True
+        assert row["connectivity_state"] == "busy"
+
+    def test_ping_target_becomes_offline_after_third_failed_check(self, client, db_conn):
+        db_conn.execute(
+            """
+            INSERT INTO agents (
+                id, hostname, ip, token, agent_type, protocol,
+                ping_failures, ping_last_checked, last_seen
+            )
+            VALUES (?, ?, ?, ?, 'ping', 'icmp', ?, ?, ?)
+            """,
+            ("fritzbox", "FRITZ!Box", "192.168.178.1", "token", 3, "2026-04-12 10:01:00", "2026-04-12 10:00:00"),
+        )
+        db_conn.commit()
+
+        dash = client.get("/api/dashboard")
+
+        assert dash.status_code == 200
+        row = next(a for a in dash.json()["agents"] if a["id"] == "fritzbox")
+        assert row["effective_online"] is False
+        assert row["connectivity_state"] == "offline"
+
+    def test_alerts_include_ping_target_after_third_failed_check_even_if_last_seen_is_recent(self, client, db_conn):
+        db_conn.execute(
+            """
+            INSERT INTO agents (
+                id, hostname, ip, token, agent_type, protocol,
+                ping_failures, ping_last_checked, last_seen
+            )
+            VALUES (?, ?, ?, ?, 'ping', 'icmp', ?, datetime('now','localtime'), datetime('now','localtime'))
+            """,
+            ("fritzbox", "FRITZ!Box", "192.168.178.1", "token", 3),
+        )
+        db_conn.commit()
+
+        resp = client.get("/api/alerts")
+
+        assert resp.status_code == 200
+        assert any(row["hostname"] == "FRITZ!Box" for row in resp.json())
+
+    def test_status_badge_counts_busy_ping_target_as_online(self, client, db_conn):
+        db_conn.execute(
+            """
+            INSERT INTO agents (
+                id, hostname, ip, token, agent_type, protocol,
+                ping_failures, ping_last_checked, last_seen
+            )
+            VALUES (?, ?, ?, ?, 'ping', 'icmp', ?, datetime('now','localtime'), datetime('now','localtime','-10 minutes'))
+            """,
+            ("fritzbox", "FRITZ!Box", "192.168.178.1", "token", 2),
+        )
+        db_conn.commit()
+
+        resp = client.get("/api/status/badge")
+
+        assert resp.status_code == 200
+        assert "1/1 online" in resp.text

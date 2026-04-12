@@ -9,6 +9,7 @@ import { Button } from '../components/Button'
 import { PageHeader, SectionHeader } from '../components/SectionHeader'
 import { LogModal } from '../components/LogModal'
 import { ConfirmModal } from '../components/ConfirmModal'
+import { useToast } from '../components/Toast'
 import { fmtAgo, fmtUptime } from '../utils/format'
 
 function jobStatus(s: string): [string, string] {
@@ -142,6 +143,7 @@ export function VmDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { role } = useContext(UserContext)
+  const { showToast } = useToast()
   const canAct = role === 'admin' || role === 'user'
   const isAdmin = role === 'admin'
 
@@ -515,8 +517,11 @@ export function VmDetail() {
               if (!id || busy) return
               setBusy(true)
               try {
-                await api.pingCheck(id)
+                const result = await api.pingCheck(id)
+                showToast(result.reachable ? 'Ping target reachable' : 'Ping target unreachable', result.reachable ? 'success' : 'error')
                 setTimeout(load, 500)
+              } catch {
+                showToast('Ping check failed', 'error')
               } finally {
                 setBusy(false)
               }

@@ -63,7 +63,9 @@ def init_db():
                 last_seen   TEXT,
                 registered  TEXT DEFAULT (datetime('now','localtime')),
                 token       TEXT NOT NULL,
-                tags        TEXT DEFAULT ''
+                tags        TEXT DEFAULT '',
+                ping_failures INTEGER DEFAULT 0,
+                ping_last_checked TEXT
             );
 
             CREATE TABLE IF NOT EXISTS packages (
@@ -182,6 +184,16 @@ def init_db():
 
         try:
             conn.execute("ALTER TABLE agents ADD COLUMN offline_notified INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN ping_failures INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN ping_last_checked TEXT")
         except sqlite3.OperationalError:
             pass
 

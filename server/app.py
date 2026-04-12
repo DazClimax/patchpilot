@@ -31,6 +31,7 @@ from scheduler import (
     get_scheduler_timezone,
     configure_timezone,
     agent_connectivity_state,
+    ping_connectivity_state,
     is_effectively_online,
     trigger_ping_check_for_agent,
 )
@@ -434,6 +435,19 @@ def _validate_schedule_target(target: str):
     for part in parts:
         if not _AGENT_ID_RE.match(part):
             raise HTTPException(status_code=422, detail=f"Invalid agent ID in target: {part!r}")
+    placeholders = ",".join("?" * len(parts))
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            f"SELECT id, COALESCE(agent_type, 'linux') AS agent_type FROM agents WHERE id IN ({placeholders})",  # noqa: S608
+            parts,
+        ).fetchall()
+    found = {row["id"]: str(row["agent_type"] or "linux") for row in rows}
+    missing = [part for part in parts if part not in found]
+    if missing:
+        raise HTTPException(status_code=422, detail=f"Unknown agent ID in target: {missing[0]!r}")
+    unsupported = [part for part, agent_type in found.items() if agent_type not in _MANAGED_AGENT_TYPES]
+    if unsupported:
+        raise HTTPException(status_code=422, detail=f"Monitor-only targets cannot be scheduled: {unsupported[0]!r}")
 
 def _validate_smtp_host(host: str):
     """Reject loopback, private, link-local, and reserved IPs to block SSRF."""
@@ -1009,13 +1023,14 @@ def _resolve_ha_job_display_status(job: dict, package_state: dict[str, set[str]]
     return {"status": "done", "finished": agent_last_seen}
 
 
-_PING_ONLINE_WINDOW_SECONDS = 300  # 5 min — ping check runs every 60s, give 5× margin
-
 def _agent_online_status(row: dict, last_job: dict | None = None) -> dict:
     seconds_ago = row.get("seconds_ago")
     if str(row.get("agent_type") or "") == "ping":
-        # Ping targets don't heartbeat; use wider window matching the ping check interval
-        state = "online" if (seconds_ago is not None and seconds_ago < _PING_ONLINE_WINDOW_SECONDS) else "offline"
+        state = ping_connectivity_state(
+            seconds_ago,
+            row.get("ping_failures"),
+            row.get("ping_last_checked"),
+        )
     else:
         state = agent_connectivity_state(seconds_ago, last_job)
     row["effective_online"] = state != "offline"
@@ -1873,7 +1888,7 @@ def api_schedules():
     with get_db_ctx() as conn:
         schedules = conn.execute("SELECT * FROM schedules ORDER BY id").fetchall()
         agents = conn.execute(
-            "SELECT id, hostname FROM agents ORDER BY hostname"
+            "SELECT id, hostname FROM agents WHERE COALESCE(agent_type, 'linux') IN ('linux', 'haos') ORDER BY hostname"
         ).fetchall()
     schedule_list = []
     for s in schedules:
@@ -2530,14 +2545,13 @@ def api_ssl_info():
 
 @app.get("/api/alerts", dependencies=[Depends(require_role("admin","user","readonly"))])
 def api_alerts():
-    """Return all VMs that have been offline for more than 5 minutes."""
+    """Return all systems currently considered offline."""
     with get_db_ctx() as conn:
         rows = conn.execute(
-            """SELECT id, hostname, ip,
-               CAST((julianday('now','localtime') - julianday(last_seen)) * 86400 AS INTEGER) as offline_since_seconds
+            """SELECT id, hostname, ip, agent_type, ping_failures, ping_last_checked,
+               CAST((julianday('now','localtime') - julianday(last_seen)) * 86400 AS INTEGER) as seconds_ago
                FROM agents
-               WHERE last_seen IS NOT NULL
-                 AND (julianday('now','localtime') - julianday(last_seen)) * 86400 > 300"""
+               WHERE last_seen IS NOT NULL"""
         ).fetchall()
         last_jobs = conn.execute(
             """SELECT j.agent_id, j.type, j.status, j.created, j.started
@@ -2549,19 +2563,20 @@ def api_alerts():
                ) latest ON j.id = latest.max_id"""
         ).fetchall()
     last_job_map = {row["agent_id"]: dict(row) for row in last_jobs}
-    rows = [
-        row for row in rows
-        if not is_effectively_online(row["offline_since_seconds"], last_job_map.get(row["id"]))
-    ]
-    rows.sort(key=lambda row: row["offline_since_seconds"], reverse=True)
-    return [
-        {
-            "hostname": r["hostname"],
-            "ip": r["ip"],
-            "offline_since_seconds": r["offline_since_seconds"],
-        }
-        for r in rows
-    ]
+    offline_rows = []
+    for row in rows:
+        row_dict = _agent_online_status(dict(row), last_job_map.get(row["id"]))
+        if row_dict.get("effective_online"):
+            continue
+        offline_rows.append(
+            {
+                "hostname": row_dict["hostname"],
+                "ip": row_dict["ip"],
+                "offline_since_seconds": row_dict.get("seconds_ago") or 0,
+            }
+        )
+    offline_rows.sort(key=lambda row: row["offline_since_seconds"], reverse=True)
+    return offline_rows
 
 
 @app.get("/api/status/badge", dependencies=[Depends(require_role("admin","user","readonly"))])
@@ -2571,6 +2586,9 @@ def api_status_badge():
         agents = conn.execute(
             """SELECT
                id,
+               agent_type,
+               ping_failures,
+               ping_last_checked,
                CAST((julianday('now','localtime') - julianday(last_seen)) * 86400 AS INTEGER) as seconds_ago
                FROM agents"""
         ).fetchall()
@@ -2585,7 +2603,11 @@ def api_status_badge():
         ).fetchall()
     last_job_map = {row["agent_id"]: dict(row) for row in last_jobs}
     total = len(agents)
-    online = sum(1 for row in agents if is_effectively_online(row["seconds_ago"], last_job_map.get(row["id"])))
+    online = sum(
+        1
+        for row in agents
+        if _agent_online_status(dict(row), last_job_map.get(row["id"])).get("effective_online")
+    )
 
     if total == 0 or online == 0:
         color = "#e05d44"  # red

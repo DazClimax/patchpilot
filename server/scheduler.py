@@ -17,6 +17,8 @@ _DEFAULT_TIMEZONE = "Europe/Berlin"
 scheduler = BackgroundScheduler(timezone=_DEFAULT_TIMEZONE)
 
 _ONLINE_WINDOW_SECONDS = 120
+_PING_CHECK_INTERVAL_SECONDS = 60
+_PING_MAX_FAILURES = 3
 _PENDING_JOB_GRACE_SECONDS = 180
 _RUNNING_JOB_GRACE_SECONDS = 900
 _CONNECTIVITY_GRACE_JOB_TYPES = {
@@ -85,6 +87,21 @@ def is_effectively_online(seconds_ago: int | float | None, last_job: dict | None
     return agent_connectivity_state(seconds_ago, last_job) != "offline"
 
 
+def ping_connectivity_state(
+    seconds_ago: int | float | None,
+    ping_failures: int | None,
+    ping_last_checked: str | None,
+) -> str:
+    failures = max(0, int(ping_failures or 0))
+    if failures >= _PING_MAX_FAILURES:
+        return "offline"
+    if failures > 0:
+        return "busy"
+    if seconds_ago is not None and seconds_ago <= (_PING_CHECK_INTERVAL_SECONDS * 2):
+        return "online"
+    return "busy" if ping_last_checked else "offline"
+
+
 def _ping_command(target: str) -> list[str]:
     if platform.system().lower() == "darwin":
         return ["ping", "-n", "-c", "1", "-W", "2000", target]
@@ -113,19 +130,36 @@ def trigger_ping_check_for_agent(agent_id: str) -> bool:
 
     with get_db_ctx() as conn:
         row = conn.execute(
-            "SELECT id, hostname, ip, agent_type FROM agents WHERE id=?",
+            "SELECT id, hostname, ip, agent_type, ping_failures FROM agents WHERE id=?",
             (agent_id,),
         ).fetchone()
         if not row or str(row["agent_type"] or "") != "ping":
             return False
         target = str(row["ip"] or row["hostname"] or "").strip()
+        current_failures = int(row["ping_failures"] or 0)
 
     reachable = _probe_ping_target(target)
-    if reachable:
-        with get_db_ctx() as conn:
+    with get_db_ctx() as conn:
+        if reachable:
             conn.execute(
-                "UPDATE agents SET last_seen=datetime('now','localtime') WHERE id=?",
+                """
+                UPDATE agents
+                SET last_seen=datetime('now','localtime'),
+                    ping_failures=0,
+                    ping_last_checked=datetime('now','localtime')
+                WHERE id=?
+                """,
                 (agent_id,),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE agents
+                SET ping_failures=?,
+                    ping_last_checked=datetime('now','localtime')
+                WHERE id=?
+                """,
+                (current_failures + 1, agent_id),
             )
     return reachable
 
@@ -213,8 +247,16 @@ def _check_offline_vms():
             agent_id = agent["id"]
             seconds_ago = agent.get("seconds_ago") or 0
             already_notified = bool(agent.get("offline_notified"))
+            agent_type = str(agent.get("agent_type") or "linux")
 
-            if is_effectively_online(seconds_ago, last_job_map.get(agent_id)):
+            if (
+                (agent_type == "ping" and ping_connectivity_state(
+                    seconds_ago,
+                    agent.get("ping_failures"),
+                    agent.get("ping_last_checked"),
+                ) != "offline")
+                or (agent_type != "ping" and is_effectively_online(seconds_ago, last_job_map.get(agent_id)))
+            ):
                 # Agent is back online — reset flag so we can notify again next episode
                 if already_notified:
                     with get_db_ctx() as conn:
@@ -265,7 +307,9 @@ def _run_scheduled_job(schedule_id: int, action: str, target: str):
 
         with get_db_ctx() as conn:
             if target == "all":
-                agents = conn.execute("SELECT id FROM agents").fetchall()
+                agents = conn.execute(
+                    "SELECT id FROM agents WHERE COALESCE(agent_type, 'linux') IN ('linux', 'haos')"
+                ).fetchall()
                 agent_ids = [a["id"] for a in agents]
             else:
                 # Support comma-separated list of agent IDs (multi-VM target)
@@ -273,7 +317,7 @@ def _run_scheduled_job(schedule_id: int, action: str, target: str):
                 # Only keep IDs that actually exist in the DB (defensive check)
                 placeholders = ",".join("?" * len(requested))
                 rows = conn.execute(
-                    f"SELECT id FROM agents WHERE id IN ({placeholders})",  # noqa: S608
+                    f"SELECT id FROM agents WHERE id IN ({placeholders}) AND COALESCE(agent_type, 'linux') IN ('linux', 'haos')",  # noqa: S608
                     requested,
                 ).fetchall()
                 agent_ids = [r["id"] for r in rows]

@@ -43,6 +43,8 @@ def _make_in_memory_conn():
             registered  TEXT DEFAULT (datetime('now','localtime')),
             token       TEXT NOT NULL,
             tags        TEXT DEFAULT '',
+            ping_failures INTEGER DEFAULT 0,
+            ping_last_checked TEXT,
             uptime_seconds INTEGER,
             protocol    TEXT DEFAULT 'http',
             updates_notified INTEGER DEFAULT 0,

@@ -2,6 +2,8 @@
 test_schedules.py — tests for the schedule endpoints.
 """
 
+import contextlib
+
 import app as app_module
 
 
@@ -66,6 +68,64 @@ class TestCreateSchedule:
         data = client.get("/api/schedules").json()
         agent_ids = [a["id"] for a in data["agents"]]
         assert agent_id in agent_ids
+
+    def test_list_excludes_ping_targets(self, client, registered_agent, db_conn):
+        db_conn.execute(
+            """
+            INSERT INTO agents (id, hostname, ip, token, agent_type, protocol)
+            VALUES (?, ?, ?, ?, 'ping', 'icmp')
+            """,
+            ("fritzbox", "FRITZ!Box", "192.168.178.1", "token"),
+        )
+        db_conn.commit()
+
+        data = client.get("/api/schedules").json()
+        agent_ids = [a["id"] for a in data["agents"]]
+
+        assert "fritzbox" not in agent_ids
+
+    def test_create_schedule_rejects_ping_target(self, client, db_conn):
+        db_conn.execute(
+            """
+            INSERT INTO agents (id, hostname, ip, token, agent_type, protocol)
+            VALUES (?, ?, ?, ?, 'ping', 'icmp')
+            """,
+            ("fritzbox", "FRITZ!Box", "192.168.178.1", "token"),
+        )
+        db_conn.commit()
+
+        resp = _create_schedule(client, target="fritzbox")
+
+        assert resp.status_code == 422
+        assert "Monitor-only targets" in resp.json()["detail"]
+
+    def test_run_now_all_skips_ping_targets(self, client, registered_agent, db_conn, monkeypatch):
+        agent_id, _ = registered_agent
+        db_conn.execute(
+            """
+            INSERT INTO agents (id, hostname, ip, token, agent_type, protocol)
+            VALUES (?, ?, ?, ?, 'ping', 'icmp')
+            """,
+            ("fritzbox", "FRITZ!Box", "192.168.178.1", "token"),
+        )
+        db_conn.commit()
+
+        @contextlib.contextmanager
+        def _fake_db():
+            yield db_conn
+            db_conn.commit()
+
+        import db as db_module
+        monkeypatch.setattr(db_module, "db", _fake_db)
+
+        _create_schedule(client, target="all")
+        sid = client.get("/api/schedules").json()["schedules"][0]["id"]
+
+        resp = client.post(f"/api/schedules/{sid}/run")
+
+        assert resp.status_code == 200
+        jobs = db_conn.execute("SELECT agent_id, type FROM jobs ORDER BY id").fetchall()
+        assert [(row["agent_id"], row["type"]) for row in jobs] == [(agent_id, "patch")]
 
 
 class TestToggleSchedule:
