@@ -666,7 +666,7 @@ export function VmDetail() {
           { label: isPingTarget ? 'Address' : 'IP Address', value: agent.ip ?? '—', accent: colors.primary },
           { label: 'OS',         value: agent.os_pretty ?? '—', accent: colors.primaryDim },
           { label: isPingTarget ? 'Agent Ver' : 'Agent Ver',  value: isPingTarget ? 'n/a' : agent.agent_version ?? 'unknown', accent: agentVersionAccent },
-          { label: 'Agent Type', value: agent.agent_type ?? 'linux', accent: isHaos ? colors.warn : isPingTarget ? colors.warn : colors.primaryDim },
+          { label: 'Agent Type', value: agent.agent_type ?? 'linux', accent: isHaos ? colors.warn : isPingTarget ? colors.success : colors.primaryDim },
           { label: isPingTarget ? 'Check Mode' : 'Pkg Manager', value: isPingTarget ? 'icmp' : agent.package_manager ?? '—', accent: colors.primaryDim },
           { label: 'Kernel',     value: agent.kernel ?? '—', accent: colors.primaryDim },
           { label: 'Arch',       value: agent.arch ?? '—', accent: colors.primaryDim },
@@ -887,10 +887,10 @@ export function VmDetail() {
               textAlign: 'center',
               animation: 'pp-fadein 0.4s ease both',
             }}>
-              <div style={{ fontSize: '22px', color: colors.warn, textShadow: glowStrong(colors.warn), marginBottom: '10px' }}>
+              <div style={{ fontSize: '22px', color: colors.success, textShadow: glowStrong(colors.success), marginBottom: '10px' }}>
                 ◎
               </div>
-              <div style={{ fontSize: '12px', color: colors.warn, letterSpacing: '0.18em', fontFamily: "'Orbitron', sans-serif", textShadow: glow(colors.warn, 4), marginBottom: '8px' }}>
+              <div style={{ fontSize: '12px', color: colors.success, letterSpacing: '0.18em', fontFamily: "'Orbitron', sans-serif", textShadow: glow(colors.success, 4), marginBottom: '8px' }}>
                 Ping-Only Target
               </div>
               <div style={{ fontSize: '11px', color: colors.textMuted, fontFamily: "'Electrolize', monospace" }}>
