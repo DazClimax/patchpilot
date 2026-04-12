@@ -79,7 +79,7 @@ STATE_FILE = CONFIG_DIR / "state.json"
 CA_ROLLOVER_PUBKEY_FILE = CONFIG_DIR / "ca_rollover_public.pem"
 
 DEFAULT_INTERVAL = 60
-AGENT_VERSION = "1.2"
+AGENT_VERSION = "1.3"
 _CURRENT_JOB_PARAMS: dict = {}
 
 

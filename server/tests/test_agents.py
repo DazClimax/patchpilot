@@ -244,7 +244,7 @@ class TestUpdateBatchStatus:
         batch = "abc123"
         client.post(
             f"/api/agents/{agent_id}/heartbeat",
-            json={"hostname": "testhost", "agent_version": "1.2", "packages": []},
+            json={"hostname": "testhost", "agent_version": "1.3", "packages": []},
             headers={"x-token": token},
         )
         db_conn.execute(
