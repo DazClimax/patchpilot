@@ -382,14 +382,29 @@ def _infer_agent_type(fields: dict) -> str:
     return "linux"
 
 
+# HIGH-3: Capabilities allowed per agent type — agents cannot claim capabilities
+# outside their type's allowlist, preventing privilege escalation via false claims.
+_CAPABILITIES_BY_TYPE: dict[str, set[str]] = {
+    "linux":  {"ssl", "ha_agent_auto_update"},
+    "haos":   {
+        "ha_backup", "ha_core_update", "ha_backup_update", "ha_supervisor_update",
+        "ha_os_update", "ha_addon_update", "ha_addons_update", "ha_entity_update",
+        "ha_agent_auto_update", "ssl",
+    },
+    "ping":   set(),
+}
+
+
 def _normalize_capabilities(fields: dict) -> str:
     raw = str(fields.get("capabilities") or "").strip()
     if not raw:
         return ""
+    agent_type = str(fields.get("agent_type") or "linux").lower()
+    allowed = _CAPABILITIES_BY_TYPE.get(agent_type, _CAPABILITIES_BY_TYPE["linux"])
     parts = []
     for item in raw.split(","):
         name = item.strip().lower()
-        if name and re.fullmatch(r"[a-z0-9_.-]{1,64}", name):
+        if name and re.fullmatch(r"[a-z0-9_.-]{1,64}", name) and name in allowed:
             parts.append(name)
     deduped = []
     for item in parts:
@@ -452,6 +467,8 @@ def _validate_webhook_url(raw: str) -> str:
     value = str(raw or "").strip()
     if not value:
         raise HTTPException(status_code=422, detail="Webhook URL is required")
+    if len(value) > 2048:
+        raise HTTPException(status_code=422, detail="Webhook URL must be 2048 characters or less")
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise HTTPException(status_code=422, detail="Webhook URL must be a valid http(s) URL")
@@ -554,15 +571,29 @@ _RATE_MAX    = 20   # max requests per IP per window
 
 _TRUSTED_PROXY = os.environ.get("PATCHPILOT_TRUSTED_PROXY", "")
 
+def _normalize_ip(raw: str) -> str:
+    """Normalize an IP string to canonical form (handles IPv4-mapped IPv6 etc.)."""
+    try:
+        return str(ipaddress.ip_address(raw))
+    except ValueError:
+        return raw
+
+
 def _get_client_ip(request: Request) -> str:
     """MED-2: Extract real client IP.  Only honour X-Forwarded-For when the
-    connection comes from the configured trusted proxy address."""
-    direct_ip = request.client.host if request.client else ""
-    if _TRUSTED_PROXY and direct_ip == _TRUSTED_PROXY:
-        forwarded = request.headers.get("x-forwarded-for", "")
-        candidate = forwarded.split(",")[0].strip()
-        if candidate:
-            return candidate
+    connection comes from the configured trusted proxy address.
+    IPs are normalized via ipaddress so ::1 and 127.0.0.1 compare correctly."""
+    direct_ip = _normalize_ip(request.client.host if request.client else "")
+    if _TRUSTED_PROXY:
+        try:
+            trusted = str(ipaddress.ip_address(_TRUSTED_PROXY))
+        except ValueError:
+            trusted = _TRUSTED_PROXY
+        if direct_ip == trusted:
+            forwarded = request.headers.get("x-forwarded-for", "")
+            candidate = forwarded.split(",")[0].strip()
+            if candidate:
+                return _normalize_ip(candidate)
     return direct_ip or "unknown"
 
 def _check_rate_limit(request: Request):
@@ -2991,6 +3022,7 @@ async def auth_login(request: Request):
     stored_hash = row["password_hash"] if row else dummy_hash
     valid = verify_password(password, stored_hash)
     if not row or not valid:
+        log.warning("AUTH FAIL: username=%r ip=%s", username, _get_client_ip(request))
         raise HTTPException(status_code=401, detail="Invalid username or password")
     token = secrets.token_hex(32)
     session = {
