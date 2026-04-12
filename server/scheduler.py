@@ -181,9 +181,9 @@ def _get_offline_threshold() -> int:
 def _check_offline_vms():
     """
     Run every 5 minutes.  Queries the DB for agents whose last heartbeat is
-    older than _OFFLINE_THRESHOLD_SECONDS and sends a single notification per
-    agent (de-duplicated via _offline_notified).  When an agent comes back
-    online it is removed from the set so it can be notified again later.
+    older than the configured threshold and sends a single notification per
+    agent per offline episode.  De-duplication is persisted in the DB column
+    offline_notified so it survives service restarts.
     """
     try:
         from db import db as get_db_ctx
@@ -212,22 +212,27 @@ def _check_offline_vms():
             agent = dict(row)
             agent_id = agent["id"]
             seconds_ago = agent.get("seconds_ago") or 0
+            already_notified = bool(agent.get("offline_notified"))
+
             if is_effectively_online(seconds_ago, last_job_map.get(agent_id)):
+                # Agent is back online — reset flag so we can notify again next episode
+                if already_notified:
+                    with get_db_ctx() as conn:
+                        conn.execute("UPDATE agents SET offline_notified=0 WHERE id=?", (agent_id,))
                 _offline_notified.discard(agent_id)
                 continue
 
             if seconds_ago > threshold:
-                # Only notify once per offline episode
-                if agent_id not in _offline_notified:
+                # Only notify once per offline episode (DB-persisted)
+                if not already_notified and agent_id not in _offline_notified:
                     log.info(
                         "VM offline notification: %s (offline %ds)",
                         agent.get("hostname"), seconds_ago,
                     )
                     notification_manager.notify_vm_offline(agent)
                     _offline_notified.add(agent_id)
-            else:
-                # Agent is back online — reset so we can notify again next time
-                _offline_notified.discard(agent_id)
+                    with get_db_ctx() as conn:
+                        conn.execute("UPDATE agents SET offline_notified=1 WHERE id=?", (agent_id,))
 
     except Exception as exc:
         log.warning("_check_offline_vms error: %s", exc)
