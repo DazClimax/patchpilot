@@ -388,7 +388,7 @@ function AgentRow({
               {agent.hostname}
             </span>
             <span style={{
-              color: agent.agent_type === 'ping' ? colors.warn : agent.agent_version ? colors.textMuted : colors.warn,
+              color: agent.agent_version || agent.agent_type === 'ping' ? colors.textMuted : colors.warn,
               fontSize: '10px',
               fontFamily: "'Electrolize', monospace",
               letterSpacing: '0.12em',
@@ -472,7 +472,9 @@ function AgentRow({
         </div>
       </td>
       <td style={{ padding: '12px 16px', textAlign: 'center' }}>
-        {jobInProgress ? (
+        {agent.agent_type === 'ping' ? (
+          <span style={{ color: colors.textMuted, fontSize: '12px' }}>—</span>
+        ) : jobInProgress ? (
           <span style={{
             display: 'inline-block',
             width: '14px', height: '14px',
@@ -916,8 +918,8 @@ export function Dashboard() {
 
       {isAdmin && showPingTargetForm && (
         <div style={{
-          border: `1px solid ${colors.warn}44`,
-          background: `${colors.warn}08`,
+          border: `1px solid ${colors.primary}44`,
+          background: `${colors.primary}08`,
           padding: '16px',
           marginBottom: '20px',
           display: 'grid',

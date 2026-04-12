@@ -394,7 +394,7 @@ def register_system_jobs():
 
     scheduler.add_job(
         _check_ping_targets,
-        trigger=IntervalTrigger(minutes=2),
+        trigger=IntervalTrigger(seconds=60),
         id="__check_ping_targets__",
         name="Check ping-only targets",
         replace_existing=True,

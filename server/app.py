@@ -978,10 +978,17 @@ def _resolve_ha_job_display_status(job: dict, package_state: dict[str, set[str]]
     return {"status": "done", "finished": agent_last_seen}
 
 
+_PING_ONLINE_WINDOW_SECONDS = 300  # 5 min — ping check runs every 60s, give 5× margin
+
 def _agent_online_status(row: dict, last_job: dict | None = None) -> dict:
-    connectivity_state = agent_connectivity_state(row.get("seconds_ago"), last_job)
-    row["effective_online"] = connectivity_state != "offline"
-    row["connectivity_state"] = connectivity_state
+    seconds_ago = row.get("seconds_ago")
+    if str(row.get("agent_type") or "") == "ping":
+        # Ping targets don't heartbeat; use wider window matching the ping check interval
+        state = "online" if (seconds_ago is not None and seconds_ago < _PING_ONLINE_WINDOW_SECONDS) else "offline"
+    else:
+        state = agent_connectivity_state(seconds_ago, last_job)
+    row["effective_online"] = state != "offline"
+    row["connectivity_state"] = state
     return row
 
 
