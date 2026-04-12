@@ -21,6 +21,10 @@ validate_deploy_host() {
 
 validate_deploy_host "$PI"
 
+echo "[deploy] Ensuring patchpilot system user exists..."
+ssh -- "$PI" "id patchpilot &>/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin patchpilot"
+ssh -- "$PI" "install -d -o patchpilot -g patchpilot /opt/patchpilot /opt/patchpilot/server /opt/patchpilot/frontend/dist /opt/patchpilot/agent /opt/patchpilot/home-assistant-addons"
+
 echo "[deploy] Syncing server (excluding DB)..."
 rsync -av --exclude='__pycache__' --exclude='*.pyc' --exclude='*.db' --exclude='*.db-shm' --exclude='*.db-wal' \
   -- server/ "${PI}:/opt/patchpilot/server/"
@@ -47,10 +51,10 @@ ssh -- "$PI" "grep -q '^PORT=' /opt/patchpilot/.env || echo 'PORT=8443' >> /opt/
 ssh -- "$PI" "grep -q '^AGENT_PORT=' /opt/patchpilot/.env || echo 'AGENT_PORT=8050' >> /opt/patchpilot/.env"
 ssh -- "$PI" "systemctl daemon-reload"
 
-echo "[deploy] Ensuring patchpilot system user exists..."
-ssh -- "$PI" "id patchpilot &>/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin patchpilot"
-# Fix ownership after rsync (rsync preserves macOS UID 501 on the directory)
-ssh -- "$PI" "chown patchpilot:patchpilot /opt/patchpilot/server/ && chown patchpilot:patchpilot /opt/patchpilot/server/patchpilot.db 2>/dev/null || true"
+ssh -- "$PI" "chown -R patchpilot:patchpilot /opt/patchpilot/server /opt/patchpilot/frontend /opt/patchpilot/agent /opt/patchpilot/home-assistant-addons"
+ssh -- "$PI" "chmod 755 /opt/patchpilot /opt/patchpilot/server /opt/patchpilot/frontend /opt/patchpilot/frontend/dist /opt/patchpilot/agent /opt/patchpilot/home-assistant-addons 2>/dev/null || true"
+ssh -- "$PI" "find /opt/patchpilot/server -maxdepth 1 -type f -name 'patchpilot.db*' -exec chown patchpilot:patchpilot {} + -exec chmod 600 {} + 2>/dev/null || true"
+ssh -- "$PI" "find /opt/patchpilot -maxdepth 1 -type f -name 'patchpilot.db*' -size 0 -delete 2>/dev/null || true"
 ssh -- "$PI" "chmod 600 /opt/patchpilot/.env 2>/dev/null || true"
 ssh -- "$PI" "install -d -o patchpilot -g patchpilot -m 0750 /var/log/patchpilot && touch /var/log/patchpilot/server.log && chown patchpilot:patchpilot /var/log/patchpilot/server.log && chmod 640 /var/log/patchpilot/server.log"
 # Ensure sudoers entry for service self-restart

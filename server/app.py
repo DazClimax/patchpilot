@@ -10,6 +10,7 @@ import socket
 import subprocess
 import threading
 import time
+from urllib.parse import urlparse
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -435,6 +436,16 @@ def _validate_smtp_host(host: str):
                         pass
             except socket.gaierror:
                 pass  # DNS failure — let SMTP connection fail naturally
+
+
+def _validate_webhook_url(raw: str) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        raise HTTPException(status_code=422, detail="Webhook URL is required")
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=422, detail="Webhook URL must be a valid http(s) URL")
+    return value.rstrip("/")
 
 # ---------------------------------------------------------------------------
 # On-demand registration key (generated when requested, valid 5 min)
@@ -1839,7 +1850,7 @@ _SETTINGS_ALLOWED_KEYS = {
     "email_enabled",
     "smtp_host", "smtp_port", "smtp_security", "smtp_user", "smtp_password", "smtp_to",
     "notify_offline", "notify_offline_minutes", "notify_patches", "notify_failures",
-    "webhook_url", "webhook_secret",
+    "webhook_url",
     "scheduler_timezone",
     "server_port", "agent_port", "agent_ssl",
     "ui_audio_enabled", "ui_audio_volume", "ui_login_animation_enabled", "ui_login_background_animation_enabled", "ui_login_background_opacity",
@@ -1928,17 +1939,65 @@ def _get_internal_ip() -> str:
         return "127.0.0.1"
 
 
-@app.get("/api/push-config", dependencies=[Depends(require_role("readonly", "user", "admin"))])
+@app.get("/api/push-config", dependencies=[Depends(require_role("admin"))])
 def api_get_push_config():
-    """Return the webhook secret in plaintext for APNs relay registration."""
+    """Return the relay configuration for mobile push registration."""
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM settings WHERE key IN ('webhook_url', 'webhook_secret')"
+        ).fetchall()
+    values = {row["key"]: row["value"] for row in rows}
+    secret = values.get("webhook_secret", "")
+    if not secret:
+        return {"webhookUrl": values.get("webhook_url", ""), "webhookSecret": None, "active": False}
+    try:
+        return {
+            "webhookUrl": values.get("webhook_url", ""),
+            "webhookSecret": _decrypt_secret(secret),
+            "active": True,
+        }
+    except Exception:
+        return {"webhookUrl": values.get("webhook_url", ""), "webhookSecret": None, "active": False}
+
+
+@app.post("/api/settings/push-mobile/activate", dependencies=[Depends(require_role("admin"))])
+async def api_activate_push_mobile(request: Request):
+    """Persist the mobile relay URL and return the plaintext push secret."""
+    data = await request.json()
+    webhook_url = _validate_webhook_url(data.get("webhook_url", ""))
     with get_db_ctx() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key='webhook_secret'").fetchone()
-    if not row or not row["value"]:
-        return {"webhookSecret": None}
-    try:
-        return {"webhookSecret": _decrypt_secret(row["value"])}
-    except Exception:
-        return {"webhookSecret": None}
+        encrypted_secret = row["value"] if row else ""
+        if encrypted_secret:
+            webhook_secret = _decrypt_secret(encrypted_secret)
+        else:
+            webhook_secret = secrets.token_hex(32)
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('webhook_secret', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (_encrypt_secret(webhook_secret),),
+            )
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('webhook_url', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (webhook_url,),
+        )
+    notification_manager.reload()
+    return {"status": "activated", "webhookUrl": webhook_url, "webhookSecret": webhook_secret, "active": True}
+
+
+@app.post("/api/settings/push-mobile/deactivate", dependencies=[Depends(require_role("admin"))])
+def api_deactivate_push_mobile():
+    """Disable mobile push by removing the stored pairing secret."""
+    with get_db_ctx() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('webhook_secret', '') "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+        )
+        row = conn.execute("SELECT value FROM settings WHERE key='webhook_url'").fetchone()
+    notification_manager.reload()
+    webhook_url = row["value"] if row else ""
+    return {"status": "deactivated", "webhookUrl": webhook_url, "webhookSecret": None, "active": False}
 
 
 @app.get("/api/settings", dependencies=[Depends(require_role("admin"))])
@@ -1952,16 +2011,6 @@ def api_get_settings():
         if k not in _SETTINGS_ALLOWED_KEYS:
             continue  # Don't expose internal keys (register_key, etc.)
         result[k] = "***" if (k in _SENSITIVE_KEYS and v) else v
-    # Auto-generate webhook_secret on first access so admins can copy it
-    if not result.get("webhook_secret"):
-        import secrets as _sec
-        new_secret = _sec.token_hex(32)
-        with get_db_ctx() as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES ('webhook_secret', ?)",
-                (_encrypt_secret(new_secret),),
-            )
-        result["webhook_secret"] = new_secret  # return plaintext once for copying
     # Provide computed URLs for the Deploy page
     _scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
     _ip = _get_internal_ip()
@@ -1972,6 +2021,7 @@ def api_get_settings():
 
 
 @app.post("/api/settings", dependencies=[Depends(require_role("admin"))])
+@app.put("/api/settings", dependencies=[Depends(require_role("admin"))])
 async def api_save_settings(request: Request):
     """Persist settings.  Values equal to '***' are kept unchanged (masked)."""
     data = await request.json()
@@ -1986,6 +2036,9 @@ async def api_save_settings(request: Request):
     smtp_host = data.get("smtp_host", "")
     if smtp_host and smtp_host != "***":
         _validate_smtp_host(smtp_host)
+    webhook_url = data.get("webhook_url")
+    if webhook_url is not None and str(webhook_url) != "***":
+        _validate_webhook_url(str(webhook_url))
     # LOW-5: validate notify_offline_minutes as integer in [1, 10080]
     offline_min = data.get("notify_offline_minutes")
     if offline_min is not None and str(offline_min) != "***":
@@ -2106,7 +2159,7 @@ async def api_save_settings(request: Request):
 
 @app.post("/api/settings/test/{channel}", dependencies=[Depends(require_role("admin"))])
 async def api_test_notification(channel: str):
-    """Send a test notification via the requested channel (telegram | email)."""
+    """Send a test notification via the requested channel (telegram | email | push)."""
     notification_manager.reload()
     notification_manager._load()
     if channel == "telegram":
@@ -2122,6 +2175,11 @@ async def api_test_notification(channel: str):
             "PatchPilot Test",
             "This email confirms that SMTP notifications are configured correctly.",
         )
+    elif channel == "push":
+        notifier = notification_manager._webhook
+        if not notifier or not getattr(notifier, "_url", "") or not getattr(notifier, "_secret", ""):
+            raise HTTPException(status_code=400, detail="Mobile push not configured")
+        ok = notifier.send_test()
     else:
         raise HTTPException(status_code=400, detail="Invalid notification channel")
     if not ok:

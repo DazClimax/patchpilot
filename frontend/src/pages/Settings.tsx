@@ -283,6 +283,8 @@ const SMTP_DEFAULT_PORTS: Record<string, string> = {
   none:     '25',
 }
 
+const DEFAULT_PUSH_RELAY_URL = 'https://push.patch-pilot.app'
+
 const EMPTY: Settings = {
   telegram_token: '',
   telegram_chat_id: '',
@@ -297,6 +299,7 @@ const EMPTY: Settings = {
   notify_offline_minutes: '10',
   notify_patches: '1',
   notify_failures: '1',
+  webhook_url: DEFAULT_PUSH_RELAY_URL,
   telegram_enabled: '1',
   telegram_notify_offline: '1',
   telegram_notify_patches: '1',
@@ -327,7 +330,9 @@ export function SettingsPage() {
   const [savedForm, setSavedForm] = useState<Settings>(EMPTY)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [testing, setTesting] = useState<'telegram' | 'email' | null>(null)
+  const [testing, setTesting] = useState<'telegram' | 'email' | 'push' | null>(null)
+  const [pushBusy, setPushBusy] = useState(false)
+  const [pushActive, setPushActive] = useState(false)
   const [restarting, setRestarting] = useState(false)
   const [tab, setTab] = useState<'notifications' | 'effects' | 'server'>('notifications')
   const { showToast } = useToast()
@@ -336,10 +341,14 @@ export function SettingsPage() {
 
   const load = useCallback(async () => {
     try {
-      const data = await api.settings()
-      const merged = { ...EMPTY, ...data, agent_ssl: '1' }
+      const [data, pushConfig] = await Promise.all([
+        api.settings(),
+        api.pushConfig(),
+      ])
+      const merged = { ...EMPTY, ...data, webhook_url: pushConfig.webhookUrl || data.webhook_url || EMPTY.webhook_url, agent_ssl: '1' }
       setForm(merged)
       setSavedForm(merged)
+      setPushActive(pushConfig.active)
       persistUiEffectsSettings({
         audioEnabled: merged.ui_audio_enabled === '1',
         audioVolume: Number(merged.ui_audio_volume || '70'),
@@ -409,16 +418,60 @@ export function SettingsPage() {
     }
   }
 
-  const handleTest = async (channel: 'telegram' | 'email') => {
+  const handleTest = async (channel: 'telegram' | 'email' | 'push') => {
     setTesting(channel)
     try {
       await api.testNotification(channel)
-      showToast(`Test message sent via ${channel === 'telegram' ? 'Telegram' : 'E-Mail'}`, 'success')
+      showToast(
+        `Test message sent via ${channel === 'telegram' ? 'Telegram' : channel === 'email' ? 'E-Mail' : 'Mobile Push'}`,
+        'success'
+      )
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       showToast(`Test failed: ${msg}`, 'error')
     } finally {
       setTesting(null)
+    }
+  }
+
+  const handleActivatePush = async () => {
+    setPushBusy(true)
+    try {
+      const result = await api.activatePushMobile(form.webhook_url)
+      setForm(current => ({ ...current, webhook_url: result.webhookUrl }))
+      setSavedForm(current => ({ ...current, webhook_url: result.webhookUrl }))
+      setPushActive(result.active)
+      showToast('Mobile push activated', 'success')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      showToast(msg || 'Failed to activate mobile push', 'error')
+    } finally {
+      setPushBusy(false)
+    }
+  }
+
+  const handleDeactivatePush = async () => {
+    setPushBusy(true)
+    try {
+      const result = await api.deactivatePushMobile()
+      setForm(current => ({ ...current, webhook_url: result.webhookUrl || current.webhook_url }))
+      setSavedForm(current => ({ ...current, webhook_url: result.webhookUrl || current.webhook_url }))
+      setPushActive(false)
+      showToast('Mobile push deactivated', 'success')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      showToast(msg || 'Failed to deactivate mobile push', 'error')
+    } finally {
+      setPushBusy(false)
+    }
+  }
+
+  const handleTogglePush = async () => {
+    if (pushBusy) return
+    if (pushActive) {
+      await handleDeactivatePush()
+    } else {
+      await handleActivatePush()
     }
   }
 
@@ -663,6 +716,74 @@ export function SettingsPage() {
               </div>
               <Toggle label="Updates available" name="notify_patches" value={form.notify_patches} onChange={handleChange} />
               <Toggle label="Job failed" name="notify_failures" value={form.notify_failures} onChange={handleChange} />
+            </div>
+          </div>
+        </Card>
+
+        <Card style={{ marginBottom: '20px' }}>
+          <SectionHeader
+            right={
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={testing === 'push' || !pushActive}
+                  onClick={() => handleTest('push')}
+                >
+                  {testing === 'push' ? 'SENDING...' : 'SEND TEST'}
+                </Button>
+              </div>
+            }
+          >
+            Push Mobile Notification
+          </SectionHeader>
+
+          <div style={{
+            fontSize: '11px',
+            color: colors.textMuted,
+            fontFamily: "'Electrolize', monospace",
+            letterSpacing: '0.04em',
+            lineHeight: 1.6,
+            marginBottom: '14px',
+          }}>
+            Mobile push uses the PatchPilot relay. Set the relay URL if needed, then switch it on here. The mobile app reads its token directly from the server.
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(260px, 1fr)', gap: '16px' }}>
+            <Field
+              label="Relay URL"
+              name="webhook_url"
+              value={form.webhook_url}
+              onChange={handleChange}
+              placeholder={DEFAULT_PUSH_RELAY_URL}
+            />
+          </div>
+
+          <div style={{
+            marginTop: '14px',
+            paddingTop: '14px',
+            borderTop: `1px solid ${colors.border}`,
+          }}>
+            <div style={{ opacity: pushBusy ? 0.65 : 1, pointerEvents: pushBusy ? 'none' : 'auto' }}>
+              <Toggle
+                label={pushBusy ? 'Updating Mobile Push' : 'Enable Mobile Push'}
+                name="push_mobile_enabled"
+                value={pushActive ? '1' : '0'}
+                onChange={() => { void handleTogglePush() }}
+              />
+            </div>
+            <div style={{
+              marginTop: '12px',
+              fontSize: '10px',
+              color: colors.textMuted,
+              fontFamily: "'Electrolize', monospace",
+              letterSpacing: '0.04em',
+              lineHeight: 1.5,
+            }}>
+              {pushActive
+                ? 'Push relay is active. Mobile clients can register against this server.'
+                : 'Push relay is disabled. Turn it on here when you want to allow mobile push registration.'}
             </div>
           </div>
         </Card>

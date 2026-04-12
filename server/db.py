@@ -7,6 +7,7 @@ import contextlib
 from pathlib import Path
 
 DB_PATH = Path(os.environ.get("PATCHPILOT_DB_PATH", str(Path(__file__).parent / "patchpilot.db")))
+_DEFAULT_PUSH_RELAY_URL = "https://push.patch-pilot.app"
 
 
 # PERFORMANCE: Per-connection PRAGMAs applied to every new connection.
@@ -234,7 +235,7 @@ def init_db():
             ("ui_login_background_opacity", "20"),
             ("ssl_certfile",           ""),
             ("ssl_keyfile",            ""),
-            ("webhook_url",            "https://push.jacques-hien.com"),
+            ("webhook_url",            _DEFAULT_PUSH_RELAY_URL),
             ("webhook_secret",         ""),
             ("scheduler_timezone",     "Europe/Berlin"),
         ]

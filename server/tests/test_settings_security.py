@@ -5,6 +5,9 @@ test_settings_security.py — authorization tests for settings endpoints.
 import os
 
 import app as app_module
+import notifications as notifications_module
+
+DEFAULT_PUSH_URL = "https://push.patch-pilot.app"
 
 
 def _create_user(db_conn, username: str, role: str, password: str = "secret123") -> None:
@@ -58,6 +61,153 @@ class TestSettingsAuthorization:
 
         assert resp.status_code == 403
         assert resp.json()["detail"] == "Insufficient permissions"
+
+    def test_readonly_user_cannot_get_push_config(self, client, db_conn):
+        _create_user(db_conn, "viewer", "readonly")
+        token = _login(client, "viewer", "secret123")
+
+        resp = client.get(
+            "/api/push-config",
+            headers={"Authorization": f"Bearer {token}", "x-admin-key": ""},
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Insufficient permissions"
+
+    def test_user_cannot_activate_mobile_push(self, client, db_conn):
+        _create_user(db_conn, "operator", "user")
+        token = _login(client, "operator", "secret123")
+
+        resp = client.post(
+            "/api/settings/push-mobile/activate",
+            json={"webhook_url": DEFAULT_PUSH_URL},
+            headers={"Authorization": f"Bearer {token}", "x-admin-key": ""},
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Insufficient permissions"
+
+    def test_user_cannot_deactivate_mobile_push(self, client, db_conn):
+        _create_user(db_conn, "operator2", "user")
+        token = _login(client, "operator2", "secret123")
+
+        resp = client.post(
+            "/api/settings/push-mobile/deactivate",
+            headers={"Authorization": f"Bearer {token}", "x-admin-key": ""},
+        )
+
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "Insufficient permissions"
+
+    def test_admin_settings_get_does_not_auto_generate_push_secret(self, client, db_conn):
+        resp = client.get("/api/settings")
+
+        assert resp.status_code == 200
+        row = db_conn.execute("SELECT value FROM settings WHERE key='webhook_secret'").fetchone()
+        assert row is None
+
+    def test_admin_can_activate_mobile_push(self, client, db_conn):
+        resp = client.post(
+            "/api/settings/push-mobile/activate",
+            json={"webhook_url": DEFAULT_PUSH_URL},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "activated"
+        assert data["active"] is True
+        assert data["webhookUrl"] == DEFAULT_PUSH_URL
+        assert len(data["webhookSecret"]) == 64
+
+        row = db_conn.execute("SELECT value FROM settings WHERE key='webhook_secret'").fetchone()
+        assert row is not None
+        assert row["value"]
+
+    def test_admin_can_save_settings_via_put_alias(self, client, db_conn):
+        resp = client.put(
+            "/api/settings",
+            json={"webhook_url": DEFAULT_PUSH_URL},
+        )
+
+        assert resp.status_code == 200
+        row = db_conn.execute("SELECT value FROM settings WHERE key='webhook_url'").fetchone()
+        assert row is not None
+        assert row["value"] == DEFAULT_PUSH_URL
+
+    def test_admin_can_read_existing_push_config(self, client):
+        activate = client.post(
+            "/api/settings/push-mobile/activate",
+            json={"webhook_url": DEFAULT_PUSH_URL},
+        )
+        assert activate.status_code == 200
+
+        resp = client.get("/api/push-config")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["active"] is True
+        assert data["webhookUrl"] == DEFAULT_PUSH_URL
+        assert len(data["webhookSecret"]) == 64
+
+    def test_admin_can_deactivate_mobile_push(self, client, db_conn):
+        activate = client.post(
+            "/api/settings/push-mobile/activate",
+            json={"webhook_url": DEFAULT_PUSH_URL},
+        )
+        assert activate.status_code == 200
+
+        resp = client.post("/api/settings/push-mobile/deactivate")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "deactivated"
+        assert data["active"] is False
+        assert data["webhookSecret"] is None
+        assert data["webhookUrl"] == DEFAULT_PUSH_URL
+
+        row = db_conn.execute("SELECT value FROM settings WHERE key='webhook_secret'").fetchone()
+        assert row is not None
+        assert row["value"] == ""
+
+    def test_admin_can_send_mobile_push_test(self, client, monkeypatch):
+        webhook = app_module.notification_manager._webhook
+        monkeypatch.setattr(app_module.notification_manager, "reload", lambda: None)
+        monkeypatch.setattr(app_module.notification_manager, "_load", lambda: None)
+        monkeypatch.setattr(webhook, "_url", DEFAULT_PUSH_URL)
+        monkeypatch.setattr(webhook, "_secret", "test-secret")
+        monkeypatch.setattr(webhook, "send_test", lambda: True)
+
+        resp = client.post("/api/settings/test/push")
+
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "sent"
+
+    def test_webhook_send_test_uses_updates_available_payload(self):
+        webhook = notifications_module.WebhookNotifier()
+        webhook._url = DEFAULT_PUSH_URL
+        webhook._secret = "test-secret"
+
+        calls: list[tuple[str, str, str]] = []
+
+        def fake_post(event: str, hostname: str, details: str = "") -> bool:
+            calls.append((event, hostname, details))
+            return True
+
+        webhook._post = fake_post  # type: ignore[method-assign]
+
+        ok = webhook.send_test()
+
+        assert ok is True
+        assert calls == [("updates_available", "Test1", "12")]
+
+    def test_activate_mobile_push_rejects_invalid_url(self, client):
+        resp = client.post(
+            "/api/settings/push-mobile/activate",
+            json={"webhook_url": "file:///tmp/push"},
+        )
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "Webhook URL must be a valid http(s) URL"
 
 
 class TestSslSettings:

@@ -45,6 +45,8 @@ def _make_in_memory_conn():
             tags        TEXT DEFAULT '',
             uptime_seconds INTEGER,
             protocol    TEXT DEFAULT 'http',
+            updates_notified INTEGER DEFAULT 0,
+            reboot_notified INTEGER DEFAULT 0,
             config_review_required INTEGER DEFAULT 0,
             config_review_note TEXT DEFAULT ''
         );
@@ -94,6 +96,14 @@ def _make_in_memory_conn():
             password_hash TEXT NOT NULL,
             role          TEXT NOT NULL DEFAULT 'user' CHECK(role IN ('admin','user','readonly')),
             created       TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            token       TEXT PRIMARY KEY,
+            user_id     INTEGER NOT NULL,
+            username    TEXT NOT NULL,
+            role        TEXT NOT NULL,
+            created_ts  REAL NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS rename_aliases (

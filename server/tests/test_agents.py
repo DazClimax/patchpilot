@@ -1,7 +1,7 @@
 """
 test_agents.py — tests for agent and job endpoints.
 """
-
+from datetime import datetime
 import json
 import secrets
 import pytest
@@ -412,6 +412,7 @@ class TestCreateJob:
         assert "update.power_flow_card_plus_update" in row["params"]
 
     def test_running_ha_core_job_is_shown_done_after_heartbeat_without_pending_package(self, client, db_conn):
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         db_conn.execute(
             """
             INSERT INTO agents (id, hostname, token, agent_type, capabilities, last_seen)
@@ -422,15 +423,15 @@ class TestCreateJob:
                 "homeassistant",
                 "token",
                 "ha_backup,ha_core_update,ha_supervisor_update,ha_os_update,ha_addon_update,ha_addons_update,ha_entity_update",
-                "2026-04-02 12:05:00",
+                now,
             ),
         )
         db_conn.execute(
             """
             INSERT INTO jobs (agent_id, type, status, started, params, created)
-            VALUES (?, 'ha_core_update', 'running', '2026-04-02 12:00:00', '{}', '2026-04-02 12:00:00')
+            VALUES (?, 'ha_core_update', 'running', ?, '{}', ?)
             """,
-            ("ha-agent",),
+            ("ha-agent", now, now),
         )
         db_conn.commit()
 

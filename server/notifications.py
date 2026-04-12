@@ -227,36 +227,38 @@ class WebhookNotifier:
         self._url    = settings.get("webhook_url", "").rstrip("/")
         self._secret = settings.get("webhook_secret", "")
 
+    def _post(self, event: str, hostname: str, details: str = "") -> bool:
+        if not self._url or not self._secret:
+            return False
+        try:
+            body = json.dumps(
+                {"event": event, "hostname": hostname, "details": details}
+            ).encode()
+            req = urllib.request.Request(
+                self._url + "/notify",
+                data=body,
+                headers={
+                    "X-PP-Secret": self._secret,
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return 200 <= getattr(resp, "status", 200) < 300
+        except Exception as exc:
+            log.debug("WebhookNotifier: send failed: %s", exc)
+            return False
+
     def send(self, event: str, hostname: str, details: str = ""):
         """Fire-and-forget: POST /notify to the relay in a daemon thread."""
         if not self._url or not self._secret:
             return
-        url    = self._url
-        secret = self._secret
-        import json
         import threading
-        import urllib.request
+        threading.Thread(target=lambda: self._post(event, hostname, details), daemon=True).start()
 
-        def _post():
-            try:
-                body = json.dumps(
-                    {"event": event, "hostname": hostname, "details": details}
-                ).encode()
-                req = urllib.request.Request(
-                    url + "/notify",
-                    data=body,
-                    headers={
-                        "X-PP-Secret":   secret,
-                        "Content-Type":  "application/json",
-                    },
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=5):
-                    pass
-            except Exception as exc:
-                log.debug("WebhookNotifier: send failed: %s", exc)
-
-        threading.Thread(target=_post, daemon=True).start()
+    def send_test(self) -> bool:
+        """Send a synchronous test payload to the relay."""
+        return self._post("updates_available", "Test1", "12")
 
 
 # ---------------------------------------------------------------------------

@@ -131,6 +131,7 @@ export interface Settings {
   notify_offline_minutes: string
   notify_patches: string
   notify_failures: string
+  webhook_url: string
   telegram_enabled: string
   telegram_notify_offline: string
   telegram_notify_patches: string
@@ -162,6 +163,12 @@ export interface User {
 export interface DeployBootstrap {
   ca_pem_b64: string
   ca_rollover_pub_pem_b64: string
+}
+
+export interface PushConfig {
+  webhookUrl: string
+  webhookSecret: string | null
+  active: boolean
 }
 
 export const api = {
@@ -242,8 +249,17 @@ export const api = {
   saveSettings: (data: Partial<Settings>) =>
     req<{ status: string; restart_pending: boolean; new_port: string | null }>('POST', '/settings', data),
 
-  testNotification: (channel: 'telegram' | 'email') =>
+  testNotification: (channel: 'telegram' | 'email' | 'push') =>
     req<{ status: string }>('POST', `/settings/test/${channel}`),
+
+  pushConfig: () =>
+    req<PushConfig>('GET', '/push-config'),
+
+  activatePushMobile: (webhookUrl: string) =>
+    req<PushConfig>('POST', '/settings/push-mobile/activate', { webhook_url: webhookUrl }),
+
+  deactivatePushMobile: () =>
+    req<PushConfig>('POST', '/settings/push-mobile/deactivate'),
 
   // SSL
   sslInfo: () =>

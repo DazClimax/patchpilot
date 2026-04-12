@@ -11,6 +11,7 @@ LogsDirectoryMode=0750
 WorkingDirectory=/opt/patchpilot/server
 EnvironmentFile=-/run/patchpilot-bootstrap.env
 EnvironmentFile=/opt/patchpilot/.env
+Environment=PATCHPILOT_DB_PATH=/opt/patchpilot/server/patchpilot.db
 ExecStart=/opt/patchpilot/server/start.sh
 Restart=always
 RestartSec=5
