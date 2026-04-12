@@ -9,7 +9,7 @@ import { Button } from '../components/Button'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { SslDeployModal, type DeployStatus } from '../components/SslDeployModal'
 import { PageHeader } from '../components/SectionHeader'
-import { fmtAgoShort as fmtAgo, fmtUptime } from '../utils/format'
+import { fmtAgoShort as fmtAgo, fmtUptime, fmtBytes } from '../utils/format'
 import { UserContext } from '../App'
 
 // ─── Offline VM Alert Banner ───────────────────────────────────────────────────
@@ -129,7 +129,7 @@ function OfflineBanner({ hostnames, onDismiss }: { hostnames: string[]; onDismis
 
 // ─── Sort types ────────────────────────────────────────────────────────────────
 
-type SortKey = 'status' | 'conn' | 'hostname' | 'ip' | 'os' | 'updates' | 'reboot' | 'last_job' | 'uptime' | 'last_seen'
+type SortKey = 'status' | 'conn' | 'hostname' | 'ip' | 'os' | 'updates' | 'reboot' | 'last_job' | 'uptime' | 'disk' | 'last_seen'
 type FilterKey = 'all' | 'online' | 'offline' | 'updates' | 'reboot' | 'outdated' | 'haos'
 
 const isAgentOnline = (agent: Agent) => agent.effective_online ?? ((agent.seconds_ago ?? 9999) < 120)
@@ -218,6 +218,9 @@ function sortAgents(agents: Agent[], key: SortKey, dir: SortDir): Agent[] {
       if (cmp === 0) cmp = (a.last_job_finished ?? '').localeCompare(b.last_job_finished ?? '')
     } else if (key === 'uptime') {
       cmp = (a.uptime_seconds ?? -1) - (b.uptime_seconds ?? -1)
+    } else if (key === 'disk') {
+      const pct = (ag: Agent) => ag.disk_total ? (ag.disk_used ?? 0) / ag.disk_total : -1
+      cmp = pct(a) - pct(b)
     } else if (key === 'last_seen') {
       cmp = (a.seconds_ago ?? 9999) - (b.seconds_ago ?? 9999)
     }
@@ -528,8 +531,26 @@ function AgentRow({
           <span style={{ color: colors.textMuted, fontSize: '12px' }}>—</span>
         )}
       </td>
-      <td className="pp-hide-mobile" style={{ padding: '12px 16px', textAlign: 'right', color: colors.textMuted, fontSize: '11px', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
-        {fmtUptime(agent.uptime_seconds)}
+      <td className="pp-hide-mobile" style={{ padding: '12px 16px', textAlign: 'right', minWidth: '80px' }}>
+        {agent.disk_total ? (() => {
+          const pct = Math.round((agent.disk_used ?? 0) / agent.disk_total * 100)
+          const barColor = pct >= 90 ? colors.danger : pct >= 75 ? colors.warn : colors.primary
+          return (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px' }}>
+              <span style={{ fontSize: '10px', color: pct >= 90 ? colors.danger : pct >= 75 ? colors.warn : colors.textMuted, fontFamily: 'monospace' }}>
+                {pct}%
+              </span>
+              <div style={{ width: '60px', height: '4px', background: `${colors.border}`, borderRadius: '2px', overflow: 'hidden' }}>
+                <div style={{ width: `${pct}%`, height: '100%', background: barColor, borderRadius: '2px', transition: 'width 0.3s ease' }} />
+              </div>
+              <span style={{ fontSize: '9px', color: colors.textMuted, fontFamily: 'monospace' }}>
+                {fmtBytes(agent.disk_free)} free
+              </span>
+            </div>
+          )
+        })() : (
+          <span style={{ color: colors.textMuted, fontSize: '12px' }}>—</span>
+        )}
       </td>
       <td className="pp-hide-mobile" style={{ padding: '12px 16px', textAlign: 'right', color: colors.textMuted, fontSize: '11px', fontFamily: 'monospace' }}>
         {fmtAgo(agent.seconds_ago)}
@@ -1178,7 +1199,7 @@ export function Dashboard() {
                 <SortTh label="Updates" sortKey="updates" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="center" />
                 <SortTh label="Reboot"  sortKey="reboot"  activeKey={sortKey} dir={sortDir} onSort={handleSort} align="center" />
                 <SortTh label="Last Job" sortKey="last_job" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="center" className="pp-hide-mobile" />
-                <SortTh label="Uptime"  sortKey="uptime"  activeKey={sortKey} dir={sortDir} onSort={handleSort} align="right" className="pp-hide-mobile" />
+                <SortTh label="Disk"    sortKey="disk"    activeKey={sortKey} dir={sortDir} onSort={handleSort} align="right" className="pp-hide-mobile" />
                 <SortTh label="Last Seen" sortKey="last_seen" activeKey={sortKey} dir={sortDir} onSort={handleSort} align="right" className="pp-hide-mobile" />
               </tr>
             </thead>

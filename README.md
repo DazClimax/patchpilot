@@ -42,7 +42,7 @@ Choose one installation path:
 1. Download the ready-to-use Compose file:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.1/docker-compose.yml -o docker-compose.yml
 ```
 
 2. Review or adjust the defaults:
@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/docker-
 ```yaml
 services:
   patchpilot:
-    image: ghcr.io/dazclimax/patchpilot:v1.7.0
+    image: ghcr.io/dazclimax/patchpilot:v1.7.1
     container_name: patchpilot
     restart: unless-stopped
     security_opt:
@@ -73,7 +73,7 @@ services:
 3. Pull the published image explicitly if you want to verify the tag first:
 
 ```bash
-docker pull ghcr.io/dazclimax/patchpilot:v1.7.0
+docker pull ghcr.io/dazclimax/patchpilot:v1.7.1
 ```
 
 4. Start the stack:
@@ -111,7 +111,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: patchpilot:1.7.0
+    image: patchpilot:1.7.1
 ```
 
 Then run:
@@ -125,19 +125,19 @@ docker compose up -d --build
 1. Install the server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.1/setup.sh | sudo bash
 ```
 
 With custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.1/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
 ```
 
 Inspect before running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.1/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```
@@ -182,7 +182,7 @@ The Deploy page installer embeds the current registration key and, for HTTPS dep
 
 ## What You Get
 
-- **Dashboard**: online state, pending updates, reboot indicators, last jobs, HTTP/TLS visibility, and ping-only monitors
+- **Dashboard**: online state, pending updates, reboot indicators, disk usage, last jobs, HTTP/TLS visibility, and ping-only monitors
 - **Patch jobs**: trigger package upgrades per VM or across the fleet (`apt` and current RPM client support via `dnf`)
 - **Ping-only targets**: monitor routers, appliances, or other unsupported systems by reachability without exposing patch/reboot actions
 - **Schedules**: cron-based automation for patching and reboots
@@ -203,15 +203,16 @@ The Deploy page installer embeds the current registration key and, for HTTPS dep
 ## Architecture
 
 ```text
-Server (any Linux host)               Agents (Linux VMs)
-├── FastAPI (dual-port)                agent.py (stdlib Python)
+Server (any Linux host)               Managed Targets
+├── FastAPI (dual-port)                Linux agents (stdlib Python)
 │   ├── UI port (HTTPS)                ├── polls for jobs every 10s
 │   └── Agent port (HTTPS)             ├── heartbeat every 60s
 ├── SQLite (WAL mode)                  └── self-update capable
-├── APScheduler (cron jobs)
-├── React + Arwes (frontend)
-├── Telegram / SMTP notifications
-└── Prometheus metrics (/metrics)
+├── APScheduler (cron jobs)            HAOS add-on
+├── React + Arwes (frontend)           ├── backup/update workflows
+├── Telegram / SMTP / Push             └── targeted update.* installs
+└── Prometheus metrics (/metrics)      Ping-only targets
+                                       └── reachability monitoring only
 ```
 
 By default, the UI and agent API run on separate ports. If both are configured to the same port, PatchPilot falls back to single-port mode.
@@ -223,7 +224,7 @@ By default, the UI and agent API run on separate ports. If both are configured t
 | Server | Python 3.10+, FastAPI, SQLite (WAL), APScheduler, uvicorn |
 | Frontend | React 18, TypeScript, Vite, Arwes, font-logos |
 | Agent | Python 3 stdlib only |
-| Notifications | Telegram Bot API, SMTP |
+| Notifications | Telegram Bot API, SMTP, mobile push relay |
 | Deployment | systemd, rsync, shell scripts |
 
 PatchPilot's sci-fi interface is built with [Arwes](https://arwes.dev).

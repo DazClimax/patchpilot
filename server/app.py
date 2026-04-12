@@ -1204,6 +1204,19 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
                 uptime_seconds = None
         except (ValueError, TypeError):
             uptime_seconds = None
+    # Disk usage — validate and cap to sane range (max 256 TiB per field)
+    _DISK_MAX = 256 * 1024 ** 4
+    def _parse_disk_bytes(v) -> int | None:
+        if v is None:
+            return None
+        try:
+            n = int(v)
+            return n if 0 <= n <= _DISK_MAX else None
+        except (ValueError, TypeError):
+            return None
+    disk_total = _parse_disk_bytes(data.get("disk_total"))
+    disk_used  = _parse_disk_bytes(data.get("disk_used"))
+    disk_free  = _parse_disk_bytes(data.get("disk_free"))
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     config_review_required = 1 if data.get("config_review_required") else 0
     config_review_note = str(data.get("config_review_note", ""))[:4000] if config_review_required else ""
@@ -1221,7 +1234,8 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
             """UPDATE agents SET
                 hostname=?, ip=?, os_pretty=?, kernel=?, arch=?, package_manager=?, agent_version=?, agent_type=?, capabilities=?,
                 reboot_required=?, pending_count=?, last_seen=?, uptime_seconds=?,
-                protocol=?, config_review_required=?, config_review_note=?
+                protocol=?, config_review_required=?, config_review_note=?,
+                disk_total=?, disk_used=?, disk_free=?
                WHERE id=?""",
             (
                 hostname,
@@ -1240,6 +1254,9 @@ async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...))
                 protocol,
                 config_review_required,
                 config_review_note,
+                disk_total,
+                disk_used,
+                disk_free,
                 agent_id,
             ),
         )
@@ -2543,12 +2560,15 @@ def api_ssl_info():
 # MONITORING ENDPOINTS
 # ===========================================================================
 
+_DISK_ALERT_THRESHOLD = 90  # percent used → alert
+
 @app.get("/api/alerts", dependencies=[Depends(require_role("admin","user","readonly"))])
 def api_alerts():
-    """Return all systems currently considered offline."""
+    """Return all systems currently considered offline or with disk alerts."""
     with get_db_ctx() as conn:
         rows = conn.execute(
             """SELECT id, hostname, ip, agent_type, ping_failures, ping_last_checked,
+               disk_total, disk_used,
                CAST((julianday('now','localtime') - julianday(last_seen)) * 86400 AS INTEGER) as seconds_ago
                FROM agents
                WHERE last_seen IS NOT NULL"""
@@ -2563,20 +2583,35 @@ def api_alerts():
                ) latest ON j.id = latest.max_id"""
         ).fetchall()
     last_job_map = {row["agent_id"]: dict(row) for row in last_jobs}
-    offline_rows = []
+    result = []
     for row in rows:
         row_dict = _agent_online_status(dict(row), last_job_map.get(row["id"]))
-        if row_dict.get("effective_online"):
-            continue
-        offline_rows.append(
-            {
-                "hostname": row_dict["hostname"],
-                "ip": row_dict["ip"],
-                "offline_since_seconds": row_dict.get("seconds_ago") or 0,
-            }
-        )
-    offline_rows.sort(key=lambda row: row["offline_since_seconds"], reverse=True)
-    return offline_rows
+        if not row_dict.get("effective_online"):
+            result.append(
+                {
+                    "hostname": row_dict["hostname"],
+                    "ip": row_dict["ip"],
+                    "offline_since_seconds": row_dict.get("seconds_ago") or 0,
+                    "kind": "offline",
+                }
+            )
+        elif (
+            row_dict.get("disk_total") and row_dict.get("disk_used") is not None
+            and row_dict["disk_total"] > 0
+            and round(row_dict["disk_used"] / row_dict["disk_total"] * 100) >= _DISK_ALERT_THRESHOLD
+        ):
+            pct = round(row_dict["disk_used"] / row_dict["disk_total"] * 100)
+            result.append(
+                {
+                    "hostname": row_dict["hostname"],
+                    "ip": row_dict["ip"],
+                    "offline_since_seconds": 0,
+                    "kind": "disk",
+                    "disk_percent": pct,
+                }
+            )
+    result.sort(key=lambda r: r["offline_since_seconds"], reverse=True)
+    return result
 
 
 @app.get("/api/status/badge", dependencies=[Depends(require_role("admin","user","readonly"))])

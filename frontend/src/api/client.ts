@@ -75,6 +75,9 @@ export interface Agent {
   seconds_ago: number | null
   tags: string | null
   uptime_seconds: number | null
+  disk_total: number | null
+  disk_used: number | null
+  disk_free: number | null
   last_job_type: string | null
   last_job_status: string | null
   last_job_finished: string | null

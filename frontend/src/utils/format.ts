@@ -26,6 +26,15 @@ export function fmtUptime(secs: number | null): string {
   return `${h}h ${m}m`
 }
 
+/** Format bytes as human-readable size: "12.3 GB", "512 MB" */
+export function fmtBytes(bytes: number | null): string {
+  if (bytes === null || bytes === undefined) return '—'
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${bytes} B`
+}
+
 /** Describe a cron expression in human-readable form */
 export function describeCron(expr: string): string {
   const parts = expr.trim().split(/\s+/)

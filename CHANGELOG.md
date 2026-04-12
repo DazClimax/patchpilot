@@ -7,6 +7,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-04-12
+
+### Added
+- Disk usage monitoring: agents now report root filesystem usage (`disk_total`, `disk_used`, `disk_free`) in every heartbeat. The dashboard shows a compact colour-coded progress bar per host (green → yellow at 75 % → red at 90 %). The VM detail page shows a full disk card with used / total / free values. Hosts above 90 % usage appear in the alerts API.
+- `fmtBytes` utility added to the frontend format helpers.
+
+### Changed
+- Agent version bumped `1.3 → 1.4` to carry the new disk usage payload.
+- Uptime column removed from the dashboard overview table (still visible on the VM detail page).
+- `AmbientCapabilities=CAP_NET_RAW` and `CapabilityBoundingSet=CAP_NET_RAW` restored in `patchpilot.service` so ping-only monitors work correctly on a clean install without requiring manual `setcap` on the system `ping` binary.
+
+### Fixed
+- Ping-only monitors went offline after a fresh deployment because `AmbientCapabilities=CAP_NET_RAW` had been removed from the service file. The capability is now part of the versioned service definition.
+
 ## [1.7.0] - 2026-04-12
 
 ### Added

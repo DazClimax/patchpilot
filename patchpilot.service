@@ -19,6 +19,9 @@ RestartSec=5
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes
+# Allow pinging hosts for ping-only agent monitoring
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
 # Resource limits
 MemoryMax=512M
 TasksMax=200

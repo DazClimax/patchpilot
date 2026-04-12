@@ -79,7 +79,7 @@ STATE_FILE = CONFIG_DIR / "state.json"
 CA_ROLLOVER_PUBKEY_FILE = CONFIG_DIR / "ca_rollover_public.pem"
 
 DEFAULT_INTERVAL = 60
-AGENT_VERSION = "1.3"
+AGENT_VERSION = "1.4"
 _CURRENT_JOB_PARAMS: dict = {}
 
 
@@ -260,6 +260,15 @@ def get_uptime_seconds() -> int | None:
         return int(float(Path("/proc/uptime").read_text().split()[0]))
     except Exception:
         return None
+
+
+def get_disk_usage() -> dict:
+    """Return root filesystem usage in bytes."""
+    try:
+        total, used, free = shutil.disk_usage("/")
+        return {"disk_total": total, "disk_used": used, "disk_free": free}
+    except Exception:
+        return {}
 
 
 def _is_container() -> bool:
@@ -537,6 +546,7 @@ def send_heartbeat(server: str, agent_id: str, token: str, packages: list) -> di
             "agent_version": AGENT_VERSION,
             "reboot_required": reboot_required(),
             "uptime_seconds": get_uptime_seconds(),
+            **get_disk_usage(),
             "config_review_required": config_review_required,
             "config_review_note": config_review_note,
             "packages": packages,

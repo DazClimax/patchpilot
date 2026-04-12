@@ -218,6 +218,21 @@ def init_db():
             pass  # column already present — nothing to do
 
         try:
+            conn.execute("ALTER TABLE agents ADD COLUMN disk_total INTEGER")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN disk_used INTEGER")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN disk_free INTEGER")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
             conn.execute("ALTER TABLE packages ADD COLUMN source_kind TEXT")
         except sqlite3.OperationalError:
             pass

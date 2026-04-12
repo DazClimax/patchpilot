@@ -50,7 +50,11 @@ def _make_in_memory_conn():
             updates_notified INTEGER DEFAULT 0,
             reboot_notified INTEGER DEFAULT 0,
             config_review_required INTEGER DEFAULT 0,
-            config_review_note TEXT DEFAULT ''
+            config_review_note TEXT DEFAULT '',
+            offline_notified INTEGER DEFAULT 0,
+            disk_total INTEGER,
+            disk_used INTEGER,
+            disk_free INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS packages (

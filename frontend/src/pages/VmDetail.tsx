@@ -10,7 +10,7 @@ import { PageHeader, SectionHeader } from '../components/SectionHeader'
 import { LogModal } from '../components/LogModal'
 import { ConfirmModal } from '../components/ConfirmModal'
 import { useToast } from '../components/Toast'
-import { fmtAgo, fmtUptime } from '../utils/format'
+import { fmtAgo, fmtUptime, fmtBytes } from '../utils/format'
 
 function jobStatus(s: string): [string, string] {
   const map: Record<string, [string, string]> = {
@@ -725,6 +725,41 @@ export function VmDetail() {
           </div>
         )})}
       </div>
+
+      {/* Disk usage bar — only for linux/haos agents that report disk info */}
+      {!isPingTarget && agent.disk_total ? (() => {
+        const pct = Math.round((agent.disk_used ?? 0) / agent.disk_total * 100)
+        const barColor = pct >= 90 ? colors.danger : pct >= 75 ? colors.warn : colors.primary
+        const textColor = pct >= 90 ? colors.danger : pct >= 75 ? colors.warn : colors.text
+        return (
+          <Card accent={barColor} style={{ padding: '14px 16px', marginBottom: '12px', animationDelay: '0.18s' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div style={{ fontSize: '10px', color: colors.textMuted, letterSpacing: '0.22em', textTransform: 'uppercase', fontFamily: "'Orbitron', sans-serif" }}>
+                Disk Usage
+              </div>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                <span style={{ fontSize: '11px', color: colors.textMuted, fontFamily: 'monospace' }}>
+                  {fmtBytes(agent.disk_used)} / {fmtBytes(agent.disk_total)}
+                </span>
+                <span style={{ fontSize: '12px', color: textColor, fontFamily: 'monospace', fontWeight: 'bold', textShadow: pct >= 75 ? `0 0 8px ${barColor}88` : 'none' }}>
+                  {pct}%
+                </span>
+              </div>
+            </div>
+            <div style={{ width: '100%', height: '6px', background: `${colors.border}`, borderRadius: '3px', overflow: 'hidden' }}>
+              <div style={{ width: `${pct}%`, height: '100%', background: barColor, borderRadius: '3px', transition: 'width 0.4s ease', boxShadow: `0 0 6px ${barColor}88` }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '6px' }}>
+              <span style={{ fontSize: '10px', color: colors.textMuted, fontFamily: 'monospace' }}>
+                {fmtBytes(agent.disk_free)} free
+              </span>
+              <span style={{ fontSize: '10px', color: colors.textMuted, fontFamily: 'monospace' }}>
+                {fmtBytes(agent.disk_total)} total
+              </span>
+            </div>
+          </Card>
+        )
+      })() : null}
 
       {/* Tags row — only rendered when the agent has at least one tag */}
       {(() => {
