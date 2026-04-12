@@ -43,13 +43,13 @@ PatchPilot server installation currently targets Debian/Ubuntu-style hosts and u
 Versioned one-liner:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo bash
 ```
 
 Inspect before running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```
@@ -57,7 +57,7 @@ sudo bash setup.sh
 With custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
 ```
 
 The bootstrap script will:
@@ -137,6 +137,17 @@ sudo systemctl restart patchpilot
 
 Changing the admin key after secrets have already been stored will require re-entering those encrypted values.
 
+### Mobile Push Notifications
+
+PatchPilot can send mobile push notifications through the default relay `https://push.patch-pilot.app`.
+
+In `Settings > Notifications`:
+
+1. Open `Push Mobile Notification`
+2. Verify or adjust the relay URL
+3. Enable the toggle as an admin
+4. Use `Send Test` to confirm delivery
+
 ### Step 5: Open the Web UI and Sign In
 
 ```
@@ -181,6 +192,17 @@ journalctl -u patchpilot-agent -f
 ```
 
 The VM should appear on the dashboard within 30 seconds.
+
+### Optional: Add Ping-Only Targets
+
+If you want to monitor systems that PatchPilot cannot manage directly, such as routers or appliances:
+
+1. Open the dashboard as an admin
+2. Click `+ Ping Target`
+3. Enter a display name and IP/address
+4. Save the target
+
+Ping-only targets appear in the dashboard and detail view, but they do not expose patch, reboot, schedule, or agent-update actions.
 
 ---
 
@@ -276,13 +298,13 @@ The container runtime prepares the mounted `/data` volume as root and then drops
 Use this path if you want to run the PatchPilot server with Docker instead of a native systemd service install.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/docker-compose.yml -o docker-compose.yml
 ```
 
 Adjust the file if needed, then start it with:
 
 ```bash
-docker pull ghcr.io/dazclimax/patchpilot:v1.6.5
+docker pull ghcr.io/dazclimax/patchpilot:v1.7.0
 ```
 
 Then launch it with:
@@ -346,7 +368,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: patchpilot:1.6.5
+    image: patchpilot:1.7.0
 ```
 
 and then run:

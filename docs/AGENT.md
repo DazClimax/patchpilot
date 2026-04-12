@@ -49,8 +49,8 @@ Store agent_id + token in /etc/patchpilot/state.json
 
 | Type | What it does |
 |------|-------------|
-| `patch` | `DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --force-confdef --force-confold` + auto `apt-get autoremove` + config conflict detection |
-| `autoremove` | `apt-get autoremove -y` |
+| `patch` | Uses the detected package manager to install pending updates (`apt`, `dnf`, or compatible `yum` fallback) |
+| `autoremove` | Cleans unused packages on supported Linux package managers |
 | `reboot` | `shutdown -r +1 "PatchPilot scheduled reboot"` |
 | `update_agent` | Downloads latest `agent.py` from server, verifies SHA-256 hash, atomically replaces the file, exits so systemd restarts with new code |
 | `deploy_ssl` | Downloads CA certificate from server, verifies SHA-256, installs to `/etc/patchpilot/ca.pem`, updates `agent.conf` with `PATCHPILOT_CA_BUNDLE` path, and reloads the SSL context in-process |
@@ -63,9 +63,9 @@ On startup, the agent loads state from `/etc/patchpilot/state.json`. If `agent_i
 
 When the server URL changes (port, protocol, or host), the heartbeat response includes `canonical_url`. The agent automatically switches to the new URL and persists it in `state.json`. A legacy `canonical_port` field is also supported for backward compatibility with older servers.
 
-### Protocol Fallback
+### Protocol Migration
 
-If an HTTP request fails, the agent automatically tries HTTPS (and vice versa). This handles the transition period when the server switches protocol (e.g., SSL enabled or disabled) and the agent has not migrated yet.
+The agent follows the `canonical_url` returned by the server, but it does not silently downgrade from HTTPS to HTTP and it does not auto-trust a brand-new CA after a TLS failure. For secure certificate changes, trust must be deployed first through the signed `deploy_ssl` flow.
 
 ### Agent Rename
 
@@ -158,7 +158,7 @@ Package names received from the server are validated against the Debian package-
 
 ### What the Agent Can Do
 
-- Run `apt-get update`, `apt-get upgrade`, `apt-get autoremove`
+- Run package refresh/update/cleanup flows through the supported Linux package manager
 - Run `shutdown -r +1`
 - Update its own `agent.py` (verified by SHA-256)
 - Install a CA certificate to `/etc/patchpilot/ca.pem`

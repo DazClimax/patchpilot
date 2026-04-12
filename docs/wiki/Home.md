@@ -15,12 +15,13 @@ PatchPilot is a lightweight, self-hosted patch management system for Linux nodes
 - Self-hosted patch management for Debian, Ubuntu, and current RPM-capable clients
 - Pull-based agents behind NAT
 - Patch jobs, reboot jobs, schedules, and fleet visibility
+- Ping-only monitoring for routers and other non-agent systems
 - Low operational footprint with SQLite, systemd, and a stdlib-only Python agent
 
 ## Fastest server install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo bash
 ```
 
 After the install finishes:

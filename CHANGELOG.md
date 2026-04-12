@@ -7,6 +7,27 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-04-12
+
+### Added
+- Ping-only targets can now be added from the dashboard to monitor systems such as routers or appliances that PatchPilot cannot manage directly.
+- Mobile push notifications now have a dedicated admin-controlled settings panel with relay URL, enable/disable toggle, and test delivery action.
+- Home Assistant `update.*` entity updates, including HACS/frontend-style updates, are now fully surfaced as targeted update actions.
+
+### Changed
+- Version bumped to `1.7.0`
+- Docker, compose, setup, and install documentation now point consistently at the `v1.7.0` release.
+- Frontend fonts are now bundled locally instead of loading from Google Fonts at runtime.
+- Ping-only monitoring now follows a retry-based reachability model instead of a fixed offline window.
+- The secure SSL rollout flow is now documented more clearly around **Deploy Trust to Agents**, signed CA rollover, and HAOS recovery.
+
+### Fixed
+- Ping-only targets are now excluded consistently from schedules, bulk patch actions, reboot actions, and other managed-job flows.
+- Dashboard, detail view, alerts, badges, and offline notifications now agree on ping-target connectivity state.
+- Manual ping checks on the VM detail page now provide direct user feedback through toasts.
+- Mobile push activation no longer provisions secrets implicitly through normal settings reads and remains admin-only.
+- Home Assistant update feedback and HA add-on rollout behavior are more consistent across dashboard, detail, and deployment flows.
+
 ## [1.6.5] - 2026-04-02
 
 ### Added

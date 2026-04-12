@@ -7,19 +7,19 @@ This page covers the quickest supported way to get a PatchPilot server running.
 Recommended for Debian and Ubuntu hosts:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo bash
 ```
 
 With custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
 ```
 
 If you want to inspect the script first:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```
@@ -35,6 +35,7 @@ The installer will:
 - create the Python virtual environment under `/opt/patchpilot-venv`
 - generate a self-signed certificate
 - register and start the systemd service
+- ship the current secure deploy workflow for agent onboarding and trust rollout
 
 ## First login
 

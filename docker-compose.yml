@@ -1,6 +1,6 @@
 services:
   patchpilot:
-    image: ghcr.io/dazclimax/patchpilot:v1.6.5
+    image: ghcr.io/dazclimax/patchpilot:v1.7.0
     container_name: patchpilot
     restart: unless-stopped
     security_opt:

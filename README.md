@@ -42,7 +42,7 @@ Choose one installation path:
 1. Download the ready-to-use Compose file:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/docker-compose.yml -o docker-compose.yml
 ```
 
 2. Review or adjust the defaults:
@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/docker-
 ```yaml
 services:
   patchpilot:
-    image: ghcr.io/dazclimax/patchpilot:v1.6.5
+    image: ghcr.io/dazclimax/patchpilot:v1.7.0
     container_name: patchpilot
     restart: unless-stopped
     security_opt:
@@ -73,7 +73,7 @@ services:
 3. Pull the published image explicitly if you want to verify the tag first:
 
 ```bash
-docker pull ghcr.io/dazclimax/patchpilot:v1.6.5
+docker pull ghcr.io/dazclimax/patchpilot:v1.7.0
 ```
 
 4. Start the stack:
@@ -111,7 +111,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: patchpilot:1.6.5
+    image: patchpilot:1.7.0
 ```
 
 Then run:
@@ -125,19 +125,19 @@ docker compose up -d --build
 1. Install the server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo bash
 ```
 
 With custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
 ```
 
 Inspect before running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.6.5/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```
@@ -182,13 +182,14 @@ The Deploy page installer embeds the current registration key and, for HTTPS dep
 
 ## What You Get
 
-- **Dashboard**: online state, pending updates, reboot indicators, last jobs, and HTTP/TLS visibility
+- **Dashboard**: online state, pending updates, reboot indicators, last jobs, HTTP/TLS visibility, and ping-only monitors
 - **Patch jobs**: trigger package upgrades per VM or across the fleet (`apt` and current RPM client support via `dnf`)
+- **Ping-only targets**: monitor routers, appliances, or other unsupported systems by reachability without exposing patch/reboot actions
 - **Schedules**: cron-based automation for patching and reboots
 - **Agent self-update**: distribute new agent code with SHA-256 verification
-- **Notifications**: Telegram and SMTP with per-event controls
+- **Notifications**: Telegram, SMTP, and mobile push relay delivery with per-event controls
 - **Role-based access**: `admin`, `user`, and `readonly`
-- **SSL workflows**: generate certs, deploy CA to agents, and migrate protocols cleanly
+- **SSL workflows**: generate certs, deploy trust to agents first, and roll signed CA changes out cleanly
 - **Prometheus metrics**: monitoring endpoint for server-side visibility
 
 ## Why Pull Model Instead Of SSH
@@ -227,6 +228,7 @@ By default, the UI and agent API run on separate ports. If both are configured t
 
 PatchPilot's sci-fi interface is built with [Arwes](https://arwes.dev).
 Home Assistant OS is supported through a dedicated add-on, including backup, Core, Supervisor, OS, and add-on update workflows. Optional PatchPilot-triggered HA agent updates are available through a simple Home Assistant webhook automation: [HAOS Add-on Notes](docs/HAOS_ADDON.md).
+PatchPilot can also track ping-only systems such as routers or appliances while keeping managed patch and reboot controls limited to full Linux and HAOS agents.
 
 ## Security At A Glance
 

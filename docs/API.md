@@ -214,7 +214,7 @@ Returns all pending jobs. Jobs are marked `running` server-side when fetched.
 ]
 ```
 
-Job types: `patch`, `reboot`, `autoremove`, `update_agent`, `deploy_ssl`
+Job types include Linux actions such as `patch`, `dist_upgrade`, `refresh_updates`, `autoremove`, `reboot`, `update_agent`, and `deploy_ssl`, plus Home Assistant actions such as `ha_backup`, `ha_core_update`, `ha_backup_update`, `ha_supervisor_update`, `ha_os_update`, `ha_addon_update`, `ha_addons_update`, `ha_entity_update`, and `ha_trigger_agent_update`.
 
 ---
 
@@ -331,7 +331,7 @@ Returns all agents with aggregated statistics.
 }
 ```
 
-An agent is considered "online" when `seconds_ago < 120`.
+Managed agents use heartbeat + job-grace logic. Ping-only targets use retry-based reachability checks and can appear as `online`, `busy`, or `offline`.
 
 ---
 
@@ -353,6 +353,51 @@ Returns detailed info for a single agent including packages and recent jobs.
 
 ---
 
+### POST /api/agents/ping-targets
+
+Create a ping-only monitoring target.
+
+**Auth:** admin
+
+**Request Body (JSON):**
+
+| Field      | Type   | Description |
+|------------|--------|-------------|
+| `hostname` | string | Display name shown in PatchPilot |
+| `address`  | string | Hostname or IP address to ping |
+| `id`       | string | Optional fixed ID |
+
+**Response (200):**
+
+```json
+{
+  "status": "created",
+  "reachable": true,
+  "agent": { ... }
+}
+```
+
+---
+
+### POST /api/agents/{agent_id}/ping-check
+
+Run an immediate manual reachability check for a ping-only target.
+
+**Auth:** admin or user
+
+**Response (200):**
+
+```json
+{
+  "status": "ok",
+  "reachable": true
+}
+```
+
+This endpoint is only valid for ping-only targets.
+
+---
+
 ### POST /api/agents/{agent_id}/jobs
 
 Creates a new job for an agent.
@@ -363,8 +408,10 @@ Creates a new job for an agent.
 
 | Field    | Type   | Description |
 |----------|--------|-------------|
-| `type`   | string | `"patch"`, `"reboot"`, `"autoremove"`, `"update_agent"`, or `"deploy_ssl"` |
+| `type`   | string | Any allowlisted job type from the server, including Linux, SSL, and HA-specific jobs |
 | `params` | object | Optional parameters |
+
+Ping-only targets reject managed jobs on this endpoint.
 
 ---
 

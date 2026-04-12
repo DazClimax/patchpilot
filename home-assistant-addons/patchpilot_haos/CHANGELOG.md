@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.23
+
+- Added support for signed CA rollover payloads so the HAOS add-on can follow the new trust-first HTTPS deployment flow.
+- Added support for targeted Home Assistant `update.*` entity installs through PatchPilot.
+- Improved HAOS update feedback and add-on-triggered agent update handling.
+- Bumped the HAOS-reported PatchPilot agent version to `1.8`.
+
+## 0.2.22
+
+- Home Assistant OS updates now create a backup before PatchPilot starts the OS update.
+- Bumped the HAOS-reported PatchPilot agent version to `1.8` for the backup-first OS flow.
+
 ## 0.2.21
 
 - Added a persistent HA add-on update callback so PatchPilot can confirm the new agent version after Home Assistant restarts the add-on.

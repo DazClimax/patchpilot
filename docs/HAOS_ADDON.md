@@ -38,6 +38,7 @@ The add-on lives in this repository under:
    - optional `advertise_ip`
    - optional `agent_update_webhook_id`
    - optional `ca_pem`
+   - optional `ca_rollover_pub_pem`
 5. Start the add-on.
 6. If you keep `agent_update_webhook_id` empty, update the PatchPilot HAOS add-on manually through the Home Assistant Add-on Store. If you configure the webhook flow below, PatchPilot can trigger that update for you.
 
@@ -53,6 +54,10 @@ ca_pem: |
   -----BEGIN CERTIFICATE-----
   ...
   -----END CERTIFICATE-----
+ca_rollover_pub_pem: |
+  -----BEGIN PUBLIC KEY-----
+  ...
+  -----END PUBLIC KEY-----
 ```
 
 ## Notes
@@ -81,6 +86,13 @@ For HTTPS certificate changes, include both of these values in the add-on config
 - `ca_rollover_pub_pem`
 
 PatchPilot uses them to deliver signed CA rollover payloads during **Deploy Trust to Agents**. If the HAOS add-on is online during that rollout, it can accept the new trust bundle automatically before the server certificate is switched.
+
+For normal certificate rotation, treat the YAML values above as recovery material. The standard flow is:
+
+1. Keep the HAOS add-on online.
+2. Run **Deploy Trust to Agents** in PatchPilot.
+3. Let PatchPilot queue `deploy_ssl` for the HAOS add-on.
+4. Only then switch the server certificate or re-enable HTTPS.
 
 Automation example:
 
