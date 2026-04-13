@@ -21,20 +21,9 @@ from fastapi import FastAPI, Request, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import APIKeyHeader
 
 from db import init_db, db as get_db_ctx, hash_password, verify_password
-from deps import (
-    _ADMIN_KEY_ENV,
-    _delete_session_from_db,
-    _delete_sessions_for_user,
-    _hash_token,
-    _load_sessions_from_db,
-    _persist_session,
-    _sessions,
-    require_admin,
-    require_role,
-    verify_agent,
-)
 from scheduler import (
     scheduler,
     schedule_job,
@@ -47,11 +36,6 @@ from scheduler import (
     trigger_ping_check_for_agent,
 )
 from notifications import notification_manager
-from routes.agents import router as agents_router
-from routes.auth import router as auth_router
-from routes.dashboard import router as dashboard_router
-from routes.deploy import router as deploy_router
-from routes.settings import router as settings_router
 import metrics as metrics_module
 
 
@@ -201,13 +185,146 @@ async def _security_headers(request: Request, call_next):
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return response
 
+# ---------------------------------------------------------------------------
+# Admin-Key — protects all Web-UI endpoints (Dashboard, Jobs, Schedules …).
+# Set PATCHPILOT_ADMIN_KEY as an environment variable on the server.
+# If not set, a random key is generated at startup and logged
+# (safe for initial installation).
+# ---------------------------------------------------------------------------
+_ADMIN_KEY_ENV = os.environ.get("PATCHPILOT_ADMIN_KEY", "")
+if not _ADMIN_KEY_ENV:
+    _ADMIN_KEY_ENV = secrets.token_hex(32)
+    import sys
+    print(
+        f"[patchpilot] WARNING: PATCHPILOT_ADMIN_KEY not set. "
+        f"Using ephemeral key for this session: {_ADMIN_KEY_ENV}",
+        file=sys.stderr,
+    )
+
+_admin_key_header = APIKeyHeader(name="x-admin-key", auto_error=False)
+
+
+def require_admin(x_admin_key: str = Depends(_admin_key_header)):
+    """Dependency: validates the admin key for web-UI endpoints."""
+    if not x_admin_key or not hmac.compare_digest(
+        x_admin_key.encode(), _ADMIN_KEY_ENV.encode()
+    ):
+        raise HTTPException(status_code=401, detail="Invalid or missing admin key")
+
+
+# ---------------------------------------------------------------------------
+# Session-based auth (username + password)
+# ---------------------------------------------------------------------------
+_sessions: dict[str, dict] = {}  # token → {user_id, username, role, created_ts}
+_SESSION_MAX_AGE = 86400  # 24h
+
+_auth_header = APIKeyHeader(name="authorization", auto_error=False)
+
+
+_session_last_cleanup = 0.0
+
+
+def _load_sessions_from_db():
+    """Load persisted sessions from DB into memory on startup."""
+    now = time.time()
+    try:
+        with get_db_ctx() as conn:
+            rows = conn.execute("SELECT token, user_id, username, role, created_ts FROM sessions").fetchall()
+        for row in rows:
+            if now - row["created_ts"] < _SESSION_MAX_AGE:
+                _sessions[row["token"]] = {
+                    "user_id":    row["user_id"],
+                    "username":   row["username"],
+                    "role":       row["role"],
+                    "created_ts": row["created_ts"],
+                }
+    except Exception as exc:
+        log.warning("_load_sessions_from_db: %s", exc)
+
+
+def _persist_session(token: str, session: dict):
+    """Write a session to the DB for persistence across restarts."""
+    try:
+        with get_db_ctx() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO sessions (token, user_id, username, role, created_ts) VALUES (?,?,?,?,?)",
+                (token, session["user_id"], session["username"], session["role"], session["created_ts"]),
+            )
+    except Exception as exc:
+        log.warning("_persist_session: %s", exc)
+
+
+def _delete_session_from_db(token: str):
+    """Remove a single session from the DB."""
+    try:
+        with get_db_ctx() as conn:
+            conn.execute("DELETE FROM sessions WHERE token=?", (token,))
+    except Exception as exc:
+        log.warning("_delete_session_from_db: %s", exc)
+
+
+def _delete_sessions_for_user(user_id: int):
+    """Remove all DB sessions for a user (on password change / deletion)."""
+    try:
+        with get_db_ctx() as conn:
+            conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+    except Exception as exc:
+        log.warning("_delete_sessions_for_user: %s", exc)
+
+
+def _cleanup_sessions():
+    """Evict expired sessions periodically (every 5 min)."""
+    global _session_last_cleanup
+    now = time.time()
+    if now - _session_last_cleanup < 300:
+        return
+    _session_last_cleanup = now
+    expired = [t for t, s in _sessions.items() if now - s["created_ts"] >= _SESSION_MAX_AGE]
+    for t in expired:
+        _sessions.pop(t, None)
+    try:
+        with get_db_ctx() as conn:
+            conn.execute("DELETE FROM sessions WHERE created_ts < ?", (now - _SESSION_MAX_AGE,))
+    except Exception as exc:
+        log.warning("_cleanup_sessions DB error: %s", exc)
+
+
+def _get_session(request: Request) -> dict | None:
+    """Extract session from Authorization: Bearer <token> header."""
+    _cleanup_sessions()
+    auth_val = request.headers.get("authorization", "")
+    if auth_val.startswith("Bearer "):
+        token = auth_val[7:]
+        session = _sessions.get(token)
+        if session and (time.time() - session["created_ts"]) < _SESSION_MAX_AGE:
+            return session
+        _sessions.pop(token, None)  # expired
+    return None
+
+
+def require_role(*roles: str):
+    """Dependency factory: require user to have one of the given roles.
+    Also accepts legacy x-admin-key header (treated as admin)."""
+    def dependency(request: Request, x_admin_key: str = Depends(_admin_key_header)):
+        # Legacy admin key check
+        if x_admin_key and hmac.compare_digest(
+            x_admin_key.encode(), _ADMIN_KEY_ENV.encode()
+        ):
+            request.state.user = {"username": "admin", "role": "admin", "user_id": 0}
+            return
+        # Session token check
+        session = _get_session(request)
+        if session and session["role"] in roles:
+            request.state.user = session
+            return
+        if session:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return dependency
+
+
 # Register monitoring router — must be after require_admin is defined
 app.include_router(metrics_module.router, dependencies=[Depends(require_role("admin"))])
-app.include_router(agents_router)
-app.include_router(auth_router)
-app.include_router(dashboard_router)
-app.include_router(deploy_router)
-app.include_router(settings_router)
 
 STATIC_DIR = Path(os.environ.get("PATCHPILOT_STATIC_DIR", str(Path(__file__).parent.parent / "frontend" / "dist")))
 
@@ -725,7 +842,8 @@ def _update_env_port(new_port: str, old_port: str) -> None:
         tmp.write_text(content)
         os.replace(tmp, _ENV_FILE)
     except Exception as exc:
-        raise RuntimeError(f"could not update environment file for port change: {exc}") from exc
+        import sys
+        print(f"[patchpilot] Warning: could not update .env: {exc}", file=sys.stderr)
 
 
 def _update_env_key(key: str, value: str) -> None:
@@ -745,36 +863,21 @@ def _update_env_key(key: str, value: str) -> None:
         tmp.write_text("\n".join(result) + "\n")
         os.replace(tmp, _ENV_FILE)
     except Exception as exc:
-        raise RuntimeError(f"could not update environment file for {key}: {exc}") from exc
+        import sys
+        print(f"[patchpilot] Warning: could not update .env {key}: {exc}", file=sys.stderr)
 
 
 def _schedule_restart(delay: float = 1.5) -> None:
-    """Restart PatchPilot after *delay* s.
-
-    Default to a process exit so systemd `Restart=always` can bring the service
-    back without relying on privilege escalation from the service user.
-    """
+    """Restart PatchPilot after *delay* s (systemd by default, process exit in containers)."""
     def _do() -> None:
         time.sleep(delay)
-        mode = os.environ.get("PATCHPILOT_RESTART_MODE", "process")
         try:
-            if mode == "systemd":
-                if os.geteuid() == 0:
-                    result = subprocess.run(["systemctl", "restart", "patchpilot"], check=False)
-                else:
-                    result = subprocess.run(["sudo", "-n", "systemctl", "restart", "patchpilot"], check=False)
-                if result.returncode == 0:
-                    return
-                import sys
-                print(
-                    f"[patchpilot] Warning: systemd restart returned {result.returncode}, "
-                    "falling back to process restart",
-                    file=sys.stderr,
-                )
+            if os.environ.get("PATCHPILOT_RESTART_MODE", "systemd") == "process":
+                os._exit(0)
+            subprocess.run(["sudo", "systemctl", "restart", "patchpilot"], check=False)
         except Exception as exc:
             import sys
-            print(f"[patchpilot] Warning: restart failed ({exc}), falling back to process restart", file=sys.stderr)
-        os._exit(0)
+            print(f"[patchpilot] Warning: restart failed: {exc}", file=sys.stderr)
     threading.Thread(target=_do, daemon=True).start()
 
 
@@ -840,6 +943,14 @@ def _load_schedules():
         ).fetchall()
     for row in rows:
         schedule_job(row["id"], row["name"], row["cron"], row["action"], row["target"])
+
+
+# ---------------------------------------------------------------------------
+# Auth helper
+# ---------------------------------------------------------------------------
+def _hash_token(token: str) -> str:
+    """CRIT-5: One-way hash tokens before DB storage."""
+    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def _redact_agent_record(row: dict) -> dict:
@@ -927,6 +1038,24 @@ def _agent_online_status(row: dict, last_job: dict | None = None) -> dict:
     return row
 
 
+def verify_agent(agent_id: str, x_token: str):
+    """Verify agent token against the stored SHA-256 hash."""
+    with get_db_ctx() as conn:
+        row = conn.execute(
+            "SELECT token FROM agents WHERE id = ?", (agent_id,)
+        ).fetchone()
+
+    # Always compute against a plausible hash so response time doesn't leak
+    # whether agent_id exists.
+    dummy = _hash_token(secrets.token_hex(32))
+    stored = row["token"] if row else dummy
+    submitted_hash = _hash_token(x_token)
+    hash_ok = hmac.compare_digest(submitted_hash, stored)
+
+    if not row or not hash_ok:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+
 # ---------------------------------------------------------------------------
 # Agent ID rename aliases (old_id → new_id). Persisted in DB.
 # ---------------------------------------------------------------------------
@@ -962,6 +1091,939 @@ def _clear_alias(old_id: str = "", new_id: str = ""):
 
 
 # ===========================================================================
+# AGENT API
+# ===========================================================================
+
+@app.post("/api/agents/register")
+async def register_agent(request: Request):
+    _check_rate_limit(request)
+    data = await request.json()
+    agent_id = data.get("id") or secrets.token_hex(8)
+    _validate_agent_id(agent_id)
+    # SEC M-3: Single transaction to avoid TOCTOU race on agent existence check
+    fields = _sanitize_agent_fields(data)   # MED-6: cap free-form fields
+    fields["package_manager"] = _infer_package_manager(fields)
+    fields["agent_type"] = _infer_agent_type(fields)
+    fields["capabilities"] = _normalize_capabilities(fields)
+    token = secrets.token_hex(32)
+    with get_db_ctx() as conn:
+        existing = conn.execute("SELECT token FROM agents WHERE id=?", (agent_id,)).fetchone()
+        if existing:
+            x_token = request.headers.get("x-token", "")
+            reg_key = request.headers.get("x-register-key", "") or data.get("register_key", "")
+            if x_token:
+                submitted_hash = _hash_token(x_token)
+                stored = existing["token"]
+                hash_ok = hmac.compare_digest(submitted_hash, stored)
+                if not hash_ok:
+                    raise HTTPException(status_code=403, detail="Invalid token for re-registration")
+            elif reg_key:
+                # Allow re-registration with a valid register key (fresh install scenario)
+                _verify_register_key(reg_key)
+            else:
+                raise HTTPException(status_code=403, detail="Re-registration requires current token or valid register key")
+        else:
+            # NEW agent: require valid rotating register key
+            reg_key = request.headers.get("x-register-key", "") or data.get("register_key", "")
+            _verify_register_key(reg_key)
+        conn.execute(
+            """INSERT INTO agents (id, hostname, ip, os_pretty, kernel, arch, package_manager, agent_version, agent_type, capabilities, token)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   hostname = excluded.hostname,
+                   ip       = excluded.ip,
+                   os_pretty= excluded.os_pretty,
+                   kernel   = excluded.kernel,
+                   arch     = excluded.arch,
+                   package_manager = excluded.package_manager,
+                   agent_version = excluded.agent_version,
+                   agent_type = excluded.agent_type,
+                   capabilities = excluded.capabilities,
+                   token    = excluded.token""",
+            (
+                agent_id,
+                fields["hostname"] or "unknown",
+                fields["ip"],
+                fields["os_pretty"],
+                fields["kernel"],
+                fields["arch"],
+                fields["package_manager"],
+                fields["agent_version"] or "",
+                fields["agent_type"],
+                fields["capabilities"],
+                _hash_token(token),   # CRIT-5: store hash, return plaintext once
+            ),
+        )
+    return {"agent_id": agent_id, "token": token}
+
+
+@app.post("/api/agents/{agent_id}/heartbeat")
+async def heartbeat(agent_id: str, request: Request, x_token: str = Header(...)):
+    # Check if this agent was renamed — resolve alias and verify under new ID
+    resolved_id = _resolve_alias(agent_id)
+    if resolved_id != agent_id:
+        verify_agent(resolved_id, x_token)
+        agent_id = resolved_id  # use new ID for all DB operations below
+    else:
+        verify_agent(agent_id, x_token)
+        # Agent is using its current ID directly — clean up any stale alias pointing to it
+        _clear_alias(new_id=agent_id)  # no-op if no alias exists
+    _check_agent_rate_limit(request)
+
+    # PERFORMANCE: Heartbeat throttling — if the same agent checks in more
+    # often than _HEARTBEAT_MIN_INTERVAL seconds we skip the DB write entirely.
+    # This protects the Raspberry Pi from agents mis-configured with very short
+    # intervals. The agent still gets "ok" so it doesn't error-loop.
+    now_mono = time.monotonic()
+    last = _last_heartbeat.get(agent_id, 0.0)
+    if now_mono - last < _HEARTBEAT_MIN_INTERVAL:
+        # Agent canonical URL always points to the agent port (HTTP)
+        return {"status": "ok", "canonical_port": str(_AGENT_PORT), "canonical_url": f"{_AGENT_SCHEME}://{_get_internal_ip()}:{_AGENT_PORT}", "canonical_id": agent_id}
+    _last_heartbeat[agent_id] = now_mono
+
+    # Heartbeat accepted — also invalidate dashboard + agent caches so the
+    # next UI poll sees fresh data rather than a stale snapshot.
+    _cache_invalidate("dashboard", f"agent:{agent_id}")
+
+    data = await request.json()
+    packages = data.get("packages", [])
+    # HIGH-4: Cap packages array to prevent oversized payloads
+    if len(packages) > 2000:
+        packages = packages[:2000]
+    fields = _sanitize_agent_fields(data)   # MED-6: cap free-form fields
+    fields["package_manager"] = _infer_package_manager(fields)
+    fields["agent_type"] = _infer_agent_type(fields)
+    fields["capabilities"] = _normalize_capabilities(fields)
+    # MEDIUM-6: Validate uptime_seconds type and range
+    raw_uptime = data.get("uptime_seconds")
+    uptime_seconds = None
+    if raw_uptime is not None:
+        try:
+            uptime_seconds = int(raw_uptime)
+            if not (0 <= uptime_seconds <= 2147483647):
+                uptime_seconds = None
+        except (ValueError, TypeError):
+            uptime_seconds = None
+    # Disk usage — validate and cap to sane range (max 256 TiB per field)
+    _DISK_MAX = 256 * 1024 ** 4
+    def _parse_disk_bytes(v) -> int | None:
+        if v is None:
+            return None
+        try:
+            n = int(v)
+            return n if 0 <= n <= _DISK_MAX else None
+        except (ValueError, TypeError):
+            return None
+    disk_total = _parse_disk_bytes(data.get("disk_total"))
+    disk_used  = _parse_disk_bytes(data.get("disk_used"))
+    disk_free  = _parse_disk_bytes(data.get("disk_free"))
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    config_review_required = 1 if data.get("config_review_required") else 0
+    config_review_note = str(data.get("config_review_note", ""))[:4000] if config_review_required else ""
+    # Detect connection protocol from the request
+    protocol = "https" if request.url.scheme == "https" else "http"
+    with get_db_ctx() as conn:
+        current = conn.execute(
+            "SELECT hostname, pending_count, reboot_required FROM agents WHERE id=?",
+            (agent_id,),
+        ).fetchone()
+        hostname = fields["hostname"] or (current["hostname"] if current else "unknown")
+        prev_pending  = current["pending_count"]  if current else 0
+        prev_reboot   = current["reboot_required"] if current else 0
+        conn.execute(
+            """UPDATE agents SET
+                hostname=?, ip=?, os_pretty=?, kernel=?, arch=?, package_manager=?, agent_version=?, agent_type=?, capabilities=?,
+                reboot_required=?, pending_count=?, last_seen=?, uptime_seconds=?,
+                protocol=?, config_review_required=?, config_review_note=?,
+                disk_total=?, disk_used=?, disk_free=?
+               WHERE id=?""",
+            (
+                hostname,
+                fields["ip"],
+                fields["os_pretty"],
+                fields["kernel"],
+                fields["arch"],
+                fields["package_manager"],
+                fields["agent_version"] or "",
+                fields["agent_type"],
+                fields["capabilities"],
+                1 if data.get("reboot_required") else 0,
+                len(packages),
+                now,
+                uptime_seconds,
+                protocol,
+                config_review_required,
+                config_review_note,
+                disk_total,
+                disk_used,
+                disk_free,
+                agent_id,
+            ),
+        )
+        conn.execute("DELETE FROM packages WHERE agent_id=?", (agent_id,))
+        # SEC M-1: Truncate package fields to prevent storage bloat from compromised agents
+        conn.executemany(
+            "INSERT OR REPLACE INTO packages (agent_id, name, current_ver, source_kind, source_id, new_ver) VALUES (?,?,?,?,?,?)",
+            [(agent_id,
+              str(p.get("name", ""))[:256],
+              str(p.get("current", ""))[:128] if p.get("current") else None,
+              str(p.get("source_kind", ""))[:64] if p.get("source_kind") else None,
+              str(p.get("source_id", ""))[:256] if p.get("source_id") else None,
+              str(p.get("new", ""))[:128] if p.get("new") else None,
+              ) for p in packages],
+        )
+    # Notify on new updates or newly required reboot — once per episode.
+    # Dedup state is persisted in DB (updates_notified / reboot_notified columns)
+    # so notifications are not repeated after server restarts or across processes.
+    new_pending = len(packages)
+    new_reboot  = 1 if data.get("reboot_required") else 0
+    with get_db_ctx() as conn:
+        flags = conn.execute(
+            "SELECT updates_notified, reboot_notified FROM agents WHERE id=?", (agent_id,)
+        ).fetchone()
+        already_updates = flags["updates_notified"] if flags else 0
+        already_reboot  = flags["reboot_notified"]  if flags else 0
+
+        if new_pending > 0:
+            if not already_updates:
+                notification_manager.notify_patch_available({"hostname": hostname, "id": agent_id}, new_pending)
+                conn.execute("UPDATE agents SET updates_notified=1 WHERE id=?", (agent_id,))
+        else:
+            if already_updates:
+                conn.execute("UPDATE agents SET updates_notified=0 WHERE id=?", (agent_id,))
+
+        if new_reboot:
+            if not already_reboot:
+                notification_manager.notify_reboot_required({"hostname": hostname, "id": agent_id})
+                conn.execute("UPDATE agents SET reboot_notified=1 WHERE id=?", (agent_id,))
+        else:
+            if already_reboot:
+                conn.execute("UPDATE agents SET reboot_notified=0 WHERE id=?", (agent_id,))
+
+    # Agent canonical URL always points to the agent port (HTTP, no SSL)
+    return {"status": "ok", "canonical_port": str(_AGENT_PORT), "canonical_url": f"{_AGENT_SCHEME}://{_get_internal_ip()}:{_AGENT_PORT}", "canonical_id": agent_id}
+
+
+@app.get("/api/agents/{agent_id}/jobs")
+def get_jobs(agent_id: str, x_token: str = Header(...)):
+    # Resolve rename alias so old agents can still poll jobs under new ID
+    agent_id = _resolve_alias(agent_id)
+    verify_agent(agent_id, x_token)
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            "SELECT id, type, params FROM jobs WHERE agent_id=? AND status='pending' ORDER BY id",
+            (agent_id,),
+        ).fetchall()
+        if rows:
+            ids = [r["id"] for r in rows]
+            # SECURITY: Use only parameterized placeholders — never f-string
+            # interpolation — in SQL statements.  The placeholder list itself
+            # is built from the length of the id list, not from user input,
+            # so this is safe; but we also add an explicit integer cast to be
+            # absolutely sure no non-integer value can sneak in.
+            placeholders = ",".join("?" * len(ids))
+            safe_ids = [int(i) for i in ids]  # enforce integer type
+            conn.execute(
+                f"UPDATE jobs SET status='running', started=datetime('now','localtime') WHERE id IN ({placeholders})",  # noqa: S608
+                safe_ids,
+            )
+    # If SSL is active and there's an update_agent job, inline the agent code
+    # so the agent doesn't need to make a separate HTTPS download (bootstrap problem)
+    ssl_active = bool(os.environ.get("SSL_CERTFILE"))
+    agent_py = Path(__file__).parent.parent / "agent" / "agent.py"
+
+    result = []
+    for r in rows:
+        job = {"id": r["id"], "type": r["type"], "params": json.loads(r["params"] or "{}")}
+        if r["type"] == "update_agent" and ssl_active and agent_py.exists():
+            import base64 as _b64
+            code = agent_py.read_bytes()
+            job["params"]["inline_code"] = _b64.b64encode(code).decode()
+            job["params"]["inline_sha256"] = hashlib.sha256(code).hexdigest()
+        result.append(job)
+    return result
+
+
+@app.post("/api/agents/{agent_id}/jobs/{job_id}/result")
+async def job_result(
+    agent_id: str, job_id: int, request: Request, x_token: str = Header(...)
+):
+    agent_id = _resolve_alias(agent_id)
+    verify_agent(agent_id, x_token)
+    data = await request.json()
+    # M-4: Cap output at 64 KB to prevent runaway storage on the Pi
+    output = (data.get("output") or "")[:65536]
+    # CRIT-3: Allowlist job status so agent-reported values can't poison Prometheus metrics
+    _raw_status = data.get("status", "done")
+    status = _raw_status if _raw_status in {"done", "failed"} else "done"
+    with get_db_ctx() as conn:
+        conn.execute(
+            "UPDATE jobs SET status=?, output=?, finished=datetime('now','localtime') WHERE id=? AND agent_id=?",
+            (status, output, job_id, agent_id),
+        )
+        agent_row = conn.execute(
+            "SELECT hostname FROM agents WHERE id=?", (agent_id,)
+        ).fetchone()
+        job_row = conn.execute(
+            "SELECT type, params FROM jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        # Chain: if update_agent succeeded and has a chain param, create the follow-up job
+        if job_row and job_row["type"] == "update_agent" and status == "done":
+            try:
+                params = json.loads(job_row["params"] or "{}")
+                chain_type = params.get("chain")
+                if chain_type and chain_type in ALLOWED_JOB_TYPES:
+                    chain_params = dict(params.get("chain_params") or {})
+                    if params.get("batch") and "batch" not in chain_params:
+                        chain_params["batch"] = params["batch"]
+                    conn.execute(
+                        "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, ?, ?, datetime('now','localtime'))",
+                        (agent_id, chain_type, json.dumps(chain_params)),
+                    )
+            except (json.JSONDecodeError, AttributeError):
+                pass
+    # Notify via Telegram on job completion
+    if agent_row and job_row:
+        hostname = agent_row["hostname"] or agent_id
+        jtype = (job_row["type"] or "job").upper()
+        if status == "failed":
+            notification_manager.notify_job_failed(
+                {"hostname": hostname, "id": agent_id},
+                {"id": job_id, "type": job_row["type"], "output": output},
+            )
+        else:
+            notification_manager.notify_job_success(
+                {"hostname": hostname, "id": agent_id},
+                {"id": job_id, "type": job_row["type"], "output": output},
+            )
+    return {"status": "ok"}
+
+
+@app.post("/api/agents/{agent_id}/ha-update-callback")
+async def ha_update_callback(agent_id: str, request: Request, x_token: str = Header(...)):
+    agent_id = _resolve_alias(agent_id)
+    verify_agent(agent_id, x_token)
+    data = await request.json()
+    batch = re.sub(r'[^a-fA-F0-9]', '', str(data.get("batch", "") or ""))
+    agent_version = str(data.get("agent_version", "") or "")
+    if not batch:
+        raise HTTPException(status_code=422, detail="batch is required")
+    output = f"HA add-on restart callback received. Agent version: {agent_version or 'unknown'}"
+    batch_filter = f'%"batch": "{batch}"%'
+    with get_db_ctx() as conn:
+        row = conn.execute("""
+            SELECT id FROM jobs
+            WHERE agent_id=? AND type='ha_trigger_agent_update' AND params LIKE ?
+            ORDER BY id DESC LIMIT 1
+        """, (agent_id, batch_filter)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Matching HA update job not found")
+        conn.execute(
+            "UPDATE jobs SET output=? WHERE id=? AND agent_id=?",
+            (output, row["id"], agent_id),
+        )
+    return {"status": "ok"}
+
+
+@app.post("/api/agents/{agent_id}/jobs/{job_id}/cancel", dependencies=[Depends(require_role("admin","user"))])
+def cancel_job(agent_id: str, job_id: int):
+    """Cancel a pending or running job."""
+    with get_db_ctx() as conn:
+        row = conn.execute(
+            "SELECT status FROM jobs WHERE id=? AND agent_id=?", (job_id, agent_id)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if row["status"] not in ("pending", "running"):
+            raise HTTPException(status_code=422, detail=f"Cannot cancel job in '{row['status']}' state")
+        conn.execute(
+            "UPDATE jobs SET status='failed', output=COALESCE(output,'') || '\n[cancelled by user]', "
+            "finished=datetime('now','localtime') WHERE id=? AND agent_id=?",
+            (job_id, agent_id),
+        )
+    return {"status": "ok"}
+
+
+@app.post("/api/agents/{agent_id}/jobs/cancel-pending", dependencies=[Depends(require_role("admin","user"))])
+def cancel_pending_jobs(agent_id: str):
+    """Cancel all pending jobs for an agent."""
+    with get_db_ctx() as conn:
+        result = conn.execute(
+            "UPDATE jobs SET status='failed', output=COALESCE(output,'') || '\n[cancelled by user]', "
+            "finished=datetime('now','localtime') WHERE agent_id=? AND status='pending'",
+            (agent_id,),
+        )
+        count = result.rowcount
+    _cache_invalidate("dashboard")
+    return {"status": "ok", "cancelled": count}
+
+
+# ===========================================================================
+# WEB API (for React frontend)
+# ===========================================================================
+
+@app.get("/api/dashboard", dependencies=[Depends(require_role("admin","user","readonly"))])
+def api_dashboard():
+    # PERFORMANCE: Cache dashboard response for 10 s to avoid hammering SQLite
+    # on every frontend poll.  Invalidated by heartbeat and job-creation writes.
+    cached = _cache_get("dashboard")
+    if cached is not None:
+        return cached
+
+    with get_db_ctx() as conn:
+        agents = conn.execute(
+            """SELECT agents.*,
+               (SELECT COUNT(*) FROM packages p WHERE p.agent_id = agents.id) AS live_pending_count,
+               (julianday('now','localtime') - julianday(last_seen)) * 86400 as seconds_ago
+               FROM agents ORDER BY hostname"""
+        ).fetchall()
+        # Last finished job per agent (type + status)
+        last_jobs = conn.execute(
+            """SELECT j.agent_id, j.type, j.status, j.finished, j.started, j.params
+               FROM jobs j
+               INNER JOIN (
+                   SELECT agent_id, MAX(id) as max_id
+                   FROM jobs
+                   GROUP BY agent_id
+               ) latest ON j.id = latest.max_id"""
+        ).fetchall()
+        package_rows = conn.execute(
+            "SELECT agent_id, name, source_id FROM packages"
+        ).fetchall()
+    package_state_by_agent: dict[str, dict[str, set[str]]] = {}
+    for row in package_rows:
+        state = package_state_by_agent.setdefault(row["agent_id"], {"names": set(), "source_ids": set()})
+        if row["name"]:
+            state["names"].add(str(row["name"]))
+        if row["source_id"]:
+            state["source_ids"].add(str(row["source_id"]))
+    last_job_map = {r["agent_id"]: dict(r) for r in last_jobs}
+    result = []
+    for a in agents:
+        row = _redact_agent_record(dict(a))
+        row["pending_count"] = row.pop("live_pending_count", row.get("pending_count", 0))
+        lj = last_job_map.get(row["id"])
+        if lj:
+            display = _resolve_ha_job_display_status(
+                dict(lj),
+                package_state_by_agent.get(row["id"], {"names": set(), "source_ids": set()}),
+                row.get("last_seen"),
+            )
+            row["last_job_type"] = lj["type"]
+            row["last_job_status"] = display["status"]
+            row["last_job_finished"] = display["finished"]
+            lj = {**dict(lj), **display}
+        row = _agent_online_status(row, lj)
+        result.append(row)
+    online = sum(1 for a in result if a.get("effective_online"))
+    reboot_needed = sum(1 for a in result if a.get("reboot_required"))
+    total_pending = sum(a.get("pending_count") or 0 for a in result)
+    payload = {
+        "agents": result,
+        "agent_target_version": _AGENT_TARGET_VERSION,
+        "ha_agent_target_version": _HA_AGENT_TARGET_VERSION,
+        "stats": {
+            "online": online,
+            "total": len(result),
+            "reboot_needed": reboot_needed,
+            "total_pending": total_pending,
+        },
+    }
+    _cache_set("dashboard", payload, _CACHE_TTL_DASHBOARD)
+    return payload
+
+
+@app.post("/api/register-key", dependencies=[Depends(require_role("admin"))])
+def api_register_key_generate():
+    """Generate a fresh registration key (valid 5 min). Old key is replaced."""
+    key, remaining = _generate_register_key()
+    return {"key": key, "expires_in": int(remaining)}
+
+@app.get("/api/register-key", dependencies=[Depends(require_role("admin"))])
+def api_register_key_status():
+    """Check if a register key is currently active.
+    Note: key is hashed in DB — we never return the hash to the UI."""
+    key, remaining = _get_active_register_key()
+    if key is None:
+        return {"active": False, "key": None, "expires_in": 0}
+    return {"active": True, "key": None, "expires_in": int(remaining)}
+
+
+@app.get("/api/deploy/bootstrap", dependencies=[Depends(require_role("admin"))])
+def api_deploy_bootstrap():
+    """Return authenticated bootstrap material for the Deploy page."""
+    cert = _SSL_DIR / "cert.pem"
+    ca_pem_b64 = ""
+    if cert.exists():
+        ca_pem_b64 = base64.b64encode(cert.read_bytes()).decode()
+    ca_rollover_pub_pem_b64 = base64.b64encode(_get_ca_rollover_public_pem()).decode()
+    return {
+        "ca_pem_b64": ca_pem_b64,
+        "ca_rollover_pub_pem_b64": ca_rollover_pub_pem_b64,
+    }
+
+
+@app.get("/api/ping")
+def api_ping():
+    """Unauthenticated liveness check — used by the UI status indicator."""
+    return {"status": "ok", "utc": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/api/server-time")
+def api_server_time():
+    """Return current server local time — cron expressions are evaluated
+    in the configured scheduler timezone."""
+    import zoneinfo
+    tz = zoneinfo.ZoneInfo(get_scheduler_timezone())
+    now = datetime.now(tz)
+    tz_abbr = now.strftime("%Z")  # CET or CEST
+    return {
+        "local": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "tz": tz_abbr,
+        "iso": now.isoformat(),
+    }
+
+
+@app.get("/api/agents/{agent_id}", dependencies=[Depends(require_role("admin","user","readonly"))])
+def api_agent(agent_id: str, days: int = 7, limit: int = 10, offset: int = 0):
+    # PERFORMANCE: Cache per-agent detail page for 5 s.  This endpoint joins
+    # three tables (agents + packages + jobs) — caching saves the most work.
+    # Invalidated on heartbeat (packages change) and job creation.
+    days = 0 if days <= 0 else min(days, 365)
+    limit = 0 if limit <= 0 else min(limit, 500)
+    offset = max(offset, 0)
+    cache_key = f"agent:{agent_id}:days:{days}:limit:{limit}:offset:{offset}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    with get_db_ctx() as conn:
+        agent = conn.execute(
+            """SELECT agents.*,
+               (SELECT COUNT(*) FROM packages p WHERE p.agent_id = agents.id) AS live_pending_count,
+               (julianday('now','localtime') - julianday(last_seen)) * 86400 as seconds_ago
+               FROM agents WHERE id=?""",
+            (agent_id,),
+        ).fetchone()
+        if not agent:
+            raise HTTPException(status_code=404)
+        packages = conn.execute(
+            "SELECT * FROM packages WHERE agent_id=? ORDER BY name", (agent_id,)
+        ).fetchall()
+        jobs_where = " WHERE agent_id=?"
+        jobs_params: list[object] = [agent_id]
+        if days > 0:
+            jobs_where += " AND datetime(created) >= datetime('now','localtime', ?)"
+            jobs_params.append(f"-{days} days")
+        total_jobs = conn.execute(
+            f"SELECT COUNT(*) AS count FROM jobs{jobs_where}",
+            jobs_params,
+        ).fetchone()["count"]
+        jobs_query = f"SELECT * FROM jobs{jobs_where} ORDER BY id DESC"
+        if limit > 0:
+            jobs_query += " LIMIT ? OFFSET ?"
+            jobs_params = [*jobs_params, limit, offset]
+        jobs = conn.execute(jobs_query, jobs_params).fetchall()
+    now_local = datetime.now()
+    agent_dict = _redact_agent_record(dict(agent))
+    agent_dict["pending_count"] = agent_dict.pop("live_pending_count", agent_dict.get("pending_count", 0))
+    agent_last_seen_raw = agent_dict.get("last_seen")
+    agent_last_seen_dt = None
+    if agent_last_seen_raw:
+        try:
+            agent_last_seen_dt = datetime.strptime(agent_last_seen_raw, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            agent_last_seen_dt = None
+    health_job_types = {
+        "patch",
+        "dist_upgrade",
+        "force_patch",
+        "refresh_updates",
+        "reboot",
+        "update_agent",
+        "ha_trigger_agent_update",
+        "ha_core_update",
+        "ha_backup_update",
+        "ha_supervisor_update",
+        "ha_os_update",
+        "ha_addon_update",
+        "ha_addons_update",
+        "ha_entity_update",
+    }
+    package_state = {
+        "names": {str(p["name"]) for p in packages if p["name"]},
+        "source_ids": {str(p["source_id"]) for p in packages if p["source_id"]},
+    }
+    latest_job_for_connectivity: dict | None = None
+    jobs_payload = []
+    for j in jobs:
+        job = dict(j)
+        job.update(_resolve_ha_job_display_status(job, package_state, agent_dict.get("last_seen")))
+        if latest_job_for_connectivity is None:
+            latest_job_for_connectivity = dict(job)
+        health_status = None
+        if job.get("status") == "done" and job.get("type") in health_job_types:
+            finished_raw = job.get("finished")
+            finished_dt = None
+            if finished_raw:
+                try:
+                    finished_dt = datetime.strptime(finished_raw, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    finished_dt = None
+            if finished_dt:
+                if agent_last_seen_dt and agent_last_seen_dt >= finished_dt:
+                    health_status = "ok"
+                elif (now_local - finished_dt).total_seconds() <= 600:
+                    health_status = "pending"
+                else:
+                    health_status = "stale"
+        job["health_status"] = health_status
+        jobs_payload.append(job)
+    agent_dict = _agent_online_status(agent_dict, latest_job_for_connectivity)
+    payload = {
+        "agent": agent_dict,
+        "agent_target_version": _AGENT_TARGET_VERSION,
+        "ha_agent_target_version": _HA_AGENT_TARGET_VERSION,
+        "packages": [dict(p) for p in packages],
+        "jobs": jobs_payload,
+        "jobs_total": total_jobs,
+        "jobs_has_more": False if limit == 0 else (offset + len(jobs_payload) < total_jobs),
+    }
+    _cache_set(cache_key, payload, _CACHE_TTL_AGENT)
+    return payload
+
+
+@app.post("/api/agents/ping-targets", dependencies=[Depends(require_role("admin"))])
+async def api_create_ping_target(request: Request):
+    data = await request.json()
+    hostname, address = _validate_ping_target_fields(
+        data.get("hostname"),
+        data.get("address") or data.get("ip"),
+    )
+    requested_id = str(data.get("id") or "").strip()
+    if requested_id:
+        _validate_agent_id(requested_id)
+    with get_db_ctx() as conn:
+        agent_id = requested_id or _allocate_agent_id(conn, hostname)
+        if requested_id and conn.execute("SELECT 1 FROM agents WHERE id=?", (agent_id,)).fetchone():
+            raise HTTPException(status_code=409, detail=f"Agent ID '{agent_id}' already exists")
+        conn.execute(
+            """
+            INSERT INTO agents (
+                id, hostname, ip, os_pretty, package_manager, agent_version,
+                agent_type, capabilities, protocol, token
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                agent_id,
+                hostname,
+                address,
+                "Ping monitor",
+                None,
+                "",
+                "ping",
+                "",
+                "icmp",
+                _hash_token(secrets.token_hex(32)),
+            ),
+        )
+    reachable = trigger_ping_check_for_agent(agent_id)
+    _cache_invalidate("dashboard", f"agent:{agent_id}")
+    with get_db_ctx() as conn:
+        row = conn.execute(
+            """
+            SELECT agents.*,
+                   0 AS live_pending_count,
+                   (julianday('now','localtime') - julianday(last_seen)) * 86400 as seconds_ago
+            FROM agents WHERE id=?
+            """,
+            (agent_id,),
+        ).fetchone()
+    agent_payload = _agent_online_status(_redact_agent_record(dict(row)))
+    agent_payload["pending_count"] = agent_payload.pop("live_pending_count", 0)
+    return {"status": "created", "reachable": reachable, "agent": agent_payload}
+
+
+@app.post("/api/agents/{agent_id}/ping-check", dependencies=[Depends(require_role("admin","user"))])
+def api_ping_check(agent_id: str):
+    with get_db_ctx() as conn:
+        row = conn.execute("SELECT agent_type FROM agents WHERE id=?", (agent_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if str(row["agent_type"] or "") != "ping":
+            raise HTTPException(status_code=422, detail="Ping checks are only available for ping-only targets")
+    reachable = trigger_ping_check_for_agent(agent_id)
+    _cache_invalidate("dashboard", f"agent:{agent_id}")
+    return {"status": "ok", "reachable": reachable}
+
+
+@app.post("/api/agents/{agent_id}/jobs", dependencies=[Depends(require_role("admin","user"))])
+async def create_job(agent_id: str, request: Request):
+    data = await request.json()
+    job_type = data.get("type")
+    # C-3: Allowlist job types to prevent arbitrary command injection
+    if job_type not in ALLOWED_JOB_TYPES:
+        raise HTTPException(status_code=422, detail=f"Invalid job type. Allowed: {sorted(ALLOWED_JOB_TYPES)}")
+    params = data.get("params", {})
+    with get_db_ctx() as conn:
+        agent = conn.execute("SELECT id, agent_type, capabilities FROM agents WHERE id=?", (agent_id,)).fetchone()
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if str(agent["agent_type"] or "linux") not in _MANAGED_AGENT_TYPES:
+            raise HTTPException(status_code=422, detail="This target is monitor-only and does not support jobs")
+        capabilities = set(filter(None, str(agent["capabilities"] or "").split(",")))
+        if job_type.startswith("ha_"):
+            if agent["agent_type"] != "haos":
+                raise HTTPException(status_code=422, detail="HA jobs are only available for Home Assistant OS agents")
+            required = {
+                "ha_backup": "ha_backup",
+                "ha_core_update": "ha_core_update",
+                "ha_supervisor_update": "ha_supervisor_update",
+                "ha_os_update": "ha_os_update",
+                "ha_addon_update": "ha_addon_update",
+                "ha_addons_update": "ha_addons_update",
+                "ha_entity_update": "ha_entity_update",
+            }.get(job_type)
+            if job_type == "ha_backup_update" and not {"ha_backup", "ha_core_update"}.issubset(capabilities):
+                raise HTTPException(status_code=422, detail="Agent does not support ha_backup_update")
+            if job_type == "ha_trigger_agent_update" and "ha_agent_auto_update" not in capabilities:
+                raise HTTPException(status_code=422, detail="Agent does not support ha_trigger_agent_update")
+            if required and required not in capabilities:
+                raise HTTPException(status_code=422, detail=f"Agent does not support {job_type}")
+        conn.execute(
+            "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, ?, ?, datetime('now','localtime'))",
+            (agent_id, job_type, json.dumps(params)),
+        )
+    # PERFORMANCE: Invalidate caches so the new job appears immediately in the UI.
+    _cache_invalidate("dashboard", f"agent:{agent_id}")
+    return {"status": "queued"}
+
+
+@app.post("/api/agents/{agent_id}/config-review/ack", dependencies=[Depends(require_role("admin","user"))])
+def api_ack_config_review(agent_id: str):
+    with get_db_ctx() as conn:
+        agent = conn.execute("SELECT id FROM agents WHERE id=?", (agent_id,)).fetchone()
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        conn.execute(
+            "UPDATE agents SET config_review_required=0, config_review_note='' WHERE id=?",
+            (agent_id,),
+        )
+        conn.execute(
+            "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, ?, ?, datetime('now','localtime'))",
+            (agent_id, "ack_config_review", "{}"),
+        )
+    _cache_invalidate("dashboard", f"agent:{agent_id}")
+    return {"status": "queued"}
+
+
+@app.delete("/api/agents/{agent_id}", dependencies=[Depends(require_role("admin"))])
+def delete_agent(agent_id: str):
+    with get_db_ctx() as conn:
+        conn.execute("DELETE FROM agents WHERE id=?", (agent_id,))
+    # L-2: Clear stale in-memory state so the ID can be cleanly re-registered
+    _last_heartbeat.pop(agent_id, None)
+    from scheduler import _offline_notified
+    _offline_notified.discard(agent_id)
+    _cache_invalidate("dashboard", f"agent:{agent_id}")
+    return {"status": "deleted"}
+
+
+@app.patch("/api/agents/{agent_id}/rename", dependencies=[Depends(require_role("admin"))])
+async def rename_agent(agent_id: str, request: Request):
+    """Rename an agent's ID. Updates all references (jobs, packages, schedules)."""
+    data = await request.json()
+    new_id = (data.get("new_id") or "").strip()
+    _validate_agent_id(new_id)
+    if new_id == agent_id:
+        return {"status": "unchanged"}
+    with get_db_ctx() as conn:
+        # Check new ID doesn't already exist
+        existing = conn.execute("SELECT id FROM agents WHERE id=?", (new_id,)).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail=f"Agent ID '{new_id}' already exists")
+        # Check old ID exists
+        old = conn.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone()
+        if not old:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        # Insert new agent row, migrate FK children, then delete old row.
+        # This avoids PRAGMA foreign_keys=OFF (which has no effect inside transactions).
+        cols = [k for k in dict(old).keys() if k != "id"]
+        placeholders = ", ".join(f"{c}" for c in cols)
+        qs = ", ".join("?" for _ in cols)
+        vals = [dict(old)[c] for c in cols]
+        conn.execute(f"INSERT INTO agents (id, {placeholders}) VALUES (?, {qs})", [new_id] + vals)
+        conn.execute("UPDATE jobs SET agent_id=? WHERE agent_id=?", (new_id, agent_id))
+        conn.execute("UPDATE packages SET agent_id=? WHERE agent_id=?", (new_id, agent_id))
+        conn.execute("DELETE FROM agents WHERE id=?", (agent_id,))
+        # Update schedule targets that reference this agent
+        schedules = conn.execute("SELECT id, target FROM schedules").fetchall()
+        for sched in schedules:
+            targets = [t.strip() for t in sched["target"].split(",")]
+            if agent_id in targets:
+                new_targets = [new_id if t == agent_id else t for t in targets]
+                conn.execute("UPDATE schedules SET target=? WHERE id=?",
+                             (",".join(new_targets), sched["id"]))
+    # Update in-memory state
+    _last_heartbeat[new_id] = _last_heartbeat.pop(agent_id, 0)
+    # Update existing alias chains: anything pointing to old_id now points to new_id
+    with get_db_ctx() as conn2:
+        conn2.execute("UPDATE rename_aliases SET new_id=? WHERE new_id=?", (new_id, agent_id))
+    _store_alias(agent_id, new_id)  # persist so heartbeats from old ID get routed
+    from scheduler import _offline_notified
+    if agent_id in _offline_notified:
+        _offline_notified.discard(agent_id)
+        _offline_notified.add(new_id)
+    _cache_invalidate("dashboard", f"agent:{agent_id}", f"agent:{new_id}")
+    return {"status": "renamed", "old_id": agent_id, "new_id": new_id}
+
+
+@app.patch("/api/agents/{agent_id}/tags", dependencies=[Depends(require_role("admin","user"))])
+async def set_agent_tags(agent_id: str, request: Request):
+    data = await request.json()
+    # Accept a comma-separated string; strip whitespace around each tag.
+    raw_tags = data.get("tags", "")
+    # Normalise: split on commas, strip, drop empties, re-join.
+    tags = ",".join(t.strip() for t in raw_tags.split(",") if t.strip())
+    # MEDIUM-5: Validate individual tags and overall length
+    for tag in tags.split(","):
+        if tag and not _TAG_RE.match(tag):
+            raise HTTPException(status_code=422, detail=f"Invalid tag: {tag!r}. Use a-z A-Z 0-9 . _ -")
+    if len(tags) > 512:
+        raise HTTPException(status_code=422, detail="Tags string exceeds 512 character limit")
+    with get_db_ctx() as conn:
+        row = conn.execute("SELECT id FROM agents WHERE id=?", (agent_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        conn.execute("UPDATE agents SET tags=? WHERE id=?", (tags, agent_id))
+    _cache_invalidate("dashboard", f"agent:{agent_id}")
+    return {"status": "ok", "tags": tags}
+
+
+@app.get("/api/schedules", dependencies=[Depends(require_role("admin","user"))])
+def api_schedules():
+    with get_db_ctx() as conn:
+        schedules = conn.execute("SELECT * FROM schedules ORDER BY id").fetchall()
+        agents = conn.execute(
+            "SELECT id, hostname FROM agents WHERE COALESCE(agent_type, 'linux') IN ('linux', 'haos') ORDER BY hostname"
+        ).fetchall()
+    schedule_list = []
+    for s in schedules:
+        row = dict(s)
+        job = scheduler.get_job(str(row["id"]))
+        if job and job.next_run_time:
+            row["next_run"] = job.next_run_time.isoformat()
+        schedule_list.append(row)
+    return {
+        "schedules": schedule_list,
+        "agents": [dict(a) for a in agents],
+    }
+
+
+@app.post("/api/schedules", dependencies=[Depends(require_role("admin"))])
+async def create_schedule(request: Request):
+    data = await request.json()
+    name   = str(data.get("name", ""))[:128]
+    cron   = str(data.get("cron", ""))
+    action = str(data.get("action", ""))
+    target = str(data.get("target", ""))
+    # M-7 / C-3: Validate all schedule fields before storing
+    if not name:
+        raise HTTPException(status_code=422, detail="Schedule name is required")
+    if action not in ALLOWED_JOB_TYPES:
+        raise HTTPException(status_code=422, detail=f"Invalid action. Allowed: {sorted(ALLOWED_JOB_TYPES)}")
+    _validate_cron(cron)
+    # target must be "all" or comma-separated valid agent IDs
+    _validate_schedule_target(target)
+    with get_db_ctx() as conn:
+        conn.execute(
+            "INSERT INTO schedules (name, cron, action, target) VALUES (?,?,?,?)",
+            (name, cron, action, target),
+        )
+        row = conn.execute("SELECT last_insert_rowid() as id").fetchone()
+        schedule_job(row["id"], name, cron, action, target)
+    return {"status": "created"}
+
+
+@app.patch("/api/schedules/{sid}", dependencies=[Depends(require_role("admin"))])
+async def toggle_schedule(sid: int, request: Request):
+    data = await request.json()
+    enabled = 1 if data.get("enabled") else 0
+    with get_db_ctx() as conn:
+        row = conn.execute(
+            "SELECT id, name, cron, action, target FROM schedules WHERE id=?",
+            (sid,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Schedule not found")
+        conn.execute("UPDATE schedules SET enabled=? WHERE id=?", (enabled, sid))
+    if enabled:
+        schedule_job(sid, row["name"], row["cron"], row["action"], row["target"])
+    else:
+        try:
+            scheduler.remove_job(str(sid))
+        except Exception:
+            pass
+    return {"status": "updated"}
+
+
+@app.put("/api/schedules/{sid}", dependencies=[Depends(require_role("admin"))])
+async def update_schedule(sid: int, request: Request):
+    data = await request.json()
+    name   = str(data.get("name", ""))[:128]
+    cron   = str(data.get("cron", ""))
+    action = str(data.get("action", ""))
+    target = str(data.get("target", ""))
+    if not name:
+        raise HTTPException(status_code=422, detail="Schedule name is required")
+    if action not in ALLOWED_JOB_TYPES:
+        raise HTTPException(status_code=422, detail=f"Invalid action. Allowed: {sorted(ALLOWED_JOB_TYPES)}")
+    _validate_cron(cron)
+    _validate_schedule_target(target)
+    with get_db_ctx() as conn:
+        row = conn.execute("SELECT id, enabled FROM schedules WHERE id=?", (sid,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Schedule not found")
+        conn.execute(
+            "UPDATE schedules SET name=?, cron=?, action=?, target=? WHERE id=?",
+            (name, cron, action, target, sid),
+        )
+    if row["enabled"]:
+        schedule_job(sid, name, cron, action, target)
+    else:
+        try:
+            scheduler.remove_job(str(sid))
+        except Exception:
+            pass
+    return {"status": "updated"}
+
+
+@app.post("/api/schedules/{sid}/run", dependencies=[Depends(require_role("admin","user"))])
+def run_schedule_now(sid: int):
+    """Immediately trigger a schedule's job, regardless of its cron time."""
+    with get_db_ctx() as conn:
+        row = conn.execute(
+            "SELECT action, target FROM schedules WHERE id=?", (sid,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    from scheduler import _run_scheduled_job
+    _run_scheduled_job(sid, row["action"], row["target"])
+    return {"status": "triggered"}
+
+
+@app.delete("/api/schedules/{sid}", dependencies=[Depends(require_role("admin"))])
+def delete_schedule(sid: int):
+    with get_db_ctx() as conn:
+        conn.execute("DELETE FROM schedules WHERE id=?", (sid,))
+    try:
+        scheduler.remove_job(str(sid))
+    except Exception:
+        pass
+    return {"status": "deleted"}
+
+
+# ===========================================================================
 # SETTINGS API
 # ===========================================================================
 
@@ -989,7 +2051,6 @@ _SETTINGS_ALLOWED_KEYS = {
 }
 
 _SSL_DIR = Path(os.environ.get("PATCHPILOT_SSL_DIR", str(Path(__file__).parent.parent / "ssl")))
-AGENT_DIR = Path(__file__).parent.parent / "agent"
 _CA_ROLLOVER_PRIVATE_KEY = _SSL_DIR / "ca_rollover_private.pem"
 _CA_ROLLOVER_PUBLIC_KEY = _SSL_DIR / "ca_rollover_public.pem"
 
@@ -1072,6 +2133,257 @@ def _get_internal_ip() -> str:
         return "127.0.0.1"
 
 
+@app.get("/api/push-config", dependencies=[Depends(require_role("admin"))])
+def api_get_push_config():
+    """Return the relay configuration for mobile push registration."""
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM settings WHERE key IN ('webhook_url', 'webhook_secret')"
+        ).fetchall()
+    values = {row["key"]: row["value"] for row in rows}
+    secret = values.get("webhook_secret", "")
+    if not secret:
+        return {"webhookUrl": values.get("webhook_url", ""), "webhookSecret": None, "active": False}
+    try:
+        return {
+            "webhookUrl": values.get("webhook_url", ""),
+            "webhookSecret": _decrypt_secret(secret),
+            "active": True,
+        }
+    except Exception:
+        return {"webhookUrl": values.get("webhook_url", ""), "webhookSecret": None, "active": False}
+
+
+@app.post("/api/settings/push-mobile/activate", dependencies=[Depends(require_role("admin"))])
+async def api_activate_push_mobile(request: Request):
+    """Persist the mobile relay URL and return the plaintext push secret."""
+    data = await request.json()
+    webhook_url = _validate_webhook_url(data.get("webhook_url", ""))
+    with get_db_ctx() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key='webhook_secret'").fetchone()
+        encrypted_secret = row["value"] if row else ""
+        if encrypted_secret:
+            webhook_secret = _decrypt_secret(encrypted_secret)
+        else:
+            webhook_secret = secrets.token_hex(32)
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('webhook_secret', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (_encrypt_secret(webhook_secret),),
+            )
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('webhook_url', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (webhook_url,),
+        )
+    notification_manager.reload()
+    return {"status": "activated", "webhookUrl": webhook_url, "webhookSecret": webhook_secret, "active": True}
+
+
+@app.post("/api/settings/push-mobile/deactivate", dependencies=[Depends(require_role("admin"))])
+def api_deactivate_push_mobile():
+    """Disable mobile push by removing the stored pairing secret."""
+    with get_db_ctx() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('webhook_secret', '') "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+        )
+        row = conn.execute("SELECT value FROM settings WHERE key='webhook_url'").fetchone()
+    notification_manager.reload()
+    webhook_url = row["value"] if row else ""
+    return {"status": "deactivated", "webhookUrl": webhook_url, "webhookSecret": None, "active": False}
+
+
+@app.get("/api/settings", dependencies=[Depends(require_role("admin"))])
+def api_get_settings():
+    """Return settings.  Sensitive values are replaced with '***'. Only saveable keys are returned."""
+    with get_db_ctx() as conn:
+        rows = conn.execute("SELECT key, value FROM settings ORDER BY key").fetchall()
+    result = {}
+    for row in rows:
+        k, v = row["key"], row["value"]
+        if k not in _SETTINGS_ALLOWED_KEYS:
+            continue  # Don't expose internal keys (register_key, etc.)
+        result[k] = "***" if (k in _SENSITIVE_KEYS and v) else v
+    # Provide computed URLs for the Deploy page
+    _scheme = "https" if os.environ.get("SSL_CERTFILE") else "http"
+    _ip = _get_internal_ip()
+    result["internal_url"] = f"{_scheme}://{_ip}:{_SERVER_PORT}"
+    result["agent_url"] = f"{_AGENT_SCHEME}://{_ip}:{_AGENT_PORT}"
+    result["ssl_enabled"] = bool(os.environ.get("SSL_CERTFILE"))
+    return result
+
+
+@app.post("/api/settings", dependencies=[Depends(require_role("admin"))])
+@app.put("/api/settings", dependencies=[Depends(require_role("admin"))])
+async def api_save_settings(request: Request):
+    """Persist settings.  Values equal to '***' are kept unchanged (masked)."""
+    data = await request.json()
+    # H-5: Validate security-sensitive fields before persisting
+    # LOW-4: reject unknown keys
+    unknown = set(data.keys()) - _SETTINGS_ALLOWED_KEYS
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Unknown settings key(s): {', '.join(sorted(unknown))}")
+    tg_token = data.get("telegram_token", "")
+    if tg_token and tg_token != "***" and not _TG_TOKEN_RE.match(tg_token):
+        raise HTTPException(status_code=422, detail="Invalid Telegram token format")
+    smtp_host = data.get("smtp_host", "")
+    if smtp_host and smtp_host != "***":
+        _validate_smtp_host(smtp_host)
+    webhook_url = data.get("webhook_url")
+    if webhook_url is not None and str(webhook_url) != "***":
+        _validate_webhook_url(str(webhook_url))
+    # LOW-5: validate notify_offline_minutes as integer in [1, 10080]
+    offline_min = data.get("notify_offline_minutes")
+    if offline_min is not None and str(offline_min) != "***":
+        try:
+            val = int(offline_min)
+            if not (1 <= val <= 10080):
+                raise ValueError
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="notify_offline_minutes must be an integer between 1 and 10080")
+    tz_val = data.get("scheduler_timezone")
+    if tz_val is not None and str(tz_val) != "***":
+        try:
+            import zoneinfo
+            zoneinfo.ZoneInfo(str(tz_val))
+        except Exception:
+            raise HTTPException(status_code=422, detail=f"Invalid timezone: {tz_val!r}")
+    ui_audio_volume = data.get("ui_audio_volume")
+    if ui_audio_volume is not None and str(ui_audio_volume) != "***":
+        try:
+            val = int(ui_audio_volume)
+            if not (0 <= val <= 100):
+                raise ValueError
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="ui_audio_volume must be an integer between 0 and 100")
+    login_background_opacity = data.get("ui_login_background_opacity")
+    if login_background_opacity is not None and str(login_background_opacity) != "***":
+        try:
+            val = int(login_background_opacity)
+            if not (0 <= val <= 100):
+                raise ValueError
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="ui_login_background_opacity must be an integer between 0 and 100")
+    # Validate server_port as integer in [1, 65535]
+    server_port_val = data.get("server_port")
+    if server_port_val is not None and str(server_port_val) != "***":
+        try:
+            port_int = int(server_port_val)
+            if not (1 <= port_int <= 65535):
+                raise ValueError
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="server_port must be an integer between 1 and 65535")
+
+    # Read current ports BEFORE saving so we can detect changes
+    old_port: str | None = None
+    old_agent_port: str | None = None
+    old_agent_ssl: str | None = None
+    old_timezone: str | None = None
+    new_port_str = str(server_port_val) if (server_port_val is not None and str(server_port_val) != "***") else None
+    with get_db_ctx() as conn:
+        if new_port_str:
+            row = conn.execute("SELECT value FROM settings WHERE key='server_port'").fetchone()
+            old_port = row["value"] if row else "8443"
+        row_ap = conn.execute("SELECT value FROM settings WHERE key='agent_port'").fetchone()
+        old_agent_port = row_ap["value"] if row_ap else "8050"
+        row_as = conn.execute("SELECT value FROM settings WHERE key='agent_ssl'").fetchone()
+        old_agent_ssl = row_as["value"] if row_as else "0"
+        row_tz = conn.execute("SELECT value FROM settings WHERE key='scheduler_timezone'").fetchone()
+        old_timezone = row_tz["value"] if row_tz and row_tz["value"] else get_scheduler_timezone()
+
+    # Verify Telegram token validity BEFORE saving
+    tg_valid = None
+    if tg_token and tg_token != "***":
+        try:
+            import urllib.request as _urlreq
+            import json as _json
+            req = _urlreq.Request(
+                f"https://api.telegram.org/bot{tg_token}/getMe",
+                method="GET",
+            )
+            with _urlreq.urlopen(req, timeout=5) as resp:
+                result = _json.loads(resp.read())
+                tg_valid = result.get("ok", False)
+        except Exception:
+            tg_valid = False
+
+    # Save all settings to DB (encrypt sensitive values)
+    with get_db_ctx() as conn:
+        for key, value in data.items():
+            if value == "***":
+                continue
+            store_val = _encrypt_secret(str(value)) if key in _SENSITIVE_KEYS else str(value)
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, store_val),
+            )
+    notification_manager.reload()
+    from telegram_bot import telegram_bot
+    telegram_bot.reload_settings()
+
+    # Timezone changed → reconfigure scheduler immediately (no restart needed).
+    if tz_val and str(tz_val) != "***" and str(tz_val) != str(old_timezone or ""):
+        configure_timezone(str(tz_val))
+        # Reload all user-defined schedules so CronTriggers use the new timezone.
+        from scheduler import load_schedules_from_db
+        load_schedules_from_db()
+
+    # Port changed → update .env and restart service.
+    restart_pending = False
+    if new_port_str and old_port and new_port_str != old_port:
+        _update_env_port(new_port_str, old_port)
+        restart_pending = True
+
+    # Agent port changed → update .env
+    new_agent_port = data.get("agent_port")
+    if new_agent_port and str(new_agent_port) != "***" and str(new_agent_port) != old_agent_port:
+        _update_env_key("AGENT_PORT", str(new_agent_port))
+        restart_pending = True
+
+    # Agent SSL toggle
+    new_agent_ssl = data.get("agent_ssl")
+    if new_agent_ssl is not None and str(new_agent_ssl) != "***" and str(new_agent_ssl) != old_agent_ssl:
+        _update_env_key("AGENT_SSL", "1" if str(new_agent_ssl) == "1" else "0")
+        restart_pending = True
+
+    if restart_pending:
+        _schedule_restart(delay=1.5)
+
+    return {"status": "saved", "restart_pending": restart_pending, "new_port": new_port_str, "telegram_valid": tg_valid}
+
+
+@app.post("/api/settings/test/{channel}", dependencies=[Depends(require_role("admin"))])
+async def api_test_notification(channel: str):
+    """Send a test notification via the requested channel (telegram | email | push)."""
+    notification_manager.reload()
+    notification_manager._load()
+    if channel == "telegram":
+        notifier = notification_manager._telegram
+        if not notifier:
+            raise HTTPException(status_code=400, detail="Telegram not configured")
+        ok = notifier.send("*PatchPilot Test*\nTelegram notifications are working correctly.")
+    elif channel == "email":
+        notifier = notification_manager._email
+        if not notifier:
+            raise HTTPException(status_code=400, detail="Email not configured")
+        ok = notifier.send(
+            "PatchPilot Test",
+            "This email confirms that SMTP notifications are configured correctly.",
+        )
+    elif channel == "push":
+        notifier = notification_manager._webhook
+        if not notifier or not getattr(notifier, "_url", "") or not getattr(notifier, "_secret", ""):
+            raise HTTPException(status_code=400, detail="Mobile push not configured")
+        ok = notifier.send_test()
+    else:
+        raise HTTPException(status_code=400, detail="Invalid notification channel")
+    if not ok:
+        raise HTTPException(status_code=502, detail="Notification send failed — check server logs")
+    return {"status": "sent"}
+
+
 # ===========================================================================
 # SSL MANAGEMENT
 # ===========================================================================
@@ -1105,7 +2417,8 @@ def _update_env_ssl(certfile: str, keyfile: str) -> None:
         tmp.write_text(content)
         os.replace(tmp, _ENV_FILE)
     except Exception as exc:
-        raise RuntimeError(f"could not update environment file for SSL: {exc}") from exc
+        import sys
+        print(f"[patchpilot] Warning: could not update .env SSL: {exc}", file=sys.stderr)
 
 
 def _get_cert_info(certfile: str) -> dict:
@@ -1133,12 +2446,766 @@ def _get_cert_info(certfile: str) -> dict:
         return {"subject": "unknown", "expires": "unknown", "path": certfile}
 
 
+@app.post("/api/settings/generate-cert", dependencies=[Depends(require_role("admin"))])
+async def api_generate_cert(request: Request):
+    """Generate a self-signed SSL certificate and enable HTTPS."""
+    try:
+        data = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+        years = max(1, min(10, int(data.get("years", 3))))
+        days = years * 365
+
+        # Use openssl CLI — available on all Debian/Ubuntu systems
+        _SSL_DIR.mkdir(parents=True, exist_ok=True)
+        cert_path = _SSL_DIR / "cert.pem"
+        key_path = _SSL_DIR / "key.pem"
+        hostname = socket.gethostname()
+        ip = _get_internal_ip()
+
+        result = subprocess.run([
+            "openssl", "req", "-x509", "-newkey", "rsa:2048",
+            "-keyout", str(key_path), "-out", str(cert_path),
+            "-days", str(days), "-nodes",
+            "-subj", f"/CN={hostname}",
+            "-addext", f"subjectAltName=DNS:{hostname},IP:{ip}",
+        ], capture_output=True, text=True, timeout=30)
+
+        if result.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"openssl failed: {result.stderr[:200]}")
+
+        # Restrict permissions
+        cert_path.chmod(0o644)
+        key_path.chmod(0o600)
+
+        # Persist cert paths in DB (but do NOT activate SSL or restart)
+        with get_db_ctx() as conn:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ssl_certfile', ?)", (str(cert_path),))
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ssl_keyfile', ?)", (str(key_path),))
+
+        info = _get_cert_info(str(cert_path))
+        return {
+            "status": "generated",
+            "certfile": str(cert_path),
+            "keyfile": str(key_path),
+            "info": info,
+            "restart_pending": False,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/settings/ssl-enable", dependencies=[Depends(require_role("admin"))])
+async def api_ssl_enable(request: Request):
+    """Enable SSL with custom certificate paths."""
+    data = await request.json()
+    certfile = str(data.get("certfile", "")).strip()
+    keyfile = str(data.get("keyfile", "")).strip()
+    if not certfile or not keyfile:
+        raise HTTPException(status_code=422, detail="Both certfile and keyfile paths are required")
+    # SEC: Restrict cert/key paths to _SSL_DIR to prevent path traversal
+    if not Path(certfile).resolve().is_relative_to(_SSL_DIR.resolve()):
+        raise HTTPException(status_code=422, detail="Certificate path must be within the SSL directory")
+    if not Path(keyfile).resolve().is_relative_to(_SSL_DIR.resolve()):
+        raise HTTPException(status_code=422, detail="Key path must be within the SSL directory")
+    # Validate files exist
+    if not Path(certfile).is_file():
+        raise HTTPException(status_code=422, detail=f"Certificate file not found: {certfile}")
+    if not Path(keyfile).is_file():
+        raise HTTPException(status_code=422, detail=f"Key file not found: {keyfile}")
+
+    _update_env_ssl(certfile, keyfile)
+    _update_env_key("AGENT_SSL", "1")
+    with get_db_ctx() as conn:
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ssl_certfile', ?)", (str(certfile),))
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('ssl_keyfile', ?)", (str(keyfile),))
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('agent_ssl', '1')")
+
+    _schedule_restart(delay=2.0)
+    info = _get_cert_info(certfile)
+    return {"status": "enabled", "info": info, "restart_pending": True}
+
+
+@app.post("/api/settings/ssl-disable", dependencies=[Depends(require_role("admin"))])
+def api_ssl_disable():
+    """Disable SSL — remove cert/key from .env and restart on plain HTTP."""
+    _update_env_ssl("", "")  # removes the lines from .env
+    with get_db_ctx() as conn:
+        conn.execute("UPDATE settings SET value='' WHERE key='ssl_certfile'")
+        conn.execute("UPDATE settings SET value='' WHERE key='ssl_keyfile'")
+    _schedule_restart(delay=2.0)
+    return {"status": "disabled", "restart_pending": True}
+
+
+@app.get("/api/settings/ssl-info", dependencies=[Depends(require_role("admin"))])
+def api_ssl_info():
+    """Return current SSL status and certificate info."""
+    certfile = os.environ.get("SSL_CERTFILE", "")
+    keyfile = os.environ.get("SSL_KEYFILE", "")
+    enabled = bool(certfile and keyfile)
+    info = _get_cert_info(certfile) if enabled else None
+    # Also check DB for generated-but-not-yet-enabled certs
+    if not info:
+        with get_db_ctx() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key='ssl_certfile'").fetchone()
+            if row and row["value"]:
+                db_certfile = row["value"]
+                info = _get_cert_info(db_certfile)
+                if not certfile:
+                    certfile = db_certfile
+                if not keyfile:
+                    kr = conn.execute("SELECT value FROM settings WHERE key='ssl_keyfile'").fetchone()
+                    keyfile = kr["value"] if kr else ""
+    return {"enabled": enabled, "certfile": certfile, "keyfile": keyfile, "info": info}
+
+
 # ===========================================================================
 # MONITORING ENDPOINTS
 # ===========================================================================
 
 _DISK_ALERT_THRESHOLD = 90  # percent used → alert
 
+@app.get("/api/alerts", dependencies=[Depends(require_role("admin","user","readonly"))])
+def api_alerts():
+    """Return all systems currently considered offline or with disk alerts."""
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            """SELECT id, hostname, ip, agent_type, ping_failures, ping_last_checked,
+               disk_total, disk_used,
+               CAST((julianday('now','localtime') - julianday(last_seen)) * 86400 AS INTEGER) as seconds_ago
+               FROM agents
+               WHERE last_seen IS NOT NULL"""
+        ).fetchall()
+        last_jobs = conn.execute(
+            """SELECT j.agent_id, j.type, j.status, j.created, j.started
+               FROM jobs j
+               INNER JOIN (
+                   SELECT agent_id, MAX(id) as max_id
+                   FROM jobs
+                   GROUP BY agent_id
+               ) latest ON j.id = latest.max_id"""
+        ).fetchall()
+    last_job_map = {row["agent_id"]: dict(row) for row in last_jobs}
+    result = []
+    for row in rows:
+        row_dict = _agent_online_status(dict(row), last_job_map.get(row["id"]))
+        if not row_dict.get("effective_online"):
+            result.append(
+                {
+                    "hostname": row_dict["hostname"],
+                    "ip": row_dict["ip"],
+                    "offline_since_seconds": row_dict.get("seconds_ago") or 0,
+                    "kind": "offline",
+                }
+            )
+        elif (
+            row_dict.get("disk_total") and row_dict.get("disk_used") is not None
+            and row_dict["disk_total"] > 0
+            and round(row_dict["disk_used"] / row_dict["disk_total"] * 100) >= _DISK_ALERT_THRESHOLD
+        ):
+            pct = round(row_dict["disk_used"] / row_dict["disk_total"] * 100)
+            result.append(
+                {
+                    "hostname": row_dict["hostname"],
+                    "ip": row_dict["ip"],
+                    "offline_since_seconds": 0,
+                    "kind": "disk",
+                    "disk_percent": pct,
+                }
+            )
+    result.sort(key=lambda r: r["offline_since_seconds"], reverse=True)
+    return result
+
+
+@app.get("/api/status/badge", dependencies=[Depends(require_role("admin","user","readonly"))])
+def api_status_badge():
+    """Return a shields.io-style SVG badge showing X/Y online."""
+    with get_db_ctx() as conn:
+        agents = conn.execute(
+            """SELECT
+               id,
+               agent_type,
+               ping_failures,
+               ping_last_checked,
+               CAST((julianday('now','localtime') - julianday(last_seen)) * 86400 AS INTEGER) as seconds_ago
+               FROM agents"""
+        ).fetchall()
+        last_jobs = conn.execute(
+            """SELECT j.agent_id, j.type, j.status, j.created, j.started
+               FROM jobs j
+               INNER JOIN (
+                   SELECT agent_id, MAX(id) as max_id
+                   FROM jobs
+                   GROUP BY agent_id
+               ) latest ON j.id = latest.max_id"""
+        ).fetchall()
+    last_job_map = {row["agent_id"]: dict(row) for row in last_jobs}
+    total = len(agents)
+    online = sum(
+        1
+        for row in agents
+        if _agent_online_status(dict(row), last_job_map.get(row["id"])).get("effective_online")
+    )
+
+    if total == 0 or online == 0:
+        color = "#e05d44"  # red
+    elif online < total:
+        color = "#dfb317"  # yellow
+    else:
+        color = "#4c1"     # green
+
+    label = "patchpilot"
+    message = f"{online}/{total} online"
+    label_width = 80
+    message_width = max(len(message) * 7 + 10, 70)
+    total_width = label_width + message_width
+    label_x = label_width // 2
+    message_x = label_width + message_width // 2
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="{total_width}" height="20">
+  <linearGradient id="s" x2="0" y2="100%">
+    <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+    <stop offset="1" stop-opacity=".1"/>
+  </linearGradient>
+  <clipPath id="r">
+    <rect width="{total_width}" height="20" rx="3" fill="#fff"/>
+  </clipPath>
+  <g clip-path="url(#r)">
+    <rect width="{label_width}" height="20" fill="#555"/>
+    <rect x="{label_width}" width="{message_width}" height="20" fill="{color}"/>
+    <rect width="{total_width}" height="20" fill="url(#s)"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="DejaVu Sans,Verdana,Geneva,sans-serif" font-size="110">
+    <text x="{label_x * 10}" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="{(label_width - 10) * 10}" lengthAdjust="spacing">{label}</text>
+    <text x="{label_x * 10}" y="140" transform="scale(.1)" textLength="{(label_width - 10) * 10}" lengthAdjust="spacing">{label}</text>
+    <text x="{message_x * 10}" y="150" fill="#010101" fill-opacity=".3" transform="scale(.1)" textLength="{(message_width - 10) * 10}" lengthAdjust="spacing">{message}</text>
+    <text x="{message_x * 10}" y="140" transform="scale(.1)" textLength="{(message_width - 10) * 10}" lengthAdjust="spacing">{message}</text>
+  </g>
+</svg>"""
+
+    return Response(content=svg, media_type="image/svg+xml")
+
+
+# ===========================================================================
+# Agent download endpoint
+# ===========================================================================
+AGENT_DIR = Path(__file__).parent.parent / "agent"
+
+@app.get("/agent/agent.py", include_in_schema=False)
+def download_agent():
+    f = AGENT_DIR / "agent.py"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return FileResponse(f, media_type="text/x-python", filename="agent.py")
+
+@app.get("/agent/agent.py.sha256", include_in_schema=False)
+def download_agent_hash():
+    """M-2: Serve SHA256 so install.sh can verify the download."""
+    f = AGENT_DIR / "agent.py"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="Agent not found")
+    sha256 = hashlib.sha256(f.read_bytes()).hexdigest()
+    return Response(content=f"{sha256}  agent.py\n", media_type="text/plain")
+
+
+@app.get("/agent/agent.py.sig", include_in_schema=False)
+def download_agent_signature():
+    """CRIT-1: Serve a rollover-key signature over agent.py.
+    Agents with the rollover public key installed can verify authenticity,
+    not just integrity — a MITM that controls the server cannot substitute
+    malicious code + a matching hash without also owning the private key.
+    """
+    f = AGENT_DIR / "agent.py"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="Agent not found")
+    try:
+        sig_bytes = _sign_ca_rollover_payload(f.read_bytes())
+        sig_b64 = base64.b64encode(sig_bytes).decode()
+        return Response(content=f"{sig_b64}\n", media_type="text/plain")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Signing unavailable: {exc}")
+
+@app.get("/agent/install.sh", include_in_schema=False)
+def download_install_script():
+    f = AGENT_DIR / "install.sh"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="Install script not found")
+    return FileResponse(f, media_type="text/x-shellscript", filename="install.sh")
+
+
+@app.get("/agent/ca.pem", include_in_schema=False)
+def download_ca_cert():
+    """Serve the SSL CA certificate for agent trust."""
+    f = _SSL_DIR / "cert.pem"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="CA certificate not generated yet")
+    return FileResponse(f, media_type="application/x-pem-file", filename="ca.pem")
+
+
+@app.get("/agent/ca.pem.sha256", include_in_schema=False)
+def download_ca_hash():
+    f = _SSL_DIR / "cert.pem"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="CA certificate not generated yet")
+    sha = hashlib.sha256(f.read_bytes()).hexdigest()
+    return Response(content=f"{sha}  ca.pem\n", media_type="text/plain")
+
+
+@app.get("/agent/ca.pem.sig", include_in_schema=False)
+def download_ca_signature():
+    f = _SSL_DIR / "cert.pem"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="CA certificate not generated yet")
+    sig_b64 = base64.b64encode(_sign_ca_rollover_payload(f.read_bytes())).decode()
+    return Response(content=f"{sig_b64}\n", media_type="text/plain")
+
+
+@app.get("/agent/ca-rollover.pub", include_in_schema=False)
+def download_ca_rollover_public_key():
+    return Response(content=_get_ca_rollover_public_pem(), media_type="application/x-pem-file")
+
+
+@app.post("/api/settings/deploy-ssl", dependencies=[Depends(require_role("admin"))])
+async def api_deploy_ssl_to_agents(request: Request):
+    """Create update_agent + deploy_ssl jobs for agents.
+
+    If retry_batch is provided, only re-deploys to agents that failed in that batch.
+    Otherwise deploys to all registered agents.
+    Returns a batch_id so the frontend can track exactly this run.
+    """
+    cert = _SSL_DIR / "cert.pem"
+    if not cert.exists():
+        raise HTTPException(status_code=400, detail="No certificate generated yet — generate one first")
+    import uuid as _uuid
+    batch_id = _uuid.uuid4().hex[:12]
+    cert_bytes = cert.read_bytes()
+    ca_pem_b64 = base64.b64encode(cert_bytes).decode()
+    ca_sig_b64 = base64.b64encode(_sign_ca_rollover_payload(cert_bytes)).decode()
+    rollover_pubkey_pem = _get_ca_rollover_public_pem().decode("utf-8")
+    ca_sha256 = hashlib.sha256(cert_bytes).hexdigest()
+
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        pass
+    retry_batch = re.sub(r'[^a-fA-F0-9]', '', data.get("retry_batch", ""))  # SEC: sanitize
+
+    with get_db_ctx() as conn:
+        if retry_batch:
+            # Only retry agents that failed in the previous batch
+            batch_filter = f'%"batch": "{retry_batch}"%'
+            failed_agents = conn.execute("""
+                SELECT DISTINCT j.agent_id, a.hostname FROM jobs j
+                JOIN agents a ON a.id = j.agent_id
+                WHERE j.status = 'failed' AND j.params LIKE ?
+            """, (batch_filter,)).fetchall()
+            agents = failed_agents
+        else:
+            agents = conn.execute(
+                "SELECT id AS agent_id, hostname, COALESCE(agent_type, 'linux') AS agent_type "
+                "FROM agents WHERE COALESCE(agent_type, 'linux') IN ('linux', 'haos')"
+            ).fetchall()
+
+        if not agents:
+            raise HTTPException(status_code=422, detail="No agents to deploy to")
+        count = 0
+        for a in agents:
+            aid = a["agent_id"] if "agent_id" in a.keys() else a["id"]
+            agent_type = a["agent_type"] if "agent_type" in a.keys() else "linux"
+            signed_ca_params = {
+                "batch": batch_id,
+                "ca_pem_b64": ca_pem_b64,
+                "ca_sig_b64": ca_sig_b64,
+                "ca_sha256": ca_sha256,
+                "rollover_pubkey_pem": rollover_pubkey_pem,
+            }
+            if agent_type == "haos":
+                params = json.dumps(signed_ca_params)
+                job_type = "deploy_ssl"
+            else:
+                params = json.dumps({
+                    "chain": "deploy_ssl",
+                    "batch": batch_id,
+                    "chain_params": signed_ca_params,
+                })
+                job_type = "update_agent"
+            conn.execute(
+                "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, ?, ?, datetime('now','localtime'))",
+                (aid, job_type, params),
+            )
+            count += 1
+    _cache_invalidate("dashboard")
+    return {"status": "deployed", "agent_count": count, "batch_id": batch_id}
+
+
+@app.post("/api/agents/update-batch", dependencies=[Depends(require_role("admin"))])
+async def api_update_agents_batch(request: Request):
+    """Create update_agent jobs for all agents and return a trackable batch id."""
+    import uuid as _uuid
+    batch_id = _uuid.uuid4().hex[:12]
+
+    data = {}
+    try:
+        data = await request.json()
+    except Exception:
+        pass
+    retry_batch = re.sub(r'[^a-fA-F0-9]', '', data.get("retry_batch", ""))
+    requested_agent_ids = [
+        re.sub(r"[^a-zA-Z0-9._:-]", "", str(agent_id))
+        for agent_id in (data.get("agent_ids") or [])
+        if str(agent_id).strip()
+    ]
+    requested_agent_ids = [agent_id for agent_id in requested_agent_ids if agent_id]
+
+    with get_db_ctx() as conn:
+        if retry_batch:
+            batch_filter = f'%"batch": "{retry_batch}"%'
+            agents = conn.execute("""
+                SELECT DISTINCT j.agent_id, a.hostname FROM jobs j
+                JOIN agents a ON a.id = j.agent_id
+                WHERE j.type IN ('update_agent', 'ha_trigger_agent_update') AND j.status = 'failed' AND j.params LIKE ?
+                  AND a.last_seen IS NOT NULL
+                  AND (julianday('now','localtime') - julianday(a.last_seen)) * 86400 < 120
+            """, (batch_filter,)).fetchall()
+        else:
+            if requested_agent_ids:
+                placeholders = ",".join("?" for _ in requested_agent_ids)
+                agents = conn.execute(f"""
+                    SELECT id AS agent_id, hostname, COALESCE(agent_type, 'linux') AS agent_type, COALESCE(capabilities, '') AS capabilities
+                    FROM agents
+                    WHERE id IN ({placeholders})
+                      AND COALESCE(agent_type, 'linux') IN ('linux', 'haos')
+                      AND last_seen IS NOT NULL
+                      AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120
+                """, requested_agent_ids).fetchall()
+            else:
+                agents = conn.execute("""
+                    SELECT id AS agent_id, hostname, COALESCE(agent_type, 'linux') AS agent_type, COALESCE(capabilities, '') AS capabilities
+                    FROM agents
+                    WHERE COALESCE(agent_type, 'linux') IN ('linux', 'haos')
+                      AND last_seen IS NOT NULL
+                      AND (julianday('now','localtime') - julianday(last_seen)) * 86400 < 120
+                """).fetchall()
+
+        if not agents:
+            raise HTTPException(status_code=422, detail="No agents to update")
+
+        count = 0
+        for a in agents:
+            aid = a["agent_id"] if "agent_id" in a.keys() else a["id"]
+            agent_type = a["agent_type"] if "agent_type" in a.keys() else "linux"
+            capabilities = set(filter(None, str(a["capabilities"] or "").split(",")))
+            if agent_type == "haos":
+                if "ha_agent_auto_update" not in capabilities:
+                    continue
+                job_type = "ha_trigger_agent_update"
+            else:
+                job_type = "update_agent"
+            params = json.dumps({"batch": batch_id})
+            conn.execute(
+                "INSERT INTO jobs (agent_id, type, params, created) VALUES (?, ?, ?, datetime('now','localtime'))",
+                (aid, job_type, params),
+            )
+            count += 1
+        if count == 0:
+            raise HTTPException(status_code=422, detail="No agents to update")
+    _cache_invalidate("dashboard")
+    return {"status": "queued", "agent_count": count, "batch_id": batch_id}
+
+
+@app.get("/api/settings/deploy-ssl/status", dependencies=[Depends(require_role("admin"))])
+def api_deploy_ssl_status(batch: str = ""):
+    """Return progress of SSL deployment for a specific batch.
+
+    Shows the most advanced job per agent: deploy_ssl if it exists, otherwise
+    the chained update_agent.  Phase: 'updating' while update_agent runs,
+    'deploying' while deploy_ssl runs, status when done/failed.
+    """
+    batch = re.sub(r'[^a-fA-F0-9]', '', batch or '')  # SEC: sanitize
+    if not batch:
+        return {"agents": [], "total": 0, "completed": 0}
+
+    batch_filter = f'%"batch": "{batch}"%'
+    with get_db_ctx() as conn:
+        # Get deploy_ssl jobs for this batch
+        ssl_rows = conn.execute("""
+            SELECT j.agent_id, a.hostname, j.type, j.status, j.output, j.finished, j.created, j.started,
+                   CAST((julianday('now','localtime') - julianday(a.last_seen)) * 86400 AS INTEGER) AS seconds_ago
+            FROM jobs j JOIN agents a ON a.id = j.agent_id
+            WHERE j.type = 'deploy_ssl' AND j.params LIKE ?
+        """, (batch_filter,)).fetchall()
+        ssl_map = {r["agent_id"]: r for r in ssl_rows}
+
+        # Get the chained update_agent jobs for this batch
+        upd_rows = conn.execute("""
+            SELECT j.agent_id, a.hostname, j.type, j.status, j.output, j.finished, j.created, j.started,
+                   CAST((julianday('now','localtime') - julianday(a.last_seen)) * 86400 AS INTEGER) AS seconds_ago
+            FROM jobs j JOIN agents a ON a.id = j.agent_id
+            WHERE j.type IN ('update_agent', 'ha_trigger_agent_update') AND j.params LIKE ?
+        """, (batch_filter,)).fetchall()
+
+    agents = []
+    seen_agent_ids: set[str] = set()
+    for r in upd_rows:
+        aid = r["agent_id"]
+        seen_agent_ids.add(aid)
+        is_online = is_effectively_online(r["seconds_ago"], dict(r))
+        if aid in ssl_map:
+            sr = ssl_map[aid]
+            phase = "done" if sr["status"] == "done" else "failed" if sr["status"] == "failed" else "deploying"
+            agents.append({
+                "agent_id": aid, "hostname": sr["hostname"],
+                "status": sr["status"], "phase": phase,
+                "output": sr["output"] or "", "finished": sr["finished"],
+                "online": is_effectively_online(sr["seconds_ago"], dict(sr)),
+            })
+        else:
+            phase = "updating" if r["status"] in ("pending", "running") else (
+                "failed" if r["status"] == "failed" else "waiting"
+            )
+            agents.append({
+                "agent_id": aid, "hostname": r["hostname"],
+                "status": r["status"] if r["status"] == "failed" else phase,
+                "phase": phase,
+                "output": r["output"] or "" if r["status"] == "failed" else "",
+                "finished": r["finished"],
+                "online": is_online,
+            })
+    for aid, sr in ssl_map.items():
+        if aid in seen_agent_ids:
+            continue
+        phase = "done" if sr["status"] == "done" else "failed" if sr["status"] == "failed" else "deploying"
+        agents.append({
+            "agent_id": aid,
+            "hostname": sr["hostname"],
+            "status": sr["status"],
+            "phase": phase,
+            "output": sr["output"] or "",
+            "finished": sr["finished"],
+            "online": is_effectively_online(sr["seconds_ago"], dict(sr)),
+        })
+    # Sort: online first, then by hostname
+    agents.sort(key=lambda a: (not a["online"], a["hostname"]))
+    total_online = sum(1 for a in agents if a["online"])
+    total = len(agents)
+    done = sum(1 for a in agents if a["online"] and a["status"] in ("done", "failed"))
+    # Consider deployment "complete" when all online agents are done
+    # Offline agents will pick up jobs when they reconnect
+    return {"agents": agents, "total": total, "total_online": total_online, "completed": done}
+
+
+@app.get("/api/agents/update-batch/status", dependencies=[Depends(require_role("admin"))])
+def api_update_agents_batch_status(batch: str = ""):
+    """Return progress of an update_agent batch."""
+    batch = re.sub(r'[^a-fA-F0-9]', '', batch or '')
+    if not batch:
+        return {"agents": [], "total": 0, "completed": 0}
+
+    batch_filter = f'%"batch": "{batch}"%'
+    with get_db_ctx() as conn:
+        rows = conn.execute("""
+            SELECT j.agent_id, a.hostname, a.agent_version, j.type, j.status, j.output, j.finished, j.created, j.started,
+                   CAST((julianday('now','localtime') - julianday(a.last_seen)) * 86400 AS INTEGER) AS seconds_ago
+            FROM jobs j JOIN agents a ON a.id = j.agent_id
+            WHERE j.type IN ('update_agent', 'ha_trigger_agent_update') AND j.params LIKE ?
+        """, (batch_filter,)).fetchall()
+
+    agents = []
+    for r in rows:
+        if r["type"] == "ha_trigger_agent_update":
+            if r["status"] == "failed":
+                phase = "failed"
+                status = "failed"
+            elif r["status"] in ("pending", "running"):
+                phase = "triggering"
+                status = r["status"]
+            elif (r["agent_version"] or "").strip() == _HA_AGENT_TARGET_VERSION:
+                phase = "done"
+                status = "done"
+            else:
+                phase = "waiting"
+                status = "running"
+        else:
+            if r["status"] == "failed":
+                phase = "failed"
+                status = "failed"
+            elif (r["agent_version"] or "").strip() == _AGENT_TARGET_VERSION:
+                phase = "done"
+                status = "done"
+            elif r["status"] in ("pending", "running"):
+                phase = "updating"
+                status = r["status"]
+            else:
+                phase = "waiting"
+                status = "running"
+        agents.append({
+            "agent_id": r["agent_id"],
+            "hostname": r["hostname"],
+            "job_type": r["type"],
+            "status": status,
+            "phase": phase,
+            "output": r["output"] or "",
+            "finished": r["finished"],
+            "online": is_effectively_online(r["seconds_ago"], dict(r)),
+        })
+
+    agents.sort(key=lambda a: (not a["online"], a["hostname"]))
+    total_online = sum(1 for a in agents if a["online"])
+    total = len(agents)
+    done = sum(1 for a in agents if a["online"] and a["status"] in ("done", "failed"))
+    return {"agents": agents, "total": total, "total_online": total_online, "completed": done}
+
+
+# ===========================================================================
+# ===========================================================================
+# AUTH ENDPOINTS
+# ===========================================================================
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request):
+    _check_rate_limit(request)
+    data = await request.json()
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", ""))
+    if not username or not password:
+        raise HTTPException(status_code=422, detail="Username and password required")
+    if len(password) > 1024:
+        raise HTTPException(status_code=422, detail="Password too long")
+    with get_db_ctx() as conn:
+        row = conn.execute(
+            "SELECT id, username, password_hash, role FROM users WHERE username=?",
+            (username,),
+        ).fetchone()
+    # Constant-time: always run verify_password even for non-existent users
+    dummy_hash = hash_password("dummy")
+    stored_hash = row["password_hash"] if row else dummy_hash
+    valid = verify_password(password, stored_hash)
+    if not row or not valid:
+        log.warning("AUTH FAIL: username=%r ip=%s", username, _get_client_ip(request))
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = secrets.token_hex(32)
+    session = {
+        "user_id":    row["id"],
+        "username":   row["username"],
+        "role":       row["role"],
+        "created_ts": time.time(),
+    }
+    _sessions[token] = session
+    _persist_session(token, session)
+    _remove_bootstrap_password_file()
+    return {"token": token, "role": row["role"], "username": row["username"]}
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    auth_val = request.headers.get("authorization", "")
+    if auth_val.startswith("Bearer "):
+        token = auth_val[7:]
+        _sessions.pop(token, None)
+        _delete_session_from_db(token)
+    return {"status": "ok"}
+
+
+@app.get("/api/auth/me", dependencies=[Depends(require_role("admin", "user", "readonly"))])
+def auth_me(request: Request):
+    user = getattr(request.state, "user", None)
+    if not user:
+        raise HTTPException(status_code=401)
+    return {"username": user["username"], "role": user["role"]}
+
+
+# ===========================================================================
+# USER MANAGEMENT (admin only)
+# ===========================================================================
+
+@app.get("/api/users", dependencies=[Depends(require_role("admin"))])
+def list_users():
+    with get_db_ctx() as conn:
+        rows = conn.execute("SELECT id, username, role, created FROM users ORDER BY id").fetchall()
+    return {"users": [dict(r) for r in rows]}
+
+
+@app.post("/api/users", dependencies=[Depends(require_role("admin"))])
+async def create_user(request: Request):
+    data = await request.json()
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", ""))
+    role = str(data.get("role", "user"))
+    if not username or not password:
+        raise HTTPException(status_code=422, detail="Username and password required")
+    if role not in ("admin", "user", "readonly"):
+        raise HTTPException(status_code=422, detail="Invalid role")
+    if len(username) > 64 or len(password) < 4 or len(password) > 1024:
+        raise HTTPException(status_code=422, detail="Username max 64 chars, password 4-1024 chars")
+    with get_db_ctx() as conn:
+        existing = conn.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail="Username already exists")
+        conn.execute(
+            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+            (username, hash_password(password), role),
+        )
+    return {"status": "created"}
+
+
+@app.patch("/api/users/{user_id}", dependencies=[Depends(require_role("admin"))])
+async def update_user(user_id: int, request: Request):
+    data = await request.json()
+    current_user = getattr(request.state, "user", {})
+    with get_db_ctx() as conn:
+        row = conn.execute("SELECT id, role FROM users WHERE id=?", (user_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+        if "role" in data:
+            role = str(data["role"])
+            if role not in ("admin", "user", "readonly"):
+                raise HTTPException(status_code=422, detail="Invalid role")
+            if current_user.get("user_id") == user_id and row["role"] == "admin" and role != "admin":
+                raise HTTPException(status_code=400, detail="You cannot remove your own admin role")
+            if row["role"] == "admin" and role != "admin":
+                admin_count = conn.execute("SELECT COUNT(*) as c FROM users WHERE role='admin'").fetchone()["c"]
+                if admin_count <= 1:
+                    raise HTTPException(status_code=400, detail="Cannot demote the last admin user")
+            conn.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
+        if "password" in data:
+            password = str(data["password"])
+            if len(password) < 4:
+                raise HTTPException(status_code=422, detail="Password min 4 chars")
+            conn.execute(
+                "UPDATE users SET password_hash=? WHERE id=?",
+                (hash_password(password), user_id),
+            )
+    # Invalidate active sessions for this user so role/password change takes effect immediately
+    to_remove = [t for t, s in _sessions.items() if s.get("user_id") == user_id]
+    for t in to_remove:
+        _sessions.pop(t, None)
+    _delete_sessions_for_user(user_id)
+    return {"status": "updated"}
+
+
+@app.delete("/api/users/{user_id}", dependencies=[Depends(require_role("admin"))])
+def delete_user(user_id: int, request: Request):
+    user = getattr(request.state, "user", {})
+    # Legacy admin key has user_id=0; also prevent deleting yourself by session
+    if user.get("user_id") == user_id and user_id != 0:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    # Count remaining admins — prevent deleting the last one
+    with get_db_ctx() as conn:
+        target = conn.execute("SELECT role FROM users WHERE id=?", (user_id,)).fetchone()
+        if not target:
+            raise HTTPException(status_code=404, detail="User not found")
+        if target["role"] == "admin":
+            admin_count = conn.execute("SELECT COUNT(*) as c FROM users WHERE role='admin'").fetchone()["c"]
+            if admin_count <= 1:
+                raise HTTPException(status_code=400, detail="Cannot delete the last admin user")
+        conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+    # Invalidate any sessions for this user
+    to_remove = [t for t, s in _sessions.items() if s.get("user_id") == user_id]
+    for t in to_remove:
+        _sessions.pop(t, None)
+    _delete_sessions_for_user(user_id)
+    return {"status": "deleted"}
 
 
 # Serve React frontend (if built)

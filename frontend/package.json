@@ -6,10 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview",
-    "e2e": "playwright test",
-    "e2e:headed": "playwright test --headed",
-    "e2e:install": "playwright install chromium"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@arwes/react": "1.0.0-next.25020502",
@@ -20,15 +17,11 @@
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0"
   },
-  "overrides": {
-    "picomatch": "4.0.4"
-  },
   "devDependencies": {
-    "@playwright/test": "^1.59.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
     "typescript": "^5.6.3",
-    "vite": "^6.4.2"
+    "vite": "^6.0.3"
   }
 }

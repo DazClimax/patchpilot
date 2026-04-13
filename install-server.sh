@@ -46,38 +46,6 @@ step() {
   echo "[$1/8] $2"
 }
 
-wait_for_bootstrap_admin() {
-  local expected_password="$1"
-  local bootstrap_file="$2"
-  local tries=30
-
-  for _ in $(seq 1 "$tries"); do
-    if [ -n "$expected_password" ]; then
-      if [ ! -f "$INSTALL_DIR/server/patchpilot.db" ]; then
-        sleep 1
-        continue
-      fi
-      if "$VENV_DIR/bin/python3" - <<PY >/dev/null 2>&1
-import sqlite3, sys
-sys.path.insert(0, "$INSTALL_DIR/server")
-import db
-conn = sqlite3.connect("file:$INSTALL_DIR/server/patchpilot.db?mode=ro", uri=True)
-row = conn.execute("SELECT password_hash FROM users WHERE username='admin'").fetchone()
-if not row:
-    raise SystemExit(1)
-raise SystemExit(0 if db.verify_password(${expected_password@Q}, row[0]) else 1)
-PY
-      then
-        return 0
-      fi
-    elif [ -f "$bootstrap_file" ]; then
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
-}
-
 require_root
 require_apt
 log_install
@@ -109,7 +77,6 @@ step 3 "Copying PatchPilot files into place"
 mkdir -p "$INSTALL_DIR/server" "$INSTALL_DIR/agent" "$SSL_DIR"
 cp -r "$SCRIPT_DIR/server/"* "$INSTALL_DIR/server/"
 cp -r "$SCRIPT_DIR/agent/"* "$INSTALL_DIR/agent/"
-rm -f "$INSTALL_DIR/server/patchpilot.db" "$INSTALL_DIR/server/patchpilot.db-shm" "$INSTALL_DIR/server/patchpilot.db-wal"
 chmod +x "$INSTALL_DIR/server/start.sh"
 
 # Copy pre-built frontend (if available)
@@ -174,9 +141,6 @@ fi
 step 7 "Fixing ownership and service permissions"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$VENV_DIR"
-if [ ! -f "$INSTALL_DIR/server/patchpilot.db" ]; then
-  install -o "$SERVICE_USER" -g "$SERVICE_USER" -m 600 /dev/null "$INSTALL_DIR/server/patchpilot.db"
-fi
 mkdir -p "$RUNTIME_LOG_DIR"
 touch "$RUNTIME_LOG_DIR/server.log"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$RUNTIME_LOG_DIR"
@@ -210,9 +174,12 @@ systemctl enable patchpilot
 systemctl restart patchpilot
 
 if [ -f "$BOOTSTRAP_ENV_FILE" ]; then
-  if ! wait_for_bootstrap_admin "${PATCHPILOT_ADMIN_PASSWORD:-}" "$BOOTSTRAP_PASSWORD_FILE"; then
-    echo "[patchpilot] WARNING: bootstrap credentials were not confirmed before cleanup."
-  fi
+  for _ in $(seq 1 20); do
+    if [ -n "${PATCHPILOT_ADMIN_PASSWORD:-}" ] || [ -f "$BOOTSTRAP_PASSWORD_FILE" ]; then
+      break
+    fi
+    sleep 1
+  done
   rm -f "$BOOTSTRAP_ENV_FILE"
   if [ -f "$BOOTSTRAP_PASSWORD_FILE" ]; then
     chmod 600 "$BOOTSTRAP_PASSWORD_FILE"

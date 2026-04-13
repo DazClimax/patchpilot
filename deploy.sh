@@ -52,7 +52,6 @@ ssh -- "$PI" "grep -q '^AGENT_PORT=' /opt/patchpilot/.env || echo 'AGENT_PORT=80
 ssh -- "$PI" "systemctl daemon-reload"
 
 ssh -- "$PI" "chown -R patchpilot:patchpilot /opt/patchpilot/server /opt/patchpilot/frontend /opt/patchpilot/agent /opt/patchpilot/home-assistant-addons"
-ssh -- "$PI" "touch /opt/patchpilot/.env && chown patchpilot:patchpilot /opt/patchpilot/.env"
 ssh -- "$PI" "chmod 755 /opt/patchpilot /opt/patchpilot/server /opt/patchpilot/frontend /opt/patchpilot/frontend/dist /opt/patchpilot/agent /opt/patchpilot/home-assistant-addons 2>/dev/null || true"
 ssh -- "$PI" "find /opt/patchpilot/server -maxdepth 1 -type f -name 'patchpilot.db*' -exec chown patchpilot:patchpilot {} + -exec chmod 600 {} + 2>/dev/null || true"
 ssh -- "$PI" "find /opt/patchpilot -maxdepth 1 -type f -name 'patchpilot.db*' -size 0 -delete 2>/dev/null || true"
