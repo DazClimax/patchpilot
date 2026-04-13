@@ -278,9 +278,9 @@ class NotificationManager:
         self._telegram: TelegramNotifier | None = None
         self._email: EmailNotifier | None = None
         self._webhook = WebhookNotifier()
-        self._notify_offline = True
-        self._notify_patches = True
-        self._notify_failures = True
+        self._notify_offline = False
+        self._notify_patches = False
+        self._notify_failures = False
         self._loaded = False
         self._loaded_at: float = 0.0
 
@@ -324,17 +324,17 @@ class NotificationManager:
         smtp_pass     = _get("smtp_password", sensitive=True)
         smtp_to       = _get("smtp_to")
 
-        self._email_enabled    = _get("email_enabled",    "1") == "1"
-        self._notify_offline   = _get("notify_offline",  "1") == "1"
-        self._notify_patches   = _get("notify_patches",  "1") == "1"
-        self._notify_failures  = _get("notify_failures", "1") == "1"
-        self._telegram_enabled = _get("telegram_enabled", "1") == "1"
+        self._email_enabled    = _get("email_enabled",    "0") == "1"
+        self._notify_offline   = _get("notify_offline",  "0") == "1"
+        self._notify_patches   = _get("notify_patches",  "0") == "1"
+        self._notify_failures  = _get("notify_failures", "0") == "1"
+        self._telegram_enabled = _get("telegram_enabled", "0") == "1"
 
         # Per-channel event toggles for Telegram
-        self._tg_notify_offline  = _get("telegram_notify_offline",  "1") == "1"
-        self._tg_notify_patches  = _get("telegram_notify_patches",  "1") == "1"
-        self._tg_notify_failures = _get("telegram_notify_failures", "1") == "1"
-        self._tg_notify_success  = _get("telegram_notify_success",  "1") == "1"
+        self._tg_notify_offline  = _get("telegram_notify_offline",  "0") == "1"
+        self._tg_notify_patches  = _get("telegram_notify_patches",  "0") == "1"
+        self._tg_notify_failures = _get("telegram_notify_failures", "0") == "1"
+        self._tg_notify_success  = _get("telegram_notify_success",  "0") == "1"
 
         self._telegram = TelegramNotifier(tg_token, tg_chat) if (tg_token and self._telegram_enabled) else None
         self._email    = EmailNotifier(smtp_host, smtp_port, smtp_user, smtp_pass, smtp_to, smtp_security) \

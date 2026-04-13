@@ -1,15 +1,15 @@
 #!/bin/bash
 # PatchPilot — One-liner server setup
-# Usage: curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.2/setup.sh | sudo bash
 #
 # Or with custom ports:
-#   curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
+#   curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.2/setup.sh | sudo PORT=443 AGENT_PORT=8050 bash
 
 set -e
 
 REPO="https://github.com/DazClimax/patchpilot.git"
 INSTALL_TMP="/tmp/patchpilot-install"
-PATCHPILOT_REF="${PATCHPILOT_REF:-v1.7.0}"
+PATCHPILOT_REF="${PATCHPILOT_REF:-v1.7.2}"
 LOG_FILE="/var/log/patchpilot-setup.log"
 
 require_root() {

@@ -7,6 +7,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-04-13
+
+### Changed
+- Fresh installations now start with e-mail, Telegram, and notification event toggles disabled by default. SSL remains enabled by default for the server and agent path.
+- Version references in the installer, Docker examples, README, and wiki now point consistently at `v1.7.2`.
+
+### Fixed
+- Saving settings no longer crashes when the scheduler timezone was left unchanged. This restores reliable saving for toggles such as disabling Telegram from the GUI.
+
 ## [1.7.1] - 2026-04-12
 
 ### Added

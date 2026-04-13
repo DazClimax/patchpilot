@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Optional image tag to publish manually (for example v1.7.0)"
+        description: "Optional image tag to publish manually (for example v1.7.2)"
         required: false
         type: string
       publish_latest:

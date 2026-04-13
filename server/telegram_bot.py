@@ -70,7 +70,7 @@ class TelegramCommandBot:
                 _dec = lambda v: v  # noqa: E731
             self._token = _dec(cfg.get("telegram_token", "")).strip()
             self._chat_id = cfg.get("telegram_chat_id", "").strip()
-            self._enabled = cfg.get("telegram_enabled", "1") == "1"
+            self._enabled = cfg.get("telegram_enabled", "0") == "1"
             self._settings_loaded_at = now
         except Exception as exc:
             log.warning("TelegramBot: failed to load settings: %s", exc)

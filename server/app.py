@@ -2279,6 +2279,7 @@ async def api_save_settings(request: Request):
     old_port: str | None = None
     old_agent_port: str | None = None
     old_agent_ssl: str | None = None
+    old_timezone: str | None = None
     new_port_str = str(server_port_val) if (server_port_val is not None and str(server_port_val) != "***") else None
     with get_db_ctx() as conn:
         if new_port_str:
@@ -2288,6 +2289,8 @@ async def api_save_settings(request: Request):
         old_agent_port = row_ap["value"] if row_ap else "8050"
         row_as = conn.execute("SELECT value FROM settings WHERE key='agent_ssl'").fetchone()
         old_agent_ssl = row_as["value"] if row_as else "0"
+        row_tz = conn.execute("SELECT value FROM settings WHERE key='scheduler_timezone'").fetchone()
+        old_timezone = row_tz["value"] if row_tz and row_tz["value"] else get_scheduler_timezone()
 
     # Verify Telegram token validity BEFORE saving
     tg_valid = None
@@ -2321,7 +2324,7 @@ async def api_save_settings(request: Request):
     telegram_bot.reload_settings()
 
     # Timezone changed → reconfigure scheduler immediately (no restart needed).
-    if tz_val and str(tz_val) != "***":
+    if tz_val and str(tz_val) != "***" and str(tz_val) != str(old_timezone or ""):
         configure_timezone(str(tz_val))
         # Reload all user-defined schedules so CronTriggers use the new timezone.
         from scheduler import load_schedules_from_db

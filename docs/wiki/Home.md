@@ -21,7 +21,7 @@ PatchPilot is a lightweight, self-hosted patch management system for Linux nodes
 ## Fastest server install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.2/setup.sh | sudo bash
 ```
 
 After the install finishes:

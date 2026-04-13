@@ -43,13 +43,13 @@ PatchPilot server installation currently targets Debian/Ubuntu-style hosts and u
 Versioned one-liner:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.2/setup.sh | sudo bash
 ```
 
 Inspect before running:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh -o setup.sh
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.2/setup.sh -o setup.sh
 less setup.sh
 sudo bash setup.sh
 ```
@@ -57,7 +57,7 @@ sudo bash setup.sh
 With custom ports:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.2/setup.sh | sudo PORT=9443 AGENT_PORT=9050 bash
 ```
 
 The bootstrap script will:
@@ -298,13 +298,13 @@ The container runtime prepares the mounted `/data` volume as root and then drops
 Use this path if you want to run the PatchPilot server with Docker instead of a native systemd service install.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.0/docker-compose.yml -o docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/DazClimax/patchpilot/v1.7.2/docker-compose.yml -o docker-compose.yml
 ```
 
 Adjust the file if needed, then start it with:
 
 ```bash
-docker pull ghcr.io/dazclimax/patchpilot:v1.7.0
+docker pull ghcr.io/dazclimax/patchpilot:v1.7.2
 ```
 
 Then launch it with:
@@ -368,7 +368,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: patchpilot:1.7.0
+    image: patchpilot:1.7.2
 ```
 
 and then run:
