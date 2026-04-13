@@ -158,6 +158,46 @@ class TestSettingsAuthorization:
         assert row is not None
         assert row["value"]
 
+    def test_admin_can_activate_mobile_push_with_empty_body_using_saved_url(self, client, db_conn):
+        db_conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('webhook_url', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (DEFAULT_PUSH_URL,),
+        )
+        db_conn.commit()
+
+        resp = client.post(
+            "/api/settings/push-mobile/activate",
+            content=b"",
+            headers={"content-type": "application/json"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "activated"
+        assert data["active"] is True
+        assert data["webhookUrl"] == DEFAULT_PUSH_URL
+        assert len(data["webhookSecret"]) == 64
+
+    def test_admin_can_reactivate_mobile_push_without_body(self, client, db_conn):
+        first = client.post(
+            "/api/settings/push-mobile/activate",
+            json={"webhook_url": DEFAULT_PUSH_URL},
+        )
+        assert first.status_code == 200
+        first_secret = first.json()["webhookSecret"]
+
+        resp = client.post(
+            "/api/settings/push-mobile/activate",
+            content=b"",
+            headers={"content-type": "application/json"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["webhookUrl"] == DEFAULT_PUSH_URL
+        assert data["webhookSecret"] == first_secret
+
     def test_admin_can_save_settings_via_put_alias(self, client, db_conn):
         resp = client.put(
             "/api/settings",
@@ -324,3 +364,24 @@ class TestSslSettings:
         row = db_conn.execute("SELECT value FROM settings WHERE key='agent_ssl'").fetchone()
         assert row is not None
         assert row["value"] == "1"
+
+    def test_ssl_enable_fails_when_env_file_cannot_be_updated(self, client, monkeypatch, tmp_path):
+        ssl_dir = tmp_path / "ssl"
+        ssl_dir.mkdir()
+        certfile = ssl_dir / "cert.pem"
+        keyfile = ssl_dir / "key.pem"
+        certfile.write_text("-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n")
+        keyfile.write_text("-----BEGIN PRIVATE KEY-----\nTEST\n-----END PRIVATE KEY-----\n")
+
+        monkeypatch.setattr(app_module, "_SSL_DIR", ssl_dir)
+        monkeypatch.setattr(app_module, "_get_cert_info", lambda path: {"subject": "test", "expires": "never", "path": path})
+        monkeypatch.setattr(app_module, "_schedule_restart", lambda delay=0: None)
+        monkeypatch.setattr(app_module, "_update_env_ssl", lambda cert, key: (_ for _ in ()).throw(RuntimeError("env locked")))
+
+        resp = client.post(
+            "/api/settings/ssl-enable",
+            json={"certfile": str(certfile), "keyfile": str(keyfile)},
+        )
+
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "env locked"

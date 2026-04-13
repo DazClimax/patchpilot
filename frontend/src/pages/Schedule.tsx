@@ -944,7 +944,7 @@ export function SchedulePage() {
                         {isAdmin && <Button size="sm" variant="ghost" onClick={() => toggle(s)}>
                           {s.enabled ? 'Pause' : 'Resume'}
                         </Button>}
-                        {isAdmin && <Button size="sm" variant="danger" onClick={() => remove(s)}>
+                        {isAdmin && <Button size="sm" variant="danger" onClick={() => remove(s)} title="Delete schedule" aria-label={`Delete schedule ${s.name}`}>
                           ✕
                         </Button>}
                       </div>}

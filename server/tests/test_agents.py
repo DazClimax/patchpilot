@@ -13,6 +13,14 @@ import pytest
 # ---------------------------------------------------------------------------
 
 class TestAgentRegistration:
+    def test_admin_can_generate_register_key(self, client):
+        resp = client.post("/api/register-key")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert isinstance(data["key"], str)
+        assert len(data["key"]) > 10
+        assert data["expires_in"] > 0
+
     def test_register_new_agent_returns_id_and_token(self, client):
         resp = client.post(
             "/api/agents/register",
