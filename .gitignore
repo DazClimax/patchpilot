@@ -19,6 +19,8 @@ ssl/
 # Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
 
 # Build artifacts
 *.pyc
